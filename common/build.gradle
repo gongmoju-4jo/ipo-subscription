@@ -3,25 +3,29 @@
 apply plugin: 'java-library'
 
 bootJar {
-	enabled = false
+    enabled = false
 }
 
 jar {
-	enabled = true
+    enabled = true
 }
 
 dependencies {
-	// 사용하는 서비스가 직접 가진 의존성을 쓰도록 compileOnly로만 둔다 (common이 서비스에 의존성을 끌고 가지 않게)
-	compileOnly 'org.springframework.boot:spring-boot-starter-web'
-	compileOnly 'org.springframework.boot:spring-boot-starter-data-jpa'
-	compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign'
-	compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'
+    // 사용하는 서비스가 직접 가진 의존성을 쓰도록 compileOnly로만 둔다 (common이 서비스에 의존성을 끌고 가지 않게)
+    compileOnly 'org.springframework.boot:spring-boot-starter-web'
+    compileOnly 'org.springframework.boot:spring-boot-starter-data-jpa'
+    compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'
+    // CommonSwaggerAutoConfiguration (OpenAPI 모델). 버전은 서비스의 springdoc과 맞춤
+    compileOnly 'org.springdoc:springdoc-openapi-starter-common:2.8.17'
 
-	// Feign 재시도·에러 디코더 테스트용
-	testImplementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
-	testImplementation 'com.fasterxml.jackson.core:jackson-databind'
+    // Feign 재시도·에러 디코더 테스트용
+    testImplementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    testImplementation 'com.fasterxml.jackson.core:jackson-databind'
 
-	// RequestAuditorAware 테스트용 (요청 헤더, AuditorAware)
-	testImplementation 'org.springframework.boot:spring-boot-starter-web'
-	testImplementation 'org.springframework.data:spring-data-commons'
+    // RequestAuditorAware 테스트용 (요청 헤더, AuditorAware)
+    testImplementation 'org.springframework.boot:spring-boot-starter-web'
+    testImplementation 'org.springframework.data:spring-data-commons'
+    // CommonSwaggerAutoConfiguration 테스트용
+    testImplementation 'org.springdoc:springdoc-openapi-starter-common:2.8.17'
 }

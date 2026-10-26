@@ -51,7 +51,7 @@
 
 ## 3. 📌 이슈
 
-> 💡 **작업 전에 이슈부터 만듭니다.** 이슈 번호로 브랜치와 PR이 연결됨
+> 💡 **작업 전에 이슈부터 만듭니다.** 이슈 번호로 브랜치와 PR이 연결됩니다.
 
 | 템플릿 | 제목 |
 | --- | --- |
@@ -68,7 +68,7 @@
 
 - ✅ 청약 신청 API / 공모주 목록, 상세 조회 API / 회원가입
 - ❌ subscription-service 개발 (너무 큼) / 청약 DTO 만들기 (너무 작음)
-- 여러 서비스에 걸치면 서비스별로 쪼개기. 예) 증거금 확보 → subscription 확보 요청 발행 / account 증거금 인출 Consumer
+- 여러 서비스에 걸치면 서비스별로 쪼개기. 예) 증거금 확보 → subscription 확보 요청 발행 / account 인출 Consumer
 
 ---
 
@@ -126,10 +126,11 @@
 
 ### 체크 포인트
 
-- 팀 규칙 ([PROJECT_SETUP.md](./PROJECT_SETUP.md)): 패키지 위치, 테이블 이름, UUID 참조, 엔티티 직접 반환, 삭제 대신 상태값
-- 인가: 본인 데이터(본인 계좌, 본인 청약)만 조회, 수정 / ADMIN 전용 경로
+- 팀 규칙 ([PROJECT_SETUP.md](./PROJECT_SETUP.md)): 4계층 위치, 테이블 이름, UUID 참조, 엔티티 직접 반환, 삭제 ❌
+- 용어 ([UBIQUITOUS_LANGUAGE.md](./UBIQUITOUS_LANGUAGE.md)): 클래스, 필드, 상태값 이름
+- 인가: 본인 계좌, 본인 청약만 / ADMIN 전용 경로
 - 예외: ErrorCode, 실패 시 롤백, 보상
-- 돈: 잔고 변경과 원장 기록이 같은 트랜잭션인지, 같은 이벤트를 두 번 받아도 한 번만 반영되는지(멱등)
+- 돈: 잔고 변경 + 원장 기록 같은 트랜잭션, 같은 이벤트 중복 수신 시 한 번만 반영(멱등)
 - 서비스 간 API 계약 변경 여부
 
 코멘트 머리말: `[필수]` `[제안]` `[질문]`
@@ -172,9 +173,9 @@ git fetch origin && git merge origin/develop
 git add . && git commit && git push
 ```
 
-> ⚠️ 충돌 발생 시 담당자에게 확인 필수
+> ⚠️ 충돌이 나면 해당 담당자에게 꼭 확인합니다.
 
->**충돌 잦은 파일 (수정 전 공유)**: `settings.gradle`, 루트 `build.gradle`, `common`, `docker-compose.yml`, 게이트웨이 라우팅
+> **충돌이 잦은 파일은 수정 전에 공유합니다**: `settings.gradle`, 루트 `build.gradle`, `common`, `docker-compose.yml`, 게이트웨이 라우팅
 
 ---
 
@@ -185,7 +186,7 @@ git add . && git commit && git push
 - `build/`, `.idea/` 커밋
 - 비밀값 커밋 (`application-secret.yml`, `.env`)
 
-> ⚠️ 비밀값을 올렸다면 즉시 팀에 알리고 키 재발급하기. 커밋을 지워도 히스토리에 남음.
+> ⚠️ 비밀값을 올렸다면 즉시 팀에 알리고 키를 재발급합니다. 커밋을 지워도 히스토리에 남습니다.
 
 ---
 

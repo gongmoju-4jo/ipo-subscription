@@ -259,6 +259,7 @@ compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
 | `@OneToOne` ❌ → `@ManyToOne` | |
 | `@Enumerated(EnumType.STRING)` | 상태값은 상태 전이 문서 기준 |
 | 금액 `long` (원 단위), DB `BIGINT` | 원화 정수만이라 오차 없음. 곱셈은 `Math.multiplyExact` (오버플로 시 예외) |
+| 📌 시각 `Instant`, DB `TIMESTAMPTZ` | 서버, DB 시간대 설정과 관계없이 같은 시각. 응답 DTO에서만 KST(`+09:00`)로 변환. `LocalDateTime` ❌ |
 | `@NoArgsConstructor(access = PROTECTED)` + `@Builder` | |
 | setter ❌ → 의미 있는 메서드 | `subscription.confirm()`, `margin.voidPending()` |
 | 조건부 유니크 → `schema.sql` | 예: 이중청약 방지 `UNIQUE(ipo_id, investor_id) WHERE status NOT IN ('REJECTED','CANCELLED')` → [10장](#테이블-생성) |
@@ -271,7 +272,7 @@ compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
 
 | 필드 | 채워지는 방식 |
 | --- | --- |
-| `created_at`, `updated_at` | 자동 |
+| `created_at`, `updated_at` | 자동 (`Instant`, DB `TIMESTAMPTZ`) |
 | `created_by`, `updated_by` | 자동. 요청 → `X-User-Id` / 요청 아님(Kafka Consumer, 스케줄러) → `SYSTEM:{서비스 이름}` |
 
 > 💡 `X-User-Id`는 게이트웨이가 JWT 검증 후 넣는 헤더입니다. 서비스 포트로 직접 요청할 때 헤더가 없으면 `SYSTEM:{서비스 이름}`이 들어갑니다.

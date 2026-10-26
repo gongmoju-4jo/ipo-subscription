@@ -1,0 +1,3 @@
+com.gongmoju.common.config.CommonWebAutoConfiguration
+com.gongmoju.common.config.CommonFeignAutoConfiguration
+com.gongmoju.common.config.CommonJpaAuditingAutoConfiguration

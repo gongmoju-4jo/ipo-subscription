@@ -1,0 +1,65 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          # 경로는 API 명세 목차 기준 초안. 명세가 확정되면 맞춘다
+          routes:
+            - id: account-service
+              uri: lb://account-service
+              predicates:
+                - Path=/api/v1/auth/**,/api/v1/users/**,/api/v1/accounts/**
+            - id: subscription-service
+              uri: lb://subscription-service
+              predicates:
+                - Path=/api/v1/ipos/**,/api/v1/subscriptions/**,/api/v1/admin/**
+            - id: allocation-service
+              uri: lb://allocation-service
+              predicates:
+                - Path=/api/v1/allocations/**
+
+            # 통합 Swagger용: /{서비스}/v3/api-docs → 각 서비스의 /v3/api-docs
+            - id: account-service-api-docs
+              uri: lb://account-service
+              predicates:
+                - Path=/account-service/v3/api-docs
+              filters:
+                - StripPrefix=1
+            - id: subscription-service-api-docs
+              uri: lb://subscription-service
+              predicates:
+                - Path=/subscription-service/v3/api-docs
+              filters:
+                - StripPrefix=1
+            - id: allocation-service-api-docs
+              uri: lb://allocation-service
+              predicates:
+                - Path=/allocation-service/v3/api-docs
+              filters:
+                - StripPrefix=1
+
+# 통합 Swagger UI: http://localhost:8080/swagger-ui/index.html (오른쪽 위 드롭다운으로 서비스 선택)
+springdoc:
+  # WebFlux springdoc은 기본적으로 /webjars/swagger-ui/** 에서 UI를 제공한다. 빈 값으로 두어 주소를 /swagger-ui로 맞춘다
+  webjars:
+    prefix: ""
+  swagger-ui:
+    urls:
+      - name: account-service
+        url: /account-service/v3/api-docs
+      - name: subscription-service
+        url: /subscription-service/v3/api-docs
+      - name: allocation-service
+        url: /allocation-service/v3/api-docs
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true

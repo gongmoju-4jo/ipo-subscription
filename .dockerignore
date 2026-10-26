@@ -1,0 +1,15 @@
+# 이미지에는 각 서비스의 build/libs/*.jar만 들어간다
+.git
+.idea
+.gradle
+gradle
+**/.gradle
+**/src
+**/build/classes
+**/build/generated
+**/build/resources
+**/build/tmp
+**/build/reports
+**/build/test-results
+.env
+.DS_Store

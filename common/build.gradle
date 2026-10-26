@@ -1,0 +1,27 @@
+// 서비스들이 공유하는 계약(BaseEntity, 공통 응답·예외 처리, Feign 공통 설정)만 둔다. 실행 앱이 아니라 라이브러리.
+// 예외 처리·Feign 설정은 자동 설정(META-INF/spring/...AutoConfiguration.imports)으로 서비스에 등록된다.
+apply plugin: 'java-library'
+
+bootJar {
+	enabled = false
+}
+
+jar {
+	enabled = true
+}
+
+dependencies {
+	// 사용하는 서비스가 직접 가진 의존성을 쓰도록 compileOnly로만 둔다 (common이 서비스에 의존성을 끌고 가지 않게)
+	compileOnly 'org.springframework.boot:spring-boot-starter-web'
+	compileOnly 'org.springframework.boot:spring-boot-starter-data-jpa'
+	compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign'
+	compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'
+
+	// Feign 재시도·에러 디코더 테스트용
+	testImplementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+	testImplementation 'com.fasterxml.jackson.core:jackson-databind'
+
+	// RequestAuditorAware 테스트용 (요청 헤더, AuditorAware)
+	testImplementation 'org.springframework.boot:spring-boot-starter-web'
+	testImplementation 'org.springframework.data:spring-data-commons'
+}

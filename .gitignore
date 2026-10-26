@@ -266,9 +266,8 @@ gradle-app.setting
 **/build/
 **/.gradle/
 **/application-secret.yml
-# Claude Code
+# Claude Code (팀 공용 CLAUDE.md는 커밋, 개인 설정은 제외)
 .claude/
-CLAUDE.md
 CLAUDE.local.md
 
 # 환경 변수

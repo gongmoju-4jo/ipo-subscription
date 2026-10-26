@@ -34,6 +34,14 @@ docker-compose up -d postgres
 
 > ✏️ docker-compose는 지금 PostgreSQL만 있습니다. Kafka, 서비스 컨테이너, 모니터링과 서비스 모듈은 추가되는 대로 이 절을 갱신합니다.
 
+
+### 📌 Claude Code 쓰는 법
+
+- 레포 루트의 `CLAUDE.md`(팀 공용)를 Claude가 자동으로 읽습니다. 유비쿼터스 언어, 이 문서, GitHub 가이드를 함께 불러옵니다
+- 📌 **개인 설정은 `CLAUDE.local.md`에** 적습니다 (gitignore 대상). 공용 `CLAUDE.md`에 개인 설정을 넣지 않습니다
+- 📌 공용 `CLAUDE.md`나 `docs/` 문서를 바꾸면 팀 전원의 Claude 동작이 바뀝니다. 바꾸기 전에 팀에 공유합니다
+- 용어, 상태값이 바뀌면 `docs/UBIQUITOUS_LANGUAGE.md`부터 고칩니다 (Claude가 코드를 쓸 때 이 표를 따릅니다)
+
 ---
 
 ## 2. 구조
@@ -45,12 +53,14 @@ ipo-subscription/
 ├── build.gradle            공통 버전, 의존성 (Boot 3.5.16, Cloud 2025.0.3, Java 21)
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
+├── docker-compose.yml      로컬 인프라 (지금은 PostgreSQL만)
+├── docker/postgres/        서비스별 DB 생성 스크립트
 ├── common/                 공통 라이브러리 (실행 X)
 ├── eureka-server/
 ├── api-gateway/
-├── account-service/        회원, 계좌, 증거금, 원장 (추가 예정)
-├── subscription-service/   공모주, 청약 (추가 예정)
-└── allocation-service/     배정 (추가 예정)
+├── account-service/        회원, 계좌, 증거금, 원장
+├── subscription-service/   공모주, 청약
+└── allocation-service/     배정
 ```
 
 ### 포트
@@ -58,7 +68,7 @@ ipo-subscription/
 | 앱 | 포트 |
 | --- | --- |
 | eureka / gateway | 8761 / 8080 |
-| 서비스 3개 | 서비스 모듈 추가 시 기입 |
+| account / subscription / allocation | 8081 / 8082 / 8083 |
 
 ### 게이트웨이 라우팅
 
@@ -73,16 +83,16 @@ ipo-subscription/
 - 새 외부 경로 → `api-gateway/.../application.yml`에 추가
 - `/internal/**`은 라우팅 X (Feign 전용, 외부 접근 불가)
 
-### 📌 게이트웨이 구현할 때 확인할 것 (logistics-msa와 달라진 점)
+### 📌 게이트웨이 구현할 때 확인할 것
 
-현재 api-gateway에는 라우트와 통합 Swagger만 있습니다. 인증 필터는 logistics-msa `api-gateway/src/main/java/.../global/`을 참고해서 구현합니다.
+현재 api-gateway에는 라우트와 통합 Swagger만 있습니다.
 
-- 📌 스타터 이름이 바뀌었습니다: `spring-cloud-starter-gateway` → `spring-cloud-starter-gateway-server-webflux` (Spring Cloud 2025.0, 반영 완료)
-- 📌 라우트 설정 위치: `spring.cloud.gateway.server.webflux.routes` (새 방식, 반영 완료). 옛 위치 `spring.cloud.gateway.routes`도 지금 버전에서 동작은 하지만 새 위치로 통일합니다
-- 📌 JWT 발급자(iss)는 `user-service`가 아니라 **`account-service`**
+- 📌 라우트는 `spring.cloud.gateway.server.webflux.routes`에 위치 (Spring Cloud 2025.0 방식)
+- 📌 JWT 발급자(iss)는 **`account-service`**
 - 📌 역할은 **USER, ADMIN** 두 개 (common `UserRole`과 같은 값 유지). `/api/v1/admin/**`은 ADMIN만
-- 📌 Swagger 경로를 인증 공개 경로에 넣습니다: `/swagger-ui/**`, `/v3/api-docs/**`, `/*-service/v3/api-docs` (안 넣으면 Swagger가 401로 막힘)
-- 라우트, Swagger 설정이 적용되는지는 `GatewayRoutesTest`가 확인합니다. 라우트를 바꾸면 테스트도 같이 고칩니다
+- 📌 Swagger 경로를 인증 공개 경로에 넣기: `/swagger-ui/**`, `/v3/api-docs/**`, `/*-service/v3/api-docs` (안 넣으면 Swagger가 401로 막힘)
+- 클라이언트가 보낸 `X-User-Id`, `X-User-Role`은 지우고, 검증한 토큰 값으로 다시 넣어 서비스에 전달 (서비스와 common Audit이 이 헤더를 믿음)
+- 라우트, Swagger 설정이 적용되는지는 `GatewayRoutesTest`가 확인합니다. 라우트를 바꾸면 테스트도 같이 수정
 
 ---
 
@@ -124,29 +134,26 @@ docker-compose down -v                                     # 종료 + DB 초기�
 
 ## 4. 패키지 구조
 
-도메인 → 계층 순으로 나눔
+📌 **계층형 4계층** (발제 필수). 서비스마다 같은 구조입니다. 각 계층 폴더의 `package-info.java`에 역할이 적혀 있습니다.
 
 ```
 subscription-service/.../com/gongmoju/subscription/
-├── global/
-│   ├── config/           SwaggerConfig 등
-│   └── exception/        SubscriptionErrorCode
-└── subscription/
-    ├── controller/       Controller
-    ├── dto/
-    │   ├── request/
-    │   └── response/
-    ├── service/          Service
-    ├── repository/       Repository
-    ├── entity/           Entity, enum
-    └── client/           {대상서비스}Client
-        └── dto/          Feign 요청, 응답 DTO
+├── presentation/       Controller, 요청/응답 DTO
+├── application/        유스케이스 흐름, 트랜잭션 경계
+├── domain/             엔티티, 값 객체, 도메인 서비스, Repository 인터페이스
+└── infrastructure/     Repository 구현(JPA), Kafka Producer/Consumer, Feign Client
 ```
 
-- 서비스 안의 도메인 폴더 나누기는 담당자가 정합니다
-- 엔티티 그대로 응답 ❌ → DTO로 변환
-- Feign, 외부 호출은 `service`에서만 (controller, entity에서 ❌)
-- Feign DTO는 `client/dto/`에 따로 (내 API용 `dto/`와 섞지 않음, 필요한 필드만)
+| 계층 | 의존해도 되는 것 | 하면 안 되는 것 |
+| --- | --- | --- |
+| presentation | application | 엔티티 그대로 반환, Repository 직접 호출 |
+| application | domain | 비즈니스 규칙 직접 구현 (규칙은 domain 메서드로) |
+| domain | 없음 (순수 자바 + JPA 어노테이션) | 스프링 웹, Kafka, Feign 의존 |
+| infrastructure | domain (인터페이스 구현) | 비즈니스 규칙 |
+
+- 계층 안의 하위 폴더(도메인별, 기능별)는 담당자가 정합니다
+- Feign Client, Kafka 메시지 DTO는 `infrastructure/`에 따로 (내 API용 DTO와 섞지 않음, 필요한 필드만)
+- 의존 방향: presentation → application → domain ← infrastructure
 
 ---
 

@@ -52,7 +52,7 @@
 
 | 한글 | 코드명 | 뜻 | 쓰지 않을 말 |
 | --- | --- | --- | --- |
-| 이중청약 | `ALREADY_SUBSCRIBED` (거절 사유) | 같은 증권사에서 같은 종목을 다른 계좌로 또 청약. **사람 기준**으로 막음 (`UNIQUE(ipo_id, investor_id) WHERE status NOT IN ('REJECTED','CANCELLED')`) | 중복청약 |
+| 이중청약 | `ALREADY_SUBSCRIBED` (거절 사유) | 같은 증권사에서 같은 종목을 다른 계좌로 또 청약. **사람 기준**으로 막음 (`UNIQUE(ipo_id, user_id) WHERE status NOT IN ('REJECTED','CANCELLED')`) | 중복청약 |
 | 중앙기관 | `Clearing` | 모의 한국증권금융. 증권사 간 중복청약을 대조 (COULD) | 외부 서버 |
 | 적격 | `ELIGIBLE` | 배정 대상인 청약 (COULD) | 정상 |
 | 잠정 부적격 | `PROVISIONAL_INELIGIBLE` | 마감 전 시간순 판정으로 부적격 예정. 앞 청약이 취소되면 적격으로 바뀔 수 있음 (COULD) | 거절 |
@@ -88,6 +88,7 @@
 | 한글 | 코드명 | 뜻 |
 | --- | --- | --- |
 | 일반투자자 | `Investor` | 우리 시스템 주 사용자 (역할 `USER`) |
+| 회원 ID | `userId` (DB `user_id`) | 회원 식별자. JWT `sub`, `X-User-Id` 헤더와 같은 값. 청약, 배정 서비스에서도 이 이름을 그대로 씀 (`investorId` ❌) |
 | 증권사 | `Broker` | 청약을 받는 곳 (주관사, 인수단) |
 | 발행회사 | `Issuer` | 상장하려는 회사 |
 | 관리자 | `Admin` | 공모주 등록만 (역할 `ADMIN`, SHOULD). MVP는 시드 데이터로 넣고, 마감, 배정, 환불은 시스템이 자동 처리 |

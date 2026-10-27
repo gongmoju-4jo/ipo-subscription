@@ -262,7 +262,7 @@ compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
 | 📌 시각 `Instant`, DB `TIMESTAMPTZ` | 서버, DB 시간대 설정과 관계없이 같은 시각. 응답 DTO에서만 KST(`+09:00`)로 변환. `LocalDateTime` ❌ |
 | `@NoArgsConstructor(access = PROTECTED)` + `@Builder` | |
 | setter ❌ → 의미 있는 메서드 | `subscription.confirm()`, `margin.voidPending()` |
-| 조건부 유니크 → `schema.sql` | 예: 이중청약 방지 `UNIQUE(ipo_id, investor_id) WHERE status NOT IN ('REJECTED','CANCELLED')` → [10장](#테이블-생성) |
+| 조건부 유니크 → `schema.sql` | 예: 이중청약 방지 `UNIQUE(ipo_id, user_id) WHERE status NOT IN ('REJECTED','CANCELLED')` → [10장](#테이블-생성) |
 
 ---
 

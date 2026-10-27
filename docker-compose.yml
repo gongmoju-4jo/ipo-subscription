@@ -50,6 +50,20 @@ services:
       timeout: 10s
       retries: 10
 
+  # 토픽, 컨슈머 그룹 확인용 웹 UI: http://localhost:8989
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    container_name: ipo-kafka-ui
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      TZ: Asia/Seoul
+    ports:
+      - "8989:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
 volumes:
   postgres-data:
   kafka-data:

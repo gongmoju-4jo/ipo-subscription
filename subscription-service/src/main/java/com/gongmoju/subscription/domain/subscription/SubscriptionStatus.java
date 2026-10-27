@@ -6,7 +6,7 @@ public enum SubscriptionStatus {
     CONFIRMED,
     REJECTED,
     COMPENSATING,
-    CANCEL_REQUESTED,
+    CANCEL_REQUESTED, // 청약 취소 구현시 사용
     CANCELLED,
     ALLOCATED,
     REFUNDED

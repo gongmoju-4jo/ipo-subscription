@@ -10,7 +10,14 @@ import org.springframework.http.HttpStatus;
 @Getter
 @RequiredArgsConstructor
 public enum SubscriptionErrorCode implements ErrorCode {
-    ;
+    // 공모주가 OPEN이 아니어서 청약 불가, 내부 API에서 공모주가 아직 CLOSED가 아님
+    INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT, "현재 상태에서는 처리할 수 없습니다."),
+    // 청약이 아직 처리 중(PENDING)이거나 다른 처리와 동시에 변경됨
+    SUBSCRIPTION_PROCESSING(HttpStatus.CONFLICT, "청약을 처리 중입니다. 잠시 후 다시 시도해주세요."),
+    // 취소할 수 없는 상태 (REJECTED, COMPENSATING, 처리 실패로 해제된 CANCELLED)
+    NOT_CANCELLABLE(HttpStatus.CONFLICT, "취소할 수 없는 청약입니다."),
+    // 청약 시작 전 또는 마감 시각 이후
+    SUBSCRIPTION_CLOSED(HttpStatus.UNPROCESSABLE_ENTITY, "청약 가능 시간이 아닙니다.");
 
     private final HttpStatus status;
     private final String message;

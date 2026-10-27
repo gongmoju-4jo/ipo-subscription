@@ -103,7 +103,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 ### IntelliJ
 
-1. `docker-compose up -d postgres kafka kafka-ui` (Kafka가 필요 없는 작업이면 `postgres`만)
+1. `docker-compose up -d postgres kafka kafka-init kafka-ui` (Kafka가 필요 없는 작업이면 `postgres`만)
 2. `⌘8`/`Alt+8` Services 창 → Eureka 실행 → 나머지 실행
 3. http://localhost:8080/api/v1/unknown → 404면 게이트웨이 정상 (인증 필터 추가 후엔 401)
 
@@ -131,8 +131,14 @@ docker-compose down -v                                     # 종료 + DB 초기�
 - 토픽, 파티션 키, 페이로드 → **이벤트 명세 문서** 기준 (코드보다 문서 먼저 수정)
 - 실패 메시지: `{토픽}.DLT`
 - 접속 주소 기본값: `localhost:29092` (서비스 `application.yml`의 `KAFKA_BOOTSTRAP_SERVERS`)
-- 실행: `docker-compose up -d kafka kafka-ui`
+- 실행: `docker-compose up -d kafka kafka-init kafka-ui`
 - Kafka-UI: http://localhost:8989 (토픽, 컨슈머 그룹 확인)
+- 토픽 생성: 토픽 **자동 생성은 꺼져 있고**, `kafka-init`이 Kafka 기동 후 한 번 만들고 종료한다 (`docker/kafka/create-topics.sh`, 종료 상태가 정상)
+  - 토픽 목록, 파티션 수는 `docker/kafka/create-topics.sh` **한 곳에서 관리**한다
+  - 토픽 10개 + `{토픽}.DLT` 10개 = 20개: `subscription.requested`, `margin.reserve-requested`, `margin.reserved`, `margin.reserve-failed`, `margin.void-requested`, `margin.voided`, `ipo.closed`, `allocation.result`, `margin.settled`, `allocation.finished`
+  - 파티션 수 기본 3 (`.env`의 `KAFKA_TOPIC_PARTITIONS`), 복제 1 (단일 브로커)
+  - 이미 있는 토픽은 건너뛴다 (여러 번 실행해도 됨). 파티션 수를 바꿔도 기존 토픽에는 적용되지 않는다
+  - 새 토픽 → 이벤트 명세 문서 먼저 수정한 뒤 스크립트의 `TOPICS`에 추가
 - 호스트 포트 변경: `.env`의 `KAFKA_PORT`(기본 29092), `KAFKA_UI_PORT`(기본 8989)
   - `KAFKA_PORT`를 바꾸면 서비스 실행 시 `KAFKA_BOOTSTRAP_SERVERS`도 `localhost:{바꾼 포트}`로 맞춘다
 

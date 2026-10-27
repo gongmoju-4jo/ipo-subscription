@@ -9,7 +9,7 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:ipo}?currentSchema=allocation
     # 서비스별 전용 계정 (init.sh가 만든다). 자기 스키마만 쓸 수 있다
     username: allocation_app
-    password: ${ALLOCATION_DB_PASSWORD}
+    password: ${ALLOCATION_DB_PASSWORD:allocation}
   jpa:
     hibernate:
       ddl-auto: update

@@ -53,7 +53,7 @@ ipo-subscription/
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
 ├── docker-compose.yml      로컬 인프라 (현재 PostgreSQL, Kafka, Kafka-UI)
-├── docker/postgres/        서비스별 스키마 생성 스크립트
+├── docker/postgres/        서비스별 스키마, DB 계정 생성 스크립트
 ├── common/                 공통 라이브러리 (실행 X)
 ├── eureka-server/
 ├── api-gateway/
@@ -416,12 +416,15 @@ public class SubscriptionController {
 ## 10. DB와 설정
 
 - 📌 **서비스별 스키마 분리** (발제: 서비스별 DB 분리). 다른 서비스 스키마 직접 조회 ❌ → 이벤트 또는 Feign
-- PostgreSQL 컨테이너 하나(`ipo-postgres`), database `ipo` 하나에 스키마 3개: `account`, `subscription`, `allocation` (`docker/postgres/init.sql`)
-- 서비스는 접속 URL `?currentSchema={서비스}` + `hibernate.default_schema`로 자기 스키마에만 테이블 생성 (스키마가 없으면 `hibernate.hbm2ddl.create_namespaces`로 자동 생성)
-- 물리 분리(DB 서버를 서비스마다 따로)는 아님. 로컬 시연 기준
-- DB 툴(DBeaver 등) 접속: `localhost:5432` / DB `ipo` / ID `postgres` / PW `postgres` (`.env`의 `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`로 변경)
+- PostgreSQL 컨테이너 하나(`ipo-postgres`), database `ipo` 하나에 스키마 3개: `account`, `subscription`, `allocation` (`docker/postgres/init.sh`)
+- 📌 **서비스별 DB 계정**: `account_app`, `subscription_app`, `allocation_app`. 각 계정은 자기 스키마의 소유자이고, 다른 서비스 스키마는 조회할 수 없음 (`permission denied for schema`). `public` 스키마 권한은 회수
+  - 서비스는 `application.yml`에서 계정 이름은 고정, 비밀번호는 환경변수(`ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`)로 받음. **로컬 전용 기본값**(`account`, `subscription`, `allocation`)이 `application.yml`, `docker-compose.yml`에 같게 있어서 따로 설정하지 않아도 됨 (`.env.example`은 비워 두면 기본값)
+  - 슈퍼유저 `postgres`는 초기화, DB 툴 접속용. 앱은 쓰지 않음
+- 서비스는 접속 URL `?currentSchema={서비스}` + `hibernate.default_schema`로 자기 스키마에만 테이블 생성 (스키마는 `init.sh`가 만든다. 서비스 계정은 DB `CREATE` 권한이 없어서 `hibernate.hbm2ddl.create_namespaces`는 동작하지 않아도 됨)
+- 물리 분리(DB 서버를 서비스마다 따로)는 아님. 같은 PostgreSQL이라 CPU, 디스크, 커넥션은 공유. 로컬 시연 기준
+- DB 툴(DBeaver 등) 접속: `localhost:5432` / DB `ipo` / 슈퍼유저 ID `postgres` / PW `postgres` (`.env`의 `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`로 변경). 서비스 계정으로도 접속 가능 (자기 스키마만 보임)
 
-> ⚠️ `init.sql`은 볼륨이 비어 있을 때 한 번만 실행됩니다. 스키마를 추가, 변경했으면 `docker-compose down -v && docker-compose up -d postgres`로 다시 만듭니다.
+> ⚠️ `init.sh`는 볼륨이 비어 있을 때 한 번만 실행됩니다. 스키마, 계정을 추가, 변경했거나 서비스별 비밀번호를 바꿨으면 `docker-compose down -v && docker-compose up -d postgres`로 다시 만듭니다. **DB, Kafka 볼륨이 함께 지워집니다** (Kafka 토픽은 `kafka-init`이 다시 만듭니다).
 
 ### 테이블 생성
 
@@ -480,12 +483,13 @@ jwt:
 
 - **`password authentication failed`**
   - 다른 PostgreSQL이 5432 사용 중인지 확인 후 중지
+  - 서비스 기동 시 `user "account_app"`(서비스별 계정)이면: 서비스 계정이 없는 옛 볼륨이므로 `docker-compose down -v` 후 다시 올린다 (DB, Kafka 데이터가 지워짐)
 
 - **`Port already in use`**
   - 해당 포트 사용 중인 앱 종료
 
 - **Windows에서 `bind: An attempt was made to access a socket in a way forbidden by its access permissions`**
-  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`에서 `KAFKA_PORT`, `KAFKA_UI_PORT`를 다른 값으로 변경
+  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`(없으면 `cp .env.example .env`로 만든다)에서 `KAFKA_PORT`, `KAFKA_UI_PORT`를 다른 값으로 변경
 
 - **로그인은 되는데 다른 요청이 전부 401 `UNAUTHORIZED`**
   - account-service와 gateway의 JWT 키가 같은지 확인

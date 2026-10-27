@@ -1,12 +1,12 @@
 #!/bin/bash
 # 서비스별 스키마 분리 + 서비스별 DB 계정 (발제: 서비스별 DB 분리)
 # database ipo 하나에 서비스마다 스키마 하나, 계정 하나. 계정은 자기 스키마만 쓸 수 있다
-# 컨테이너를 처음 만들 때(볼륨이 비어 있을 때) 한 번만 실행된다. 바꾸면 docker-compose down -v 로 볼륨을 지운 뒤 다시 올린다
+# 컨테이너를 처음 만들 때(볼륨이 비어 있을 때) 한 번만 실행된다. 바꾸면 PostgreSQL 볼륨을 지운 뒤 다시 올린다 (docs/PROJECT_SETUP.md 10장)
 # SQL 파일은 환경변수(서비스별 비밀번호)를 읽을 수 없어서 셸 스크립트로 둔다
 
 for name in ACCOUNT_DB_PASSWORD SUBSCRIPTION_DB_PASSWORD ALLOCATION_DB_PASSWORD; do
   if [ -z "${!name}" ]; then
-    echo "init.sh: ${name}이(가) 비어 있습니다. .env에 서비스별 DB 비밀번호를 설정한 뒤 docker-compose down -v 로 볼륨을 지우고 다시 올리세요 (초기화는 한 번만 실행되어 실패해도 재실행되지 않습니다)" >&2
+    echo "init.sh: ${name}이(가) 비어 있습니다. .env에 서비스별 DB 비밀번호를 설정한 뒤 PostgreSQL 볼륨을 지우고 다시 올리세요 (docs/PROJECT_SETUP.md 10장. 초기화는 한 번만 실행되어 실패해도 재실행되지 않습니다)" >&2
     exit 1
   fi
 done

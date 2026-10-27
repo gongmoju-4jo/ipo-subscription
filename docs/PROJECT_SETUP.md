@@ -23,7 +23,7 @@
 ```bash
 git clone {레포 주소}
 cd ipo-subscription
-docker-compose up -d postgres
+docker-compose up -d postgres kafka kafka-init kafka-ui
 ```
 
 1. IntelliJ로 **루트 폴더** 열기 → Gradle 탭 🔄

@@ -23,6 +23,7 @@
 ```bash
 git clone {레포 주소}
 cd ipo-subscription
+cp .env.example .env    # .env의 DB_PASSWORD, ACCOUNT_DB_PASSWORD, SUBSCRIPTION_DB_PASSWORD, ALLOCATION_DB_PASSWORD에 직접 정한 값을 넣는다
 docker-compose up -d postgres kafka kafka-init kafka-ui
 ```
 
@@ -53,7 +54,7 @@ ipo-subscription/
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
 ├── docker-compose.yml      로컬 인프라 (현재 PostgreSQL, Kafka, Kafka-UI)
-├── docker/postgres/        서비스별 스키마 생성 스크립트
+├── docker/postgres/        서비스별 스키마, DB 계정 생성 스크립트
 ├── common/                 공통 라이브러리 (실행 X)
 ├── eureka-server/
 ├── api-gateway/
@@ -103,7 +104,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 ### IntelliJ
 
-1. `docker-compose up -d postgres kafka kafka-init kafka-ui` (Kafka가 필요 없는 작업이면 `postgres`만)
+1. `docker-compose up -d postgres kafka kafka-init kafka-ui` (Kafka가 필요 없는 작업이면 `postgres`만). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
 2. `⌘8`/`Alt+8` Services 창 → Eureka 실행 → 나머지 실행
 3. http://localhost:8080/api/v1/unknown → 404면 게이트웨이 정상 (인증 필터 추가 후엔 401)
 
@@ -120,7 +121,7 @@ docker-compose down                                        # 종료
 docker-compose down -v                                     # 종료 + DB 초기화
 ```
 
-- 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키
+- 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키, DB 비밀번호(관리자 1개, 서비스별 3개)
 - ⚠️ 코드 수정 후엔 위 `실행` 명령 그대로 (`./gradlew build` 빠지면 예전 코드로 뜸)
 - 📌 서비스 포트 직접 접속 ❌ → `localhost:8080`(게이트웨이)으로 요청
 - ⚠️ **Docker 메모리 4GB 이상 권장** (Kafka 포함 시 2GB 부족)
@@ -416,12 +417,24 @@ public class SubscriptionController {
 ## 10. DB와 설정
 
 - 📌 **서비스별 스키마 분리** (발제: 서비스별 DB 분리). 다른 서비스 스키마 직접 조회 ❌ → 이벤트 또는 Feign
-- PostgreSQL 컨테이너 하나(`ipo-postgres`), database `ipo` 하나에 스키마 3개: `account`, `subscription`, `allocation` (`docker/postgres/init.sql`)
-- 서비스는 접속 URL `?currentSchema={서비스}` + `hibernate.default_schema`로 자기 스키마에만 테이블 생성 (스키마가 없으면 `hibernate.hbm2ddl.create_namespaces`로 자동 생성)
-- 물리 분리(DB 서버를 서비스마다 따로)는 아님. 로컬 시연 기준
-- DB 툴(DBeaver 등) 접속: `localhost:5432` / DB `ipo` / ID `postgres` / PW `postgres` (`.env`의 `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`로 변경)
+- PostgreSQL 컨테이너 하나(`ipo-postgres`), database `ipo` 하나에 스키마 3개: `account`, `subscription`, `allocation` (`docker/postgres/init.sh`)
+- 📌 **서비스별 DB 계정**: `account_app`, `subscription_app`, `allocation_app`. 각 계정은 자기 스키마의 소유자이고, 다른 서비스 스키마는 조회할 수 없음 (`permission denied for schema`). `public` 스키마 권한은 회수
+  - 비밀번호는 `.env`의 `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`에 **직접 정한 값**을 넣음 (기본값 없음, 값은 커밋하지 않음. 따옴표, 공백, `$`, `#` 없이 영문, 숫자로 적는다. docker-compose와 서비스가 `.env`를 다르게 해석한다). docker-compose(계정 생성)와 서비스가 같은 `.env`를 읽으므로 **한 곳에만 적으면 되고** IntelliJ 설정은 필요 없음. 계정 이름은 `application.yml`에 고정
+  - 슈퍼유저 `postgres`는 초기화, DB 툴 접속용. 앱은 쓰지 않음
+- 서비스는 접속 URL `?currentSchema={서비스}` + `hibernate.default_schema`로 자기 스키마에만 테이블 생성 (스키마는 `init.sh`가 만든다. 서비스 계정은 DB `CREATE` 권한이 없어서 `hibernate.hbm2ddl.create_namespaces`는 동작하지 않아도 됨)
+- 물리 분리(DB 서버를 서비스마다 따로)는 아님. 같은 PostgreSQL이라 CPU, 디스크, 커넥션은 공유. 로컬 시연 기준
+- DB 툴(DBeaver 등) 접속: `localhost:5432` / DB `ipo` / 슈퍼유저 ID `postgres` / PW는 `.env`의 `DB_PASSWORD`에 정한 값 (기본값 없음. `DB_NAME`, `DB_USERNAME`은 바꿀 때만). 서비스 계정으로도 접속 가능 (자기 스키마만 보임)
 
-> ⚠️ `init.sql`은 볼륨이 비어 있을 때 한 번만 실행됩니다. 스키마를 추가, 변경했으면 `docker-compose down -v && docker-compose up -d postgres`로 다시 만듭니다.
+> ⚠️ `init.sh`는 볼륨이 비어 있을 때 한 번만 실행됩니다. 스키마, 계정을 추가, 변경했거나 DB 비밀번호를 바꿨으면 **PostgreSQL 볼륨만** 지우고 다시 만듭니다 (DB 데이터는 지워지고 Kafka 데이터는 유지됩니다).
+
+```bash
+docker-compose stop postgres
+docker-compose rm -f postgres
+docker volume rm ipo-subscription_postgres-data   # 이름은 {프로젝트 폴더명}_postgres-data, `docker volume ls`로 확인
+docker-compose up -d postgres
+```
+
+Kafka 데이터까지 모두 지우려면 `docker-compose down -v` (토픽은 `kafka-init`이 다시 만듭니다)
 
 ### 테이블 생성
 
@@ -431,7 +444,7 @@ public class SubscriptionController {
   - `IF NOT EXISTS` 필수
   - 조회 성능용 부분 인덱스도 `schema.sql` (예: outbox 미발행 조회)
 
-> ⚠️ `update`는 컬럼 **추가만** 반영합니다 (삭제, 이름 변경 X). 테이블이 꼬이면 `docker-compose down -v`로 초기화합니다.
+> ⚠️ `update`는 컬럼 **추가만** 반영합니다 (삭제, 이름 변경 X). 테이블이 꼬이면 위의 PostgreSQL 볼륨 초기화 절차로 초기화합니다.
 
 ### 📌 설정 파일
 
@@ -439,9 +452,9 @@ public class SubscriptionController {
 | --- | --- | --- |
 | `application.yml` | 포트, DB, Kafka, Eureka | ✅ |
 | `application-secret.yml` | JWT 시크릿 (resources에 직접 생성) | ❌ |
-| `.env` | Docker용 비밀값 (`.env.example` 복사) | ❌ |
+| `.env` | Docker, 서비스가 함께 읽는 비밀값 (`.env.example` 복사) | ❌ |
 
-> ⚠️ 비밀값은 커밋하지 않습니다. 공유는 슬랙 또는 노션으로 합니다.
+> ⚠️ 비밀값은 커밋하지 않습니다. 공유는 팀에서 승인한 비밀 관리 도구로 합니다.
 
 ### 📌 JWT 키
 
@@ -450,7 +463,7 @@ account-service(발급)와 api-gateway(검증)가 **같은 키** 사용 → 다�
 ```yaml
 # account-service, api-gateway 각각 src/main/resources/application-secret.yml
 jwt:
-  secret: 팀 공용 키 (슬랙, 노션)
+  secret: 팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
 ```
 
 - Docker는 `.env`의 `JWT_SECRET` 하나로 두 서비스에 같이 적용
@@ -480,12 +493,16 @@ jwt:
 
 - **`password authentication failed`**
   - 다른 PostgreSQL이 5432 사용 중인지 확인 후 중지
+  - 서비스 기동 시 `user "account_app"`(서비스별 계정)이면: `.env`에 비밀번호를 채웠는지, 값이 DB를 처음 만들 때와 같은지 확인. 서비스 계정이 없는 옛 볼륨이면 [10장](#10-db와-설정)의 PostgreSQL 볼륨 초기화 절차로 다시 만든다 (DB 데이터가 지워지고 Kafka 데이터는 유지)
+
+- **`entrypoint.sh: ...이(가) 비어 있습니다`** (postgres가 종료됨)
+  - `.env`에 DB 비밀번호(`DB_PASSWORD`, 서비스별 3개)를 채우고 다시 `docker-compose up -d`. DB를 만들기 전에 막으므로 볼륨을 지울 필요 없음
 
 - **`Port already in use`**
   - 해당 포트 사용 중인 앱 종료
 
 - **Windows에서 `bind: An attempt was made to access a socket in a way forbidden by its access permissions`**
-  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`에서 `KAFKA_PORT`, `KAFKA_UI_PORT`를 다른 값으로 변경
+  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`(없으면 `cp .env.example .env`로 만든다)에서 `KAFKA_PORT`, `KAFKA_UI_PORT`를 다른 값으로 변경
 
 - **로그인은 되는데 다른 요청이 전부 401 `UNAUTHORIZED`**
   - account-service와 gateway의 JWT 키가 같은지 확인

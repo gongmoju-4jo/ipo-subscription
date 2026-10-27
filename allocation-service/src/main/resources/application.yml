@@ -4,18 +4,22 @@ server:
 spring:
   application:
     name: allocation-service
+  config:
+    # 레포 루트의 .env를 읽는다 (docker-compose와 같은 파일). 실행 위치가 루트면 ./.env, 모듈이면 ../.env. 없으면 건너뛴다
+    import: optional:file:./.env[.properties],optional:file:../.env[.properties]
   datasource:
     # database ipo 하나에 서비스별 스키마 (allocation). 다른 서비스 스키마는 직접 조회하지 않는다
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:ipo}?currentSchema=allocation
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    # 서비스별 전용 계정 (init.sh가 만든다). 자기 스키마만 쓸 수 있다
+    username: allocation_app
+    password: ${ALLOCATION_DB_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: update
     open-in-view: false
     properties:
       hibernate.default_schema: allocation
-      # 스키마가 없으면 Hibernate가 만든다 (init.sql과 같은 이름)
+      # 스키마는 init.sh가 만든다 (같은 이름). 서비스 계정은 DB CREATE 권한이 없어서 이 설정은 동작하지 않아도 된다
       hibernate.hbm2ddl.create_namespaces: true
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}

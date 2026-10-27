@@ -8,10 +8,10 @@ services:
       POSTGRES_DB: ${DB_NAME:-ipo}
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      # 서비스별 계정 비밀번호 (init.sh가 계정을 만들 때 쓴다). 로컬 전용 기본값이고 서비스 application.yml 기본값과 같다
-      ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-account}
-      SUBSCRIPTION_DB_PASSWORD: ${SUBSCRIPTION_DB_PASSWORD:-subscription}
-      ALLOCATION_DB_PASSWORD: ${ALLOCATION_DB_PASSWORD:-allocation}
+      # 서비스별 계정 비밀번호 (init.sh가 계정을 만들 때 쓴다). 기본값 없음: .env에 직접 정한 값을 넣는다. 비어 있으면 초기화가 실패한다
+      ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-}
+      SUBSCRIPTION_DB_PASSWORD: ${SUBSCRIPTION_DB_PASSWORD:-}
+      ALLOCATION_DB_PASSWORD: ${ALLOCATION_DB_PASSWORD:-}
       TZ: Asia/Seoul
     ports:
       - "127.0.0.1:5432:5432"

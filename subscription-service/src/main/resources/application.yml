@@ -4,12 +4,15 @@ server:
 spring:
   application:
     name: subscription-service
+  config:
+    # 레포 루트의 .env를 읽는다 (docker-compose와 같은 파일). 실행 위치가 루트면 ./.env, 모듈이면 ../.env. 없으면 건너뛴다
+    import: optional:file:./.env[.properties],optional:file:../.env[.properties]
   datasource:
     # database ipo 하나에 서비스별 스키마 (subscription). 다른 서비스 스키마는 직접 조회하지 않는다
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:ipo}?currentSchema=subscription
     # 서비스별 전용 계정 (init.sh가 만든다). 자기 스키마만 쓸 수 있다
     username: subscription_app
-    password: ${SUBSCRIPTION_DB_PASSWORD:subscription}
+    password: ${SUBSCRIPTION_DB_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: update

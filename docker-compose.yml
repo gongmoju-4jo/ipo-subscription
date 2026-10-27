@@ -5,6 +5,7 @@ services:
     image: postgres:16
     container_name: ipo-postgres
     environment:
+      POSTGRES_DB: ${DB_NAME:-ipo}
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
       TZ: Asia/Seoul
@@ -12,7 +13,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # 서비스별 DB(account_db, subscription_db, allocation_db) 생성
+      # 서비스별 스키마(account, subscription, allocation) 생성
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]

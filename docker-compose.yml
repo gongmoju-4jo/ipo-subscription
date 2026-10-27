@@ -8,6 +8,10 @@ services:
       POSTGRES_DB: ${DB_NAME:-ipo}
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      # 서비스별 계정 비밀번호 (init.sh가 계정을 만들 때 쓴다. 비어 있으면 초기화가 실패한다)
+      ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-}
+      SUBSCRIPTION_DB_PASSWORD: ${SUBSCRIPTION_DB_PASSWORD:-}
+      ALLOCATION_DB_PASSWORD: ${ALLOCATION_DB_PASSWORD:-}
       TZ: Asia/Seoul
     ports:
       - "5432:5432"

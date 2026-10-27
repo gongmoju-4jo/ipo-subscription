@@ -47,7 +47,7 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       TZ: Asia/Seoul
     ports:
-      - "${KAFKA_PORT:-29092}:9094"
+      - "127.0.0.1:${KAFKA_PORT:-29092}:9094"
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
@@ -79,7 +79,7 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       TZ: Asia/Seoul
     ports:
-      - "${KAFKA_UI_PORT:-8989}:8080"
+      - "127.0.0.1:${KAFKA_UI_PORT:-8989}:8080"
     depends_on:
       kafka:
         condition: service_healthy

@@ -11,10 +11,12 @@ for name in ACCOUNT_DB_PASSWORD SUBSCRIPTION_DB_PASSWORD ALLOCATION_DB_PASSWORD;
   fi
 done
 
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
-  -v account_pw="$ACCOUNT_DB_PASSWORD" \
-  -v subscription_pw="$SUBSCRIPTION_DB_PASSWORD" \
-  -v allocation_pw="$ALLOCATION_DB_PASSWORD" <<'EOSQL'
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'EOSQL'
+-- 비밀번호는 명령줄 인자가 아니라 환경변수에서 읽는다 (프로세스 목록에 노출되지 않도록, psql 15 이상)
+\getenv account_pw ACCOUNT_DB_PASSWORD
+\getenv subscription_pw SUBSCRIPTION_DB_PASSWORD
+\getenv allocation_pw ALLOCATION_DB_PASSWORD
+
 -- public 스키마는 모두에게 열려 있으므로 기본 권한을 회수한다
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 

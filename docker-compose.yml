@@ -30,7 +30,8 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       # 컨테이너 안에서 INTERNAL은 29092, HOST는 9094로 열고 호스트에는 HOST만 29092로 노출한다 (포트 충돌 방지)
       KAFKA_LISTENERS: INTERNAL://:29092,HOST://:9094,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,HOST://localhost:29092
+      # 호스트 포트를 바꾸면 HOST 광고 주소도 같이 바뀌어야 연결 후 메타데이터 응답에서 끊기지 않는다
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,HOST://localhost:${KAFKA_PORT:-29092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
@@ -41,7 +42,7 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       TZ: Asia/Seoul
     ports:
-      - "29092:9094"
+      - "${KAFKA_PORT:-29092}:9094"
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
@@ -50,7 +51,7 @@ services:
       timeout: 10s
       retries: 10
 
-  # 토픽, 컨슈머 그룹 확인용 웹 UI: http://localhost:8989
+  # 토픽, 컨슈머 그룹 확인용 웹 UI: http://localhost:8989 (KAFKA_UI_PORT로 변경 가능)
   kafka-ui:
     image: kafbat/kafka-ui:v1.5.0
     container_name: ipo-kafka-ui
@@ -59,7 +60,7 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       TZ: Asia/Seoul
     ports:
-      - "8989:8080"
+      - "${KAFKA_UI_PORT:-8989}:8080"
     depends_on:
       kafka:
         condition: service_healthy

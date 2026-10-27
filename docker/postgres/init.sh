@@ -6,7 +6,7 @@
 
 for name in ACCOUNT_DB_PASSWORD SUBSCRIPTION_DB_PASSWORD ALLOCATION_DB_PASSWORD; do
   if [ -z "${!name}" ]; then
-    echo "init.sh: ${name}이(가) 비어 있습니다. .env에 서비스별 DB 비밀번호를 설정하세요 (.env.example 참고)" >&2
+    echo "init.sh: ${name}이(가) 비어 있습니다. .env에 서비스별 DB 비밀번호를 설정한 뒤 docker-compose down -v 로 볼륨을 지우고 다시 올리세요 (초기화는 한 번만 실행되어 실패해도 재실행되지 않습니다)" >&2
     exit 1
   fi
 done

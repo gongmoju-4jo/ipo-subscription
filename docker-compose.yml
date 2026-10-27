@@ -8,15 +8,19 @@ services:
       POSTGRES_DB: ${DB_NAME:-ipo}
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      # 서비스별 계정 비밀번호 (init.sh가 계정을 만들 때 쓴다). 기본값 없음: .env에 직접 정한 값을 넣는다. 비어 있으면 초기화가 실패한다
+      # 서비스별 계정 비밀번호 (init.sh가 계정을 만들 때 쓴다). 기본값 없음: .env에 직접 정한 값을 넣는다. 비어 있으면 DB를 만들기 전에 종료한다
       ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-}
       SUBSCRIPTION_DB_PASSWORD: ${SUBSCRIPTION_DB_PASSWORD:-}
       ALLOCATION_DB_PASSWORD: ${ALLOCATION_DB_PASSWORD:-}
       TZ: Asia/Seoul
+    # 기본 진입점을 감싸서 DB를 처음 만들기 전에 비밀번호를 검사한다 (docker/postgres/entrypoint.sh)
+    entrypoint: ["/bin/bash", "/docker-entrypoint-wrapper.sh"]
+    command: ["postgres"]
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/entrypoint.sh:/docker-entrypoint-wrapper.sh:ro
       # 서비스별 스키마(account, subscription, allocation) 생성
       - ./docker/postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
     healthcheck:

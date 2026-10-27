@@ -32,7 +32,7 @@ docker-compose up -d postgres
 
 필요: **JDK 21**, Docker + Compose v2 이상, IntelliJ
 
-> ✏️ docker-compose에는 현재 PostgreSQL만 있습니다. Kafka, 모니터링이 추가되면 갱신합니다.
+> ✏️ docker-compose에는 현재 PostgreSQL, Kafka, Kafka-UI가 있습니다. 서비스 컨테이너, 모니터링이 추가되면 갱신합니다.
 
 ### 📌 Claude Code
 
@@ -52,7 +52,7 @@ ipo-subscription/
 ├── build.gradle            공통 버전, 의존성 (Boot 3.5.16, Cloud 2025.0.3, Java 21)
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
-├── docker-compose.yml      로컬 인프라 (현재 PostgreSQL만)
+├── docker-compose.yml      로컬 인프라 (현재 PostgreSQL, Kafka, Kafka-UI)
 ├── docker/postgres/        서비스별 DB 생성 스크립트
 ├── common/                 공통 라이브러리 (실행 X)
 ├── eureka-server/
@@ -69,6 +69,7 @@ ipo-subscription/
 | eureka / gateway | 8761 / 8080 |
 | account / subscription / allocation | 8081 / 8082 / 8083 |
 | PostgreSQL | 5432 |
+| Kafka / Kafka-UI | 29092 / 8989 |
 
 ### 게이트웨이 라우팅
 
@@ -102,7 +103,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 ### IntelliJ
 
-1. `docker-compose up -d postgres`
+1. `docker-compose up -d postgres kafka kafka-ui` (Kafka가 필요 없는 작업이면 `postgres`만)
 2. `⌘8`/`Alt+8` Services 창 → Eureka 실행 → 나머지 실행
 3. http://localhost:8080/api/v1/unknown → 404면 게이트웨이 정상 (인증 필터 추가 후엔 401)
 
@@ -110,7 +111,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 ### Docker
 
-> ✏️ 서비스 컨테이너와 Kafka는 아직 compose에 없습니다. 추가된 뒤 아래 명령을 사용합니다.
+> ✏️ 서비스 컨테이너는 아직 compose에 없습니다. 추가된 뒤 아래 명령을 사용합니다.
 
 ```bash
 ./gradlew build -x test && docker-compose up -d --build   # 실행
@@ -130,6 +131,10 @@ docker-compose down -v                                     # 종료 + DB 초기�
 - 토픽, 파티션 키, 페이로드 → **이벤트 명세 문서** 기준 (코드보다 문서 먼저 수정)
 - 실패 메시지: `{토픽}.DLT`
 - 접속 주소 기본값: `localhost:29092` (서비스 `application.yml`의 `KAFKA_BOOTSTRAP_SERVERS`)
+- 실행: `docker-compose up -d kafka kafka-ui`
+- Kafka-UI: http://localhost:8989 (토픽, 컨슈머 그룹 확인)
+- 호스트 포트 변경: `.env`의 `KAFKA_PORT`(기본 29092), `KAFKA_UI_PORT`(기본 8989)
+  - `KAFKA_PORT`를 바꾸면 서비스 실행 시 `KAFKA_BOOTSTRAP_SERVERS`도 `localhost:{바꾼 포트}`로 맞춘다
 
 ---
 
@@ -470,6 +475,9 @@ jwt:
 
 - **`Port already in use`**
   - 해당 포트 사용 중인 앱 종료
+
+- **Windows에서 `bind: An attempt was made to access a socket in a way forbidden by its access permissions`**
+  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`에서 `KAFKA_PORT`, `KAFKA_UI_PORT`를 다른 값으로 변경
 
 - **로그인은 되는데 다른 요청이 전부 401 `UNAUTHORIZED`**
   - account-service와 gateway의 JWT 키가 같은지 확인

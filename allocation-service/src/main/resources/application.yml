@@ -5,13 +5,18 @@ spring:
   application:
     name: allocation-service
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/allocation_db
+    # database ipo 하나에 서비스별 스키마 (allocation). 다른 서비스 스키마는 직접 조회하지 않는다
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:ipo}?currentSchema=allocation
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
   jpa:
     hibernate:
       ddl-auto: update
     open-in-view: false
+    properties:
+      hibernate.default_schema: allocation
+      # 스키마가 없으면 Hibernate가 만든다 (init.sql과 같은 이름)
+      hibernate.hbm2ddl.create_namespaces: true
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
 

@@ -53,7 +53,7 @@ ipo-subscription/
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
 ├── docker-compose.yml      로컬 인프라 (현재 PostgreSQL만)
-├── docker/postgres/        서비스별 DB 생성 스크립트
+├── docker/postgres/        서비스별 스키마 생성 스크립트
 ├── common/                 공통 라이브러리 (실행 X)
 ├── eureka-server/
 ├── api-gateway/
@@ -252,7 +252,7 @@ compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
 | 규칙 | 비고 |
 | --- | --- |
 | `BaseEntity` 상속 | Audit 필드 자동. `ledger_entry`(원장)는 수정이 없어 상속 ❌ |
-| 📌 테이블 이름: 접두사 없음, snake_case 단수 (`@Table(name = "subscription")`) | 서비스별 DB라 이름 충돌 없음. 회원만 `users` (`user`는 PostgreSQL 예약어) |
+| 📌 테이블 이름: 접두사 없음, snake_case 단수 (`@Table(name = "subscription")`) | 서비스별 스키마라 이름 충돌 없음. 회원만 `users` (`user`는 PostgreSQL 예약어) |
 | PK: UUID (`@GeneratedValue(strategy = UUID)` + `@Column(name = "subscription_id")`) | API 명세 ID 형식과 동일 |
 | 다른 서비스 엔티티 참조 ❌ → `UUID`만 | 다른 서비스 데이터는 이벤트 또는 Feign |
 | 같은 서비스 안은 `@ManyToOne(fetch = LAZY)` | 예: Margin → Account |
@@ -404,11 +404,13 @@ public class SubscriptionController {
 
 ## 10. DB와 설정
 
-- 📌 **서비스별 DB 분리** (발제 필수). 다른 서비스 DB 직접 조회 ❌ → 이벤트 또는 Feign
-- PostgreSQL 컨테이너 하나(`ipo-postgres`)에 DB 3개: `account_db`, `subscription_db`, `allocation_db` (`docker/postgres/init.sql`)
-- DB 툴(DBeaver 등) 접속: `localhost:5432` / ID `postgres` / PW `postgres` (`.env`의 `DB_USERNAME`, `DB_PASSWORD`로 변경)
+- 📌 **서비스별 스키마 분리** (발제: 서비스별 DB 분리). 다른 서비스 스키마 직접 조회 ❌ → 이벤트 또는 Feign
+- PostgreSQL 컨테이너 하나(`ipo-postgres`), database `ipo` 하나에 스키마 3개: `account`, `subscription`, `allocation` (`docker/postgres/init.sql`)
+- 서비스는 접속 URL `?currentSchema={서비스}` + `hibernate.default_schema`로 자기 스키마에만 테이블 생성 (스키마가 없으면 `hibernate.hbm2ddl.create_namespaces`로 자동 생성)
+- 물리 분리(DB 서버를 서비스마다 따로)는 아님. 로컬 시연 기준
+- DB 툴(DBeaver 등) 접속: `localhost:5432` / DB `ipo` / ID `postgres` / PW `postgres` (`.env`의 `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`로 변경)
 
-> ⚠️ `init.sql`은 볼륨이 비어 있을 때 한 번만 실행됩니다. DB를 추가, 변경했으면 `docker-compose down -v && docker-compose up -d postgres`로 다시 만듭니다.
+> ⚠️ `init.sql`은 볼륨이 비어 있을 때 한 번만 실행됩니다. 스키마를 추가, 변경했으면 `docker-compose down -v && docker-compose up -d postgres`로 다시 만듭니다.
 
 ### 테이블 생성
 

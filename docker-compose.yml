@@ -38,6 +38,8 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       # 이미지 기본 저장 경로는 /tmp라서 볼륨이 쓰이지 않는다. 볼륨 경로로 지정해야 재생성 후에도 데이터가 남는다
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # 토픽은 kafka-init이 만든다. 없는 토픽으로 발행해도 자동 생성되지 않게 끈다
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       # 단일 브로커라 내부 토픽 복제 수는 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -53,6 +55,20 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
+
+  # 토픽을 만들고 종료하는 일회성 컨테이너. 토픽 목록, 파티션 수(기본 3)는 docker/kafka/create-topics.sh
+  kafka-init:
+    image: apache/kafka:4.3.1
+    container_name: ipo-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/bash", "/scripts/create-topics.sh"]
+    environment:
+      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-}
+    volumes:
+      - ./docker/kafka/create-topics.sh:/scripts/create-topics.sh:ro
 
   # 토픽, 컨슈머 그룹 확인용 웹 UI: http://localhost:8989 (KAFKA_UI_PORT로 변경 가능)
   kafka-ui:

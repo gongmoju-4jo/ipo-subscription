@@ -30,6 +30,14 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
 
+jwt:
+  # 서명 키. .env의 JWT_SECRET (api-gateway와 같은 값). 비어 있으면 기동할 때 실패한다
+  secret: ${JWT_SECRET:}
+  # api-gateway가 이 값으로 검증한다
+  issuer: account-service
+  # 로그인 응답의 expiresIn과 같은 값 (초)
+  expires-in-seconds: 3600
+
 eureka:
   client:
     service-url:

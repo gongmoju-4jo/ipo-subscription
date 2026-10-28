@@ -172,16 +172,28 @@ class AccountListApiTest {
     }
 
     @Test
-    void sort_파라미터가_오면_400으로_정렬을_지원하지_않는다고_알려준다() throws Exception {
+    void 허용하지_않은_정렬_필드는_400이다() throws Exception {
         insertAccount(userA, OffsetDateTime.parse("2026-10-28T09:00:00+09:00"), 100, 0);
 
-        // 다른 필드, 기본 정렬과 같은 값, 빈 값 모두 정렬 요청이므로 거절한다
-        for (String sort : List.of("cashBalance,asc", "createdAt,desc", "")) {
-            mockMvc.perform(get(ACCOUNTS).param("sort", sort).header(USER_HEADER, userA))
+        for (String sort : List.of("cashBalance,asc", "createdAt,desc&sort=marginBalance,asc")) {
+            mockMvc.perform(get(ACCOUNTS + "?sort=" + sort).header(USER_HEADER, userA))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
                     .andExpect(jsonPath("$.error.details[0].field").value("sort"));
         }
+    }
+
+    @Test
+    void createdAt으로_정렬하면_그_방향을_따른다() throws Exception {
+        insertAccount(userA, OffsetDateTime.parse("2026-10-28T09:00:00+09:00"), 100, 0);
+        insertAccount(userA, OffsetDateTime.parse("2026-10-28T10:00:00+09:00"), 200, 0);
+
+        mockMvc.perform(get(ACCOUNTS).param("sort", "createdAt,asc").header(USER_HEADER, userA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].cashBalance").value(100));
+        mockMvc.perform(get(ACCOUNTS).param("sort", "createdAt,desc").header(USER_HEADER, userA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].cashBalance").value(200));
     }
 
     @Test

@@ -7,11 +7,11 @@ import com.gongmoju.account.domain.user.User;
 import com.gongmoju.account.domain.user.UserRepository;
 import com.gongmoju.common.exception.BusinessException;
 import com.gongmoju.common.exception.CommonErrorCode;
+import com.gongmoju.common.util.PageableUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.SQLException;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Slf4j
@@ -29,8 +30,8 @@ public class AccountService {
     private static final String UNIQUE_VIOLATION = "23505";
     // 12자리 난수가 겹칠 일은 거의 없다. 겹치면 번호만 새로 뽑아 다시 시도하고, 이 횟수를 넘으면 서버 오류로 본다
     private static final int MAX_NUMBER_ATTEMPTS = 5;
-    // 목록 정렬: 개설 시각 최신순. createdAt이 같은 계좌가 있어도 페이지 사이에 중복, 누락이 없게 id를 마지막 기준으로 붙인다
-    private static final Sort LIST_SORT = Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
+    // 목록에서 정렬할 수 있는 필드 (API 명세 1.4: 정렬 필드는 API별로 제한)
+    private static final Set<String> LIST_SORTABLE_FIELDS = Set.of("createdAt");
 
     private final AccountRepository accountRepository;
     private final UserRepository userRepository;
@@ -79,16 +80,16 @@ public class AccountService {
     }
 
     /**
-     * 본인 계좌를 개설 시각 최신순으로 조회한다. 계좌가 없으면 빈 페이지다.
+     * 본인 계좌를 조회한다. 정렬을 지정하지 않으면 개설 시각 최신순이다. 계좌가 없으면 빈 페이지다.
      *
-     * @param userId 요청자 회원 ID (다른 회원의 계좌는 조회할 수 없다)
-     * @param page   페이지 번호 (0부터)
-     * @param size   페이지 크기
+     * @param userId   요청자 회원 ID (다른 회원의 계좌는 조회할 수 없다)
+     * @param pageable 페이지 정보
      * @return 계좌 페이지
+     * @throws BusinessException 정렬할 수 없는 필드면 VALIDATION_ERROR(400)
      */
     @Transactional(readOnly = true)
-    public Page<AccountResult> list(UUID userId, int page, int size) {
-        return accountRepository.findByUserId(userId, PageRequest.of(page, size, LIST_SORT))
+    public Page<AccountResult> list(UUID userId, Pageable pageable) {
+        return accountRepository.findByUserId(userId, PageableUtils.toStablePageable(pageable, LIST_SORTABLE_FIELDS))
                 .map(AccountResult::from);
     }
 

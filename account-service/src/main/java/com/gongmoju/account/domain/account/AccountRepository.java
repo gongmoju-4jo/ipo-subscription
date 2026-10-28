@@ -1,0 +1,17 @@
+package com.gongmoju.account.domain.account;
+
+import java.util.Optional;
+import java.util.UUID;
+
+public interface AccountRepository {
+
+    /**
+     * 저장하고 바로 DB에 반영한다. 유니크 위반(같은 requestId 동시 요청, 계좌번호 충돌)을 호출한 트랜잭션 안에서 알 수 있다.
+     *
+     * @param account 저장할 계좌
+     * @return 저장된 계좌
+     */
+    Account saveAndFlush(Account account);
+
+    Optional<Account> findByRequestId(UUID requestId);
+}

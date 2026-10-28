@@ -11,7 +11,9 @@ import org.springframework.http.HttpStatus;
 @RequiredArgsConstructor
 public enum AccountErrorCode implements ErrorCode {
     // 로그인 ID 없음 또는 비밀번호 불일치 (구분하지 않고 같은 응답)
-    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "로그인 ID 또는 비밀번호가 올바르지 않습니다.");
+    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "로그인 ID 또는 비밀번호가 올바르지 않습니다."),
+    // 증거금 확보 시 예수금 부족. Consumer가 받아서 margin.reserve-failed(INSUFFICIENT_BALANCE)로 응답
+    INSUFFICIENT_BALANCE(HttpStatus.CONFLICT, "예수금이 부족합니다.");
 
     private final HttpStatus status;
     private final String message;

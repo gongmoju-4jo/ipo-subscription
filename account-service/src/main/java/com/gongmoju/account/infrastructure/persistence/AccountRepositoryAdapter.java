@@ -35,4 +35,9 @@ class AccountRepositoryAdapter implements AccountRepository {
     public Optional<Account> findByIdAndUserId(UUID accountId, UUID userId) {
         return jpaRepository.findByIdAndUserId(accountId, userId);
     }
+
+    @Override
+    public Optional<Account> findByIdForUpdate(UUID accountId) {
+        return jpaRepository.findByIdForUpdate(accountId);
+    }
 }

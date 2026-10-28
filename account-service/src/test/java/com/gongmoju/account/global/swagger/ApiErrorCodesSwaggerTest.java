@@ -20,7 +20,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "eureka.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:test;MODE=PostgreSQL",
         "spring.datasource.username=sa",
-        "spring.datasource.password="
+        "spring.datasource.password=",
+        "spring.sql.init.mode=never"
 })
 @AutoConfigureMockMvc
 @Import(ApiErrorCodesSwaggerTest.SampleControllerConfig.class)

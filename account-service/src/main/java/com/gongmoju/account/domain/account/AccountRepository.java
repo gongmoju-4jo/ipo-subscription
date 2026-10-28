@@ -6,6 +6,7 @@ import org.springframework.data.domain.Pageable;
 import java.util.Optional;
 import java.util.UUID;
 
+// 계좌 저장소. 구현은 infrastructure/persistence (JPA)
 public interface AccountRepository {
 
     /**
@@ -28,4 +29,8 @@ public interface AccountRepository {
      * @return 본인 계좌
      */
     Optional<Account> findByIdAndUserId(UUID accountId, UUID userId);
+
+    // 계좌 행에 쓰기 잠금을 획득하여 동시 잔고 변경 방지
+    // 잠금은 트랜잭션이 종료될 때 해제됨
+    Optional<Account> findByIdForUpdate(UUID accountId);
 }

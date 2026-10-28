@@ -15,6 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.datasource.url=jdbc:h2:mem:audit;MODE=PostgreSQL",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
+        "spring.sql.init.mode=never",
         "spring.jpa.hibernate.ddl-auto=create-drop"
 })
 class BaseEntityAuditingTest {

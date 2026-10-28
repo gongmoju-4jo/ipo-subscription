@@ -42,4 +42,21 @@ public class User extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private UserRole role = UserRole.USER;
+
+    /**
+     * 가입하는 회원을 만든다. 역할은 요청으로 받지 않고 항상 USER다 (ADMIN은 시드 데이터로만 만든다).
+     *
+     * @param loginId      로그인 ID
+     * @param passwordHash BCrypt 해시 (원문 아님)
+     * @param name         이름
+     * @return 저장 전 회원
+     */
+    public static User signUp(String loginId, String passwordHash, String name) {
+        User user = new User();
+        user.loginId = loginId;
+        user.passwordHash = passwordHash;
+        user.name = name;
+        user.role = UserRole.USER;
+        return user;
+    }
 }

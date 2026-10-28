@@ -6,6 +6,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.UUID;
 
-// findById는 JpaRepository가 이미 제공하므로 도메인 인터페이스를 그대로 구현한다
+// findById, saveAndFlush는 JpaRepository가 이미 제공하고, existsByLoginId, findByLoginId는 메서드 이름으로 쿼리가 만들어진다
 interface UserJpaRepository extends JpaRepository<User, UUID>, UserRepository {
 }

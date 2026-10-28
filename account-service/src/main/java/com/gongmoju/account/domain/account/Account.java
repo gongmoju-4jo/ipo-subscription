@@ -38,6 +38,10 @@ public class Account extends BaseEntity {
     @Column(nullable = false, unique = true)
     private UUID requestId;
 
+    // 계좌번호 (화면 표시용). 숫자 12자리, 하이픈 없이 저장. 한 번 정하면 바뀌지 않는다. 다른 서비스는 account_id로만 참조한다
+    @Column(nullable = false, unique = true, length = 20)
+    private String accountNumber;
+
     // 예수금 (출금 가능액)
     @Column(nullable = false)
     private long cashBalance;
@@ -45,4 +49,20 @@ public class Account extends BaseEntity {
     // 청약증거금
     @Column(nullable = false)
     private long marginBalance;
+
+    /**
+     * 계좌를 개설한다. 잔고는 0으로 시작하고 가상 입금으로 채운다.
+     *
+     * @param user          소유자
+     * @param requestId     개설 요청 ID (멱등키)
+     * @param accountNumber 계좌번호
+     * @return 새 계좌
+     */
+    public static Account open(User user, UUID requestId, String accountNumber) {
+        Account account = new Account();
+        account.user = user;
+        account.requestId = requestId;
+        account.accountNumber = accountNumber;
+        return account;
+    }
 }

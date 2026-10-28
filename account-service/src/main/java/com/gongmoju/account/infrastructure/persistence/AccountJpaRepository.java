@@ -25,7 +25,7 @@ interface AccountJpaRepository extends JpaRepository<Account, UUID> {
     @EntityGraph(attributePaths = "user")
     Optional<Account> findByIdAndUserId(UUID id, UUID userId);
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select a from Account a where a.id = :id")
-    Optional<Account> findByIdForUpdate(@Param("id") UUID id);
+    @Lock(LockModeType.PESSIMISTIC_WRITE) // 비관적 쓰기 락. DB 행 잠금
+    @Query("select a from Account a where a.id = :id") // JPQL로 직접 작성
+    Optional<Account> findByIdForUpdate(@Param("id") UUID id); // 계좌가 없을 수 있으므로 optional
 }

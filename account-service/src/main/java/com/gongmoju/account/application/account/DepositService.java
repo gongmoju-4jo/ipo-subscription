@@ -38,6 +38,11 @@ public class DepositService {
      */
     @Transactional
     public DepositResult deposit(UUID accountId, UUID userId, long amount, UUID requestId) {
+        // requestId가 null이면 findByRequestId가 request_id IS NULL인 증거금 원장을 찾을 수 있어서 먼저 막는다
+        if (requestId == null) {
+            throw new IllegalArgumentException("입금은 requestId가 필요합니다.");
+        }
+
         // 잔고 변경 전 락을 먼저 건다.
         // 이미 조회한 엔티티는 JPA 캐시에 남아 있을 수 있으므로 잠금 조회를 먼저 수행
         Account account = accountRepository.findByIdForUpdate(accountId)

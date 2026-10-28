@@ -63,6 +63,7 @@ class DepositServiceTest {
     @AfterEach
     void tearDown() {
         jdbcTemplate.update("DELETE FROM ledger_entry");
+        jdbcTemplate.update("DELETE FROM margin");
         jdbcTemplate.update("DELETE FROM account");
         jdbcTemplate.update("DELETE FROM users");
     }
@@ -105,6 +106,25 @@ class DepositServiceTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.DUPLICATE_RESOURCE);
         assertThat(cashBalance()).isEqualTo(1_000);
+        assertThat(ledgerCount()).isEqualTo(1);
+    }
+
+    @Test
+    void requestId가_없으면_증거금_원장을_재요청으로_보지_않고_거절한다() {
+        // request_id가 NULL인 증거금 원장 (findByRequestId(null)이 이 행을 찾으면 409가 난다)
+        UUID marginId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO margin (margin_id, account_id, subscription_id, ipo_id, amount, status, created_at, updated_at, created_by, updated_by)
+                VALUES (?, ?, ?, ?, 1000, 'PENDING', now(), now(), 'test', 'test')""",
+                marginId, accountId, UUID.randomUUID(), UUID.randomUUID());
+        jdbcTemplate.update("""
+                INSERT INTO ledger_entry (ledger_entry_id, account_id, type, amount, cash_balance_after, margin_balance_after, margin_id, created_at, created_by)
+                VALUES (?, ?, 'MARGIN_PENDING', 1000, 0, 1000, ?, now(), 'test')""",
+                UUID.randomUUID(), accountId, marginId);
+
+        assertThatThrownBy(() -> depositService.deposit(accountId, userId, 1_000, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(cashBalance()).isZero();
         assertThat(ledgerCount()).isEqualTo(1);
     }
 

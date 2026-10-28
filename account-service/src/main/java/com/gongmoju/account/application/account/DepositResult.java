@@ -5,8 +5,11 @@ import com.gongmoju.account.domain.ledger.LedgerEntry;
 import java.time.Instant;
 import java.util.UUID;
 
-// 입금 결과. 잔고는 원장의 거래 후 잔고라서 재요청에도 처음 응답과 같은 값이 나온다
-// created: 이번 요청으로 입금했으면 true(201), 같은 requestId의 재요청이면 false(200)
+/**
+ * 가상 입금 처리 결과.
+ * 원장의 거래 후 잔고를 사용하여 재요청에도 최초 처리 결과를 반환한다.
+ * created는 신규 입금이면 true(201), 중복 요청이면 false(200)이다.
+ */
 public record DepositResult(
         UUID depositId,
         UUID accountId,
@@ -17,6 +20,13 @@ public record DepositResult(
         boolean created
 ) {
 
+    /**
+     * 원장 기록을 입금 처리 결과로 변환한다.
+     *
+     * @param entry   입금 원장 기록
+     * @param created 신규 입금 여부
+     * @return 입금 처리 결과
+     */
     static DepositResult of(LedgerEntry entry, boolean created) {
         return new DepositResult(
                 entry.getId(),

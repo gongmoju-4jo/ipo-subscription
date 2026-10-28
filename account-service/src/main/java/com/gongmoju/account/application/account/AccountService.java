@@ -92,6 +92,21 @@ public class AccountService {
                 .map(AccountResult::from);
     }
 
+    /**
+     * 본인 계좌 한 건을 조회한다. 없는 계좌와 남의 계좌는 같은 404로 응답한다 (존재 숨김).
+     *
+     * @param userId    요청자 회원 ID
+     * @param accountId 계좌 ID
+     * @return 계좌
+     * @throws BusinessException 본인 계좌가 아니거나 없으면 RESOURCE_NOT_FOUND(404)
+     */
+    @Transactional(readOnly = true)
+    public AccountResult get(UUID userId, UUID accountId) {
+        Account account = accountRepository.findByIdAndUserId(accountId, userId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "존재하지 않는 계좌입니다.", "accountId"));
+        return AccountResult.from(account);
+    }
+
     private OpenAccountResult openInTransaction(UUID userId, UUID requestId, String accountNumber) {
         Optional<OpenAccountResult> replay = findReplay(userId, requestId);
         if (replay.isPresent()) {

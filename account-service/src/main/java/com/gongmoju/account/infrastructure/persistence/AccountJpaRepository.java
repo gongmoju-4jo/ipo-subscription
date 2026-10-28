@@ -17,4 +17,7 @@ interface AccountJpaRepository extends JpaRepository<Account, UUID> {
 
     @EntityGraph(attributePaths = "user")
     Page<Account> findByUserId(UUID userId, Pageable pageable);
+
+    @EntityGraph(attributePaths = "user")
+    Optional<Account> findByIdAndUserId(UUID id, UUID userId);
 }

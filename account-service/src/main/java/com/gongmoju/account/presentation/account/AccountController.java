@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -66,6 +67,16 @@ public class AccountController {
         return ApiResponse.success(
                 PageResponse.from(accountService.list(userId, pageNumber, pageSize), AccountSummaryResponse::from),
                 "목록을 조회했습니다.");
+    }
+
+    @Operation(summary = "계좌 상세 조회", description = "본인 계좌만 조회한다. 없는 계좌와 남의 계좌는 모두 404이다.")
+    @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.RESOURCE_NOT_FOUND})
+    @GetMapping("/{accountId}")
+    public ApiResponse<AccountResponse> get(
+            @Parameter(hidden = true) @RequestHeader(value = RequestUser.HEADER, required = false) String userIdHeader,
+            @PathVariable UUID accountId) {
+        UUID userId = RequestUser.userId(userIdHeader);
+        return ApiResponse.success(AccountResponse.from(accountService.get(userId, accountId)), "계좌를 조회했습니다.");
     }
 
     // 계좌 목록은 개설 시각 최신순으로 고정이다. 정렬을 요청하면 적용된 줄 알고 넘어가지 않도록 400으로 알려준다 (정렬 가능 필드는 API별로 제한, 없는 필드는 400: PROJECT_SETUP.md)

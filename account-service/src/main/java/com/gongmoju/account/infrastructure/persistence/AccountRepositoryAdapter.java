@@ -30,4 +30,9 @@ class AccountRepositoryAdapter implements AccountRepository {
     public Page<Account> findByUserId(UUID userId, Pageable pageable) {
         return jpaRepository.findByUserId(userId, pageable);
     }
+
+    @Override
+    public Optional<Account> findByIdAndUserId(UUID accountId, UUID userId) {
+        return jpaRepository.findByIdAndUserId(accountId, userId);
+    }
 }

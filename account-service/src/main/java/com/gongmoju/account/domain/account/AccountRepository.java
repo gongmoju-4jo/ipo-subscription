@@ -19,4 +19,13 @@ public interface AccountRepository {
     Optional<Account> findByRequestId(UUID requestId);
 
     Page<Account> findByUserId(UUID userId, Pageable pageable);
+
+    /**
+     * 본인 계좌만 찾는다. 없는 계좌와 남의 계좌를 구분하지 않는다 (존재 숨김).
+     *
+     * @param accountId 계좌 ID
+     * @param userId    요청자 회원 ID
+     * @return 본인 계좌
+     */
+    Optional<Account> findByIdAndUserId(UUID accountId, UUID userId);
 }

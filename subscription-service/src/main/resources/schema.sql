@@ -42,7 +42,7 @@ ALTER TABLE ipo
         CHECK (refund_date > (subscription_end_at AT TIME ZONE 'Asia/Seoul')::date);
 
 -- 이중청약 방지: 사람 기준, 거절, 취소 뒤에는 재청약 허용 (D-14)
-CREATE UNIQUE INDEX IF NOT EXISTS uk_subscription_ipo_user
+CREATE UNIQUE INDEX IF NOT EXISTS uk_subscription_active
     ON subscription (ipo_id, user_id)
     WHERE status NOT IN ('REJECTED', 'CANCELLED');
 

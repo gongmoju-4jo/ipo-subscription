@@ -9,8 +9,12 @@ import com.gongmoju.common.exception.BusinessException;
 import com.gongmoju.common.exception.CommonErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.SQLException;
@@ -25,6 +29,8 @@ public class AccountService {
     private static final String UNIQUE_VIOLATION = "23505";
     // 12자리 난수가 겹칠 일은 거의 없다. 겹치면 번호만 새로 뽑아 다시 시도하고, 이 횟수를 넘으면 서버 오류로 본다
     private static final int MAX_NUMBER_ATTEMPTS = 5;
+    // 목록 정렬: 개설 시각 최신순. createdAt이 같은 계좌가 있어도 페이지 사이에 중복, 누락이 없게 id를 마지막 기준으로 붙인다
+    private static final Sort LIST_SORT = Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
 
     private final AccountRepository accountRepository;
     private final UserRepository userRepository;
@@ -70,6 +76,20 @@ public class AccountService {
             }
         }
         throw new IllegalStateException("계좌번호를 " + MAX_NUMBER_ATTEMPTS + "번 만들었지만 모두 겹쳤습니다.");
+    }
+
+    /**
+     * 본인 계좌를 개설 시각 최신순으로 조회한다. 계좌가 없으면 빈 페이지다.
+     *
+     * @param userId 요청자 회원 ID (다른 회원의 계좌는 조회할 수 없다)
+     * @param page   페이지 번호 (0부터)
+     * @param size   페이지 크기
+     * @return 계좌 페이지
+     */
+    @Transactional(readOnly = true)
+    public Page<AccountResult> list(UUID userId, int page, int size) {
+        return accountRepository.findByUserId(userId, PageRequest.of(page, size, LIST_SORT))
+                .map(AccountResult::from);
     }
 
     private OpenAccountResult openInTransaction(UUID userId, UUID requestId, String accountNumber) {

@@ -1,6 +1,8 @@
 package com.gongmoju.account.infrastructure.persistence;
 
 import com.gongmoju.account.domain.account.Account;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -12,4 +14,7 @@ interface AccountJpaRepository extends JpaRepository<Account, UUID> {
 
     @EntityGraph(attributePaths = "user")
     Optional<Account> findByRequestId(UUID requestId);
+
+    @EntityGraph(attributePaths = "user")
+    Page<Account> findByUserId(UUID userId, Pageable pageable);
 }

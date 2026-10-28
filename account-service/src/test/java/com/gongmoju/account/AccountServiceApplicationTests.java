@@ -8,7 +8,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 		"eureka.client.enabled=false",
 		"spring.datasource.url=jdbc:h2:mem:test;MODE=PostgreSQL",
 		"spring.datasource.username=sa",
-		"spring.datasource.password="
+		"spring.datasource.password=",
+		"spring.sql.init.mode=never"
 })
 class AccountServiceApplicationTests {
 

@@ -44,6 +44,10 @@ public class Account extends BaseEntity {
     @Column(nullable = false, unique = true)
     private UUID requestId;
 
+    // 계좌번호 (화면 표시용). 숫자 12자리, 하이픈 없이 저장. 한 번 정하면 바뀌지 않는다. 다른 서비스는 account_id로만 참조한다
+    @Column(nullable = false, unique = true, length = 20)
+    private String accountNumber;
+
     // 투자자가 입금하거나 청약에 사용할 수 있는 예수금 잔액 (원)
     @Column(nullable = false)
     private long cashBalance;
@@ -51,6 +55,22 @@ public class Account extends BaseEntity {
     // 청약을 위해 인출했으며, 아직 정산 또는 환불되지 않은 증거금 잔액 (원)
     @Column(nullable = false)
     private long marginBalance;
+
+    /**
+     * 계좌를 개설한다. 잔고는 0으로 시작하고 가상 입금으로 채운다.
+     *
+     * @param user          소유자
+     * @param requestId     개설 요청 ID (멱등키)
+     * @param accountNumber 계좌번호
+     * @return 새 계좌
+     */
+    public static Account open(User user, UUID requestId, String accountNumber) {
+        Account account = new Account();
+        account.user = user;
+        account.requestId = requestId;
+        account.accountNumber = accountNumber;
+        return account;
+    }
 
     // 잔고 변경 메서드는 원장 type 하나에 하나씩. 호출한 쪽이 같은 트랜잭션에서 LedgerEntry를 남긴다
     // 금액 검증(1 이상)은 API, Consumer가 먼저 하고 여기서 한 번 더 막는다. 덧셈 넘침은 Math.addExact로 예외

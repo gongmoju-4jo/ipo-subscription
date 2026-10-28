@@ -45,7 +45,7 @@ class DepositServiceTest {
     private UUID userId;
     private UUID accountId;
 
-    // 회원, 계좌 생성 메서드는 F-11, F-12에서 추가되므로 SQL로 넣는다
+    // 회원 생성 메서드가 아직 없어서(F-11) SQL로 넣는다
     @BeforeEach
     void setUp() {
         userId = UUID.randomUUID();
@@ -55,8 +55,8 @@ class DepositServiceTest {
                 VALUES (?, ?, 'hash', '테스트', 'USER', now(), now(), 'test', 'test')""",
                 userId, "u" + userId.toString().substring(0, 8));
         jdbcTemplate.update("""
-                INSERT INTO account (account_id, user_id, request_id, cash_balance, margin_balance, created_at, updated_at, created_by, updated_by)
-                VALUES (?, ?, ?, 0, 0, now(), now(), 'test', 'test')""",
+                INSERT INTO account (account_id, user_id, request_id, account_number, cash_balance, margin_balance, created_at, updated_at, created_by, updated_by)
+                VALUES (?, ?, ?, '100000000001', 0, 0, now(), now(), 'test', 'test')""",
                 accountId, userId, UUID.randomUUID());
     }
 

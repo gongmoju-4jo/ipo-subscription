@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 import java.time.Instant;
@@ -20,11 +21,12 @@ import java.util.Date;
 import java.util.UUID;
 
 // account-service가 발급한 토큰과 같은 규격(HS256, sub/role/iss/iat/exp)을 Gateway가 검증하는지 확인한다.
-// 서비스 없이 확인하려고 Gateway가 직접 응답하는 Swagger 설정 경로를 호출한다. 토큰이 없는 요청의 차단은 이후 커밋에서 다룬다
+// 서비스 없이 확인하려고 받은 헤더를 돌려주는 테스트용 경로를 호출한다. 공개 경로는 토큰을 읽지 않으므로 보호되는 경로를 쓴다
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = "eureka.client.enabled=false")
+@Import(UserHeaderInjectionTest.EchoConfig.class)
 class JwtAuthenticationTest {
 
-    private static final String PATH = "/v3/api-docs/swagger-config";
+    private static final String PATH = "/test-echo/headers";
     private static final String ISSUER = "account-service";
     // 서명 위조 확인용 다른 키 (실제 키 아님). 디코딩 후 32바이트 이상
     private static final String OTHER_SECRET = Base64.getEncoder()

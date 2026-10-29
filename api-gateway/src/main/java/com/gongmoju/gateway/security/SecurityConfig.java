@@ -20,7 +20,7 @@ import reactor.core.publisher.Flux;
  *   <li>공개 체인: 회원가입, 로그인, Swagger. 인증 대상에서 제외해서 토큰을 읽지도 않는다
  *       (만료된 토큰이 붙은 채 로그인해도 401이 되지 않는다).</li>
  *   <li>API 체인: 그 외 모든 요청. JWT를 검증하고 실패하면 401, 통과하면 토큰의 sub, role을 서비스로 넘길 헤더로 설정한다.
- *       /api/v1/admin/**은 ADMIN만 허용하고 일반 회원은 403이다.</li>
+ *       /api/v1/admin/**은 ADMIN만 허용하고 일반 회원은 403이다. 401, 403은 공통 오류 응답 형식(JSON)으로 내려준다.</li>
  * </ul>
  */
 @Configuration
@@ -52,7 +52,10 @@ public class SecurityConfig {
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
                 .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
                 .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(roleConverter())))
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .authenticationEntryPoint(new JsonAuthenticationEntryPoint())
+                        .accessDeniedHandler(new JsonAccessDeniedHandler())
+                        .jwt(jwt -> jwt.jwtAuthenticationConverter(roleConverter())))
                 // 인증이 끝난 뒤에 검증한 토큰의 sub, role을 X-User-Id, X-User-Role로 설정한다
                 .addFilterAfter(new UserHeaderInjectionFilter(), SecurityWebFiltersOrder.AUTHENTICATION)
                 .authorizeExchange(exchanges -> exchanges

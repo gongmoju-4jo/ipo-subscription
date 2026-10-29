@@ -32,11 +32,20 @@ final class JwtTestTokens {
         return sign(secretBase64, subject, role, issuedAt, issuedAt.plus(1, ChronoUnit.HOURS));
     }
 
+    // 만료 시각(exp)이 없는 토큰
+    static String withoutExpiry(String secretBase64, String subject, String role) throws JOSEException {
+        return serialize(secretBase64, new JWTClaimsSet.Builder()
+                .issuer(ISSUER).subject(subject).claim("role", role).issueTime(new Date()).build());
+    }
+
     private static String sign(String secretBase64, String subject, String role, Instant issuedAt, Instant expiresAt)
             throws JOSEException {
-        JWTClaimsSet claims = new JWTClaimsSet.Builder()
+        return serialize(secretBase64, new JWTClaimsSet.Builder()
                 .issuer(ISSUER).subject(subject).claim("role", role)
-                .issueTime(Date.from(issuedAt)).expirationTime(Date.from(expiresAt)).build();
+                .issueTime(Date.from(issuedAt)).expirationTime(Date.from(expiresAt)).build());
+    }
+
+    private static String serialize(String secretBase64, JWTClaimsSet claims) throws JOSEException {
         SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims);
         jwt.sign(new MACSigner(Base64.getDecoder().decode(secretBase64)));
         return jwt.serialize();

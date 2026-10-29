@@ -9,11 +9,12 @@ import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusReactiveJwtDecoder;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 
 import javax.crypto.spec.SecretKeySpec;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.Set;
 
@@ -31,6 +32,12 @@ class JwtConfig {
     // common UserRole과 같은 값 (Gateway는 common을 쓰지 않는다)
     private static final Set<String> ROLES = Set.of("USER", "ADMIN");
 
+    // 서버끼리 시계가 조금 달라도 만료 직후의 토큰을 바로 거절하지 않는다 (Spring 기본값과 같음)
+    private static final Duration CLOCK_SKEW = Duration.ofSeconds(60);
+
+    // 만료 실패를 다른 실패와 구분하는 오류 코드. 인증 실패 응답이 TOKEN_EXPIRED를 고를 때 쓴다
+    static final String EXPIRED_ERROR_CODE = "token_expired";
+
     @Bean
     ReactiveJwtDecoder jwtDecoder(JwtProperties properties) {
         if (properties.issuer() == null || properties.issuer().isBlank()) {
@@ -41,7 +48,7 @@ class JwtConfig {
                 .macAlgorithm(MacAlgorithm.HS256)
                 .build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
-                JwtValidators.createDefault(), issuerValidator(properties.issuer()), claimsValidator()));
+                timestampValidator(), issuerValidator(properties.issuer()), claimsValidator()));
         return decoder;
     }
 
@@ -60,6 +67,25 @@ class JwtConfig {
             throw new IllegalStateException("JWT_SECRET은 디코딩 후 " + MIN_SECRET_BYTES + "바이트 이상이어야 합니다.");
         }
         return decoded;
+    }
+
+    // 만료는 전용 오류 코드로 알린다. exp가 없는 토큰은 영원히 유효해지므로 받지 않는다
+    private static OAuth2TokenValidator<Jwt> timestampValidator() {
+        return jwt -> {
+            Instant now = Instant.now();
+            Instant expiresAt = jwt.getExpiresAt();
+            if (expiresAt == null) {
+                return OAuth2TokenValidatorResult.failure(invalid("exp가 없습니다."));
+            }
+            if (now.minus(CLOCK_SKEW).isAfter(expiresAt)) {
+                return OAuth2TokenValidatorResult.failure(new OAuth2Error(EXPIRED_ERROR_CODE, "토큰이 만료되었습니다.", null));
+            }
+            Instant notBefore = jwt.getNotBefore();
+            if (notBefore != null && now.plus(CLOCK_SKEW).isBefore(notBefore)) {
+                return OAuth2TokenValidatorResult.failure(invalid("아직 유효하지 않은 토큰입니다."));
+            }
+            return OAuth2TokenValidatorResult.success();
+        };
     }
 
     // iss는 URL이 아니라 "account-service" 같은 이름이라 getIssuer()를 쓰지 않고 문자열로 비교한다

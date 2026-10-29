@@ -43,6 +43,18 @@ spring:
         request.timeout.ms: 5000
         delivery.timeout.ms: 10000
 
+# Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks, 멱등, max.block.ms)은 위 spring.kafka.producer를 함께 쓴다
+outbox:
+  publisher:
+    # false면 스케줄 실행을 끈다
+    enabled: true
+    # 이전 실행이 끝난 뒤 다시 실행하기까지 쉬는 시간 (ISO-8601, @Scheduled가 읽는다)
+    interval: PT1S
+    batch-size: 100
+    # 이 횟수 이상 연속 실패하면 알림 로그. Consumer 재시도(3회)와 별개이고, 넘어도 발행은 계속 시도한다
+    alert-threshold: 5
+    send-timeout: 5s
+
 eureka:
   client:
     service-url:

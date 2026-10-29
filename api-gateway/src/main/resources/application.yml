@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: api-gateway
+  config:
+    # 레포 루트의 .env를 읽는다 (docker-compose, account-service와 같은 파일). 실행 위치가 루트면 ./.env, 모듈이면 ../.env. 없으면 건너뛴다
+    import: optional:file:./.env[.properties],optional:file:../.env[.properties]
   cloud:
     gateway:
       server:
@@ -56,6 +59,12 @@ springdoc:
         url: /subscription-service/v3/api-docs
       - name: allocation-service
         url: /allocation-service/v3/api-docs
+
+jwt:
+  # 서명 키. .env의 JWT_SECRET (account-service와 같은 값). 비어 있거나 짧으면 기동할 때 실패한다
+  secret: ${JWT_SECRET:}
+  # 토큰의 iss가 이 값과 같아야 통과한다 (account-service가 발급)
+  issuer: account-service
 
 eureka:
   client:

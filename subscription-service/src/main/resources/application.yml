@@ -27,8 +27,21 @@ spring:
       hibernate.default_schema: subscription
       # 스키마는 init.sh가 만든다 (같은 이름). 서비스 계정은 DB CREATE 권한이 없어서 이 설정은 동작하지 않아도 된다
       hibernate.hbm2ddl.create_namespaces: true
+  jackson:
+    deserialization:
+      # 소수(100.5)를 정수 필드(청약 수량 등)로 잘라서 받지 않고 400으로 응답한다
+      accept-float-as-int: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      # 브로커 저장 확인(acks=all) 후에만 202를 준다 (D-13). 재전송 중복은 idempotence로 막는다
+      acks: all
+      properties:
+        enable.idempotence: true
+        # 브로커가 없거나 느리면 오래 기다리지 않고 500으로 응답한다 (메타데이터 대기 5초, 전송 전체 10초)
+        max.block.ms: 5000
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
 
 eureka:
   client:

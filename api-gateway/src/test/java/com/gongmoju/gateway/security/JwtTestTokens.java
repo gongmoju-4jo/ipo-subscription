@@ -23,30 +23,40 @@ final class JwtTestTokens {
     // 지금부터 1시간 동안 유효한 토큰
     static String valid(String secretBase64, String subject, String role) throws JOSEException {
         Instant now = Instant.now();
-        return sign(secretBase64, subject, role, now, now.plus(1, ChronoUnit.HOURS));
+        return custom(secretBase64, ISSUER, subject, role, now, now.plus(1, ChronoUnit.HOURS));
     }
 
     // 이미 만료된 토큰
     static String expired(String secretBase64, String subject, String role) throws JOSEException {
         Instant issuedAt = Instant.now().minus(2, ChronoUnit.HOURS);
-        return sign(secretBase64, subject, role, issuedAt, issuedAt.plus(1, ChronoUnit.HOURS));
+        return custom(secretBase64, ISSUER, subject, role, issuedAt, issuedAt.plus(1, ChronoUnit.HOURS));
     }
 
     // 만료 시각(exp)이 없는 토큰
     static String withoutExpiry(String secretBase64, String subject, String role) throws JOSEException {
-        return serialize(secretBase64, new JWTClaimsSet.Builder()
-                .issuer(ISSUER).subject(subject).claim("role", role).issueTime(new Date()).build());
+        return custom(secretBase64, ISSUER, subject, role, Instant.now(), null);
     }
 
-    private static String sign(String secretBase64, String subject, String role, Instant issuedAt, Instant expiresAt)
-            throws JOSEException {
-        return serialize(secretBase64, new JWTClaimsSet.Builder()
-                .issuer(ISSUER).subject(subject).claim("role", role)
-                .issueTime(Date.from(issuedAt)).expirationTime(Date.from(expiresAt)).build());
-    }
-
-    private static String serialize(String secretBase64, JWTClaimsSet claims) throws JOSEException {
-        SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims);
+    // 필요한 claim만 골라 담아서 HS256으로 서명한다 (null이면 그 claim은 넣지 않는다)
+    static String custom(String secretBase64, String issuer, String subject, String role,
+                         Instant issuedAt, Instant expiresAt) throws JOSEException {
+        JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder();
+        if (issuer != null) {
+            claims.issuer(issuer);
+        }
+        if (subject != null) {
+            claims.subject(subject);
+        }
+        if (role != null) {
+            claims.claim("role", role);
+        }
+        if (issuedAt != null) {
+            claims.issueTime(Date.from(issuedAt));
+        }
+        if (expiresAt != null) {
+            claims.expirationTime(Date.from(expiresAt));
+        }
+        SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims.build());
         jwt.sign(new MACSigner(Base64.getDecoder().decode(secretBase64)));
         return jwt.serialize();
     }

@@ -1,12 +1,7 @@
 package com.gongmoju.gateway.security;
 
-import com.nimbusds.jose.JOSEException;
-import com.nimbusds.jose.JWSAlgorithm;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.PlainJWT;
-import com.nimbusds.jwt.SignedJWT;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,17 +37,17 @@ class JwtAuthenticationTest {
 
     @Test
     void 유효한_USER_토큰은_통과한다() throws Exception {
-        call(token(secret, ISSUER, userId, "USER", valid())).expectStatus().isOk();
+        call(JwtTestTokens.valid(secret, userId, "USER")).expectStatus().isOk();
     }
 
     @Test
     void 유효한_ADMIN_토큰도_통과한다() throws Exception {
-        call(token(secret, ISSUER, userId, "ADMIN", valid())).expectStatus().isOk();
+        call(JwtTestTokens.valid(secret, userId, "ADMIN")).expectStatus().isOk();
     }
 
     @Test
     void 다른_키로_서명한_토큰은_401이다() throws Exception {
-        call(token(OTHER_SECRET, ISSUER, userId, "USER", valid())).expectStatus().isUnauthorized();
+        call(JwtTestTokens.valid(OTHER_SECRET, userId, "USER")).expectStatus().isUnauthorized();
     }
 
     @Test
@@ -66,27 +61,30 @@ class JwtAuthenticationTest {
 
     @Test
     void 만료된_토큰은_401이다() throws Exception {
-        Instant issuedAt = Instant.now().minus(2, ChronoUnit.HOURS);
-        call(token(secret, ISSUER, userId, "USER", new Instant[]{issuedAt, issuedAt.plus(1, ChronoUnit.HOURS)}))
-                .expectStatus().isUnauthorized();
+        call(JwtTestTokens.expired(secret, userId, "USER")).expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void 만료_시각이_없는_토큰은_401이다() throws Exception {
+        call(JwtTestTokens.withoutExpiry(secret, userId, "USER")).expectStatus().isUnauthorized();
     }
 
     @Test
     void iss가_다르거나_없는_토큰은_401이다() throws Exception {
-        call(token(secret, "other-service", userId, "USER", valid())).expectStatus().isUnauthorized();
-        call(token(secret, null, userId, "USER", valid())).expectStatus().isUnauthorized();
+        call(withClaims("other-service", userId, "USER")).expectStatus().isUnauthorized();
+        call(withClaims(null, userId, "USER")).expectStatus().isUnauthorized();
     }
 
     @Test
     void role이_없거나_USER_ADMIN이_아닌_토큰은_401이다() throws Exception {
-        call(token(secret, ISSUER, userId, null, valid())).expectStatus().isUnauthorized();
-        call(token(secret, ISSUER, userId, "SUPERUSER", valid())).expectStatus().isUnauthorized();
-        call(token(secret, ISSUER, userId, "user", valid())).expectStatus().isUnauthorized();
+        call(withClaims(ISSUER, userId, null)).expectStatus().isUnauthorized();
+        call(withClaims(ISSUER, userId, "SUPERUSER")).expectStatus().isUnauthorized();
+        call(withClaims(ISSUER, userId, "user")).expectStatus().isUnauthorized();
     }
 
     @Test
     void sub가_없는_토큰은_401이다() throws Exception {
-        call(token(secret, ISSUER, null, "USER", valid())).expectStatus().isUnauthorized();
+        call(withClaims(ISSUER, null, "USER")).expectStatus().isUnauthorized();
     }
 
     @Test
@@ -99,29 +97,9 @@ class JwtAuthenticationTest {
         return webTestClient.get().uri(PATH).header("Authorization", "Bearer " + token).exchange();
     }
 
-    // 지금부터 1시간 동안 유효한 [iat, exp]
-    private static Instant[] valid() {
+    // 지금부터 1시간 동안 유효하고 claim만 골라 담은 토큰 (null이면 그 claim은 넣지 않는다)
+    private String withClaims(String issuer, String subject, String role) throws Exception {
         Instant now = Instant.now();
-        return new Instant[]{now, now.plus(1, ChronoUnit.HOURS)};
-    }
-
-    // 필요한 claim만 골라 담아서 HS256으로 서명한다 (null이면 그 claim은 넣지 않는다)
-    private static String token(String secretBase64, String issuer, String subject, String role, Instant[] times)
-            throws JOSEException {
-        JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
-                .issueTime(Date.from(times[0]))
-                .expirationTime(Date.from(times[1]));
-        if (issuer != null) {
-            claims.issuer(issuer);
-        }
-        if (subject != null) {
-            claims.subject(subject);
-        }
-        if (role != null) {
-            claims.claim("role", role);
-        }
-        SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims.build());
-        jwt.sign(new MACSigner(Base64.getDecoder().decode(secretBase64)));
-        return jwt.serialize();
+        return JwtTestTokens.custom(secret, issuer, subject, role, now, now.plus(1, ChronoUnit.HOURS));
     }
 }

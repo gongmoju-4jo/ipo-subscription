@@ -3,15 +3,13 @@ package com.gongmoju.allocation.domain.allocation;
 import java.util.List;
 
 /**
- * 배정 계산 결과. 청약 미달이 아니면 배정 수량 합 + fractionalShareQuantity = retailQuantity.
+ * 배정 계산 결과. 청약 미달이 아니면 배정 수량 합 = retailQuantity.
  *
- * @param allocations             청약별 배정 결과 (입력 순서 그대로, 0주 포함)
- * @param fractionalShareQuantity 비례 계산에서 버림으로 남은 수량 (단주 재배정 대상, 아직 배정하지 않음)
+ * @param allocations             청약별 배정 결과 (subscriptionId 순, 0주 포함)
  * @param undersubscribedQuantity 청약 미달로 남은 수량 (배정하지 않음)
  */
 public record AllocationCalculation(
         List<SubscriptionAllocation> allocations,
-        long fractionalShareQuantity,
         long undersubscribedQuantity
 ) {
 

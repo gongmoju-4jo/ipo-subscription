@@ -61,4 +61,25 @@ public class Outbox {
 
     @Column(nullable = false)
     private int retryCount;
+
+    // payload에는 도메인 필드만 담는다. 공통 필드(eventId = outbox_id, eventType, occurredAt = created_at)는 발행기가 붙인다
+    // outbox_id가 저장할 때 정해져서, 저장 전에 만드는 payload에는 eventId를 넣을 수 없기 때문
+    public static Outbox of(String aggregateType, UUID aggregateId, String topic, String messageKey, String payload) {
+        Outbox outbox = new Outbox();
+        outbox.aggregateType = aggregateType;
+        outbox.aggregateId = aggregateId;
+        outbox.eventType = topic;
+        outbox.topic = topic;
+        outbox.messageKey = messageKey;
+        outbox.payload = payload;
+        return outbox;
+    }
+
+    public void markPublished(Instant publishedAt) {
+        this.publishedAt = publishedAt;
+    }
+
+    public void increaseRetryCount() {
+        this.retryCount++;
+    }
 }

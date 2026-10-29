@@ -184,7 +184,20 @@ class IpoListApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.message").value("페이지 요청 값이 올바르지 않습니다."))
                 .andExpect(jsonPath("$.error.details[0].field").value("page"))
-                .andExpect(jsonPath("$.error.details[0].reason").value("페이지 번호는 0 이상이어야 합니다."));
+                .andExpect(jsonPath("$.error.details[0].reason").value("페이지 번호는 0 이상 107374182 이하여야 합니다."));
+    }
+
+    @Test
+    void page가_offset_int_범위를_넘으면_400이고_경계값은_허용한다() throws Exception {
+        // size 100이면 page 상한은 Integer.MAX_VALUE / 100 = 21474836
+        mockMvc.perform(get(IPOS).param("page", "21474837").param("size", "100"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.error.details[0].field").value("page"))
+                .andExpect(jsonPath("$.error.details[0].reason").value("페이지 번호는 0 이상 21474836 이하여야 합니다."));
+        mockMvc.perform(get(IPOS).param("page", "21474836").param("size", "100"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items").isEmpty());
     }
 
     @Test

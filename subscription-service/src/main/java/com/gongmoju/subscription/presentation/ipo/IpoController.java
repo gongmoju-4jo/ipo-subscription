@@ -42,7 +42,7 @@ public class IpoController {
             @ParameterObject Pageable pageable,
             @Parameter(hidden = true) @RequestParam(required = false) Integer page,
             @Parameter(hidden = true) @RequestParam(required = false) Integer size) {
-        validatePaging(page, size);
+        validatePaging(page, size, pageable);
         return ApiResponse.success(
                 PageResponse.from(ipoService.list(pageable), IpoSummaryResponse::from),
                 "공모주 목록을 조회했습니다.");
@@ -57,9 +57,11 @@ public class IpoController {
 
     // 공통 Pageable 해석은 범위를 벗어난 값을 조용히 기본값/최대값으로 바꾼다. API 명세 v1.1은 400이므로 원래 요청 값을 여기서 직접 검증한다
     // (숫자가 아닌 값은 Integer 변환에서 먼저 400이 된다). message는 요약, details의 reason은 필드별 사유 (API 명세 3.3 실패 예시)
-    private void validatePaging(Integer page, Integer size) {
-        if (page != null && page < 0) {
-            throw pagingError("page", "페이지 번호는 0 이상이어야 합니다.");
+    // offset(page x size)이 int 범위를 넘으면 JPA가 예외를 던져 500이 되므로 page 상한을 size로 계산한다
+    private void validatePaging(Integer page, Integer size, Pageable pageable) {
+        int maxPage = Integer.MAX_VALUE / pageable.getPageSize();
+        if (page != null && (page < 0 || page > maxPage)) {
+            throw pagingError("page", "페이지 번호는 0 이상 " + maxPage + " 이하여야 합니다.");
         }
         if (size != null && (size < 1 || size > MAX_PAGE_SIZE)) {
             throw pagingError("size", "페이지 크기는 1 이상 " + MAX_PAGE_SIZE + " 이하여야 합니다.");

@@ -58,4 +58,17 @@ public class Margin extends BaseEntity {
     private MarginStatus status = MarginStatus.PENDING;
 
     private Instant settledAt;
+
+    // MARGIN_PENDING: 청약 1건의 증거금 인출 기록. 잔고 이동(account.reserveMargin)과 원장은 호출한 쪽이 같은 트랜잭션에서 처리한다
+    public static Margin withdraw(Account account, UUID subscriptionId, UUID ipoId, long amount) {
+        if (amount <= 0) {
+            throw new IllegalArgumentException("증거금은 1 이상이어야 합니다. amount=" + amount);
+        }
+        Margin margin = new Margin();
+        margin.account = account;
+        margin.subscriptionId = subscriptionId;
+        margin.ipoId = ipoId;
+        margin.amount = amount;
+        return margin;
+    }
 }

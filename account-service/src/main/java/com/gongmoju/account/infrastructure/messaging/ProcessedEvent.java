@@ -43,4 +43,10 @@ public class ProcessedEvent {
     @CreatedDate
     @Column(nullable = false, updatable = false)
     private Instant processedAt;
+
+    public ProcessedEvent(UUID eventId, String consumerName, String topic) {
+        this.eventId = eventId;
+        this.consumerName = consumerName;
+        this.topic = topic;
+    }
 }

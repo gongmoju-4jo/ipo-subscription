@@ -23,7 +23,7 @@
 ```bash
 git clone {레포 주소}
 cd ipo-subscription
-cp .env.example .env    # .env의 DB_PASSWORD, ACCOUNT_DB_PASSWORD, SUBSCRIPTION_DB_PASSWORD, ALLOCATION_DB_PASSWORD에 직접 정한 값을 넣는다
+cp .env.example .env    # .env의 DB_PASSWORD, ACCOUNT_DB_PASSWORD, SUBSCRIPTION_DB_PASSWORD, ALLOCATION_DB_PASSWORD에 직접 정한 값을, JWT_SECRET에 팀 공용 키를 넣는다 (아래 "JWT 키")
 docker-compose up -d postgres kafka kafka-init kafka-ui
 ```
 
@@ -85,16 +85,20 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 새 외부 경로 → `api-gateway/.../application.yml`에 추가
 - `/internal/**`은 라우팅 X (Feign 전용, 외부 접근 불가)
 
-### 📌 게이트웨이 구현 시 확인
+### 📌 게이트웨이 인증
 
-현재: 라우트 + 통합 Swagger만. 인증 필터, 공통 오류 응답 없음
+현재: 라우트 + 통합 Swagger + **JWT 인증 필터** (토큰 검증, 사용자 헤더 설정, 공개/관리자 경로, 401·403 공통 응답)
 
+- 📌 **Gateway(8080)를 거치는 요청은 토큰이 필요**하다. 공개 경로만 예외: `POST /api/v1/users`, `POST /api/v1/auth/login`, Swagger(`GET /swagger-ui/**`, `/v3/api-docs/**`, `/*-service/v3/api-docs`). 공개 경로는 메서드와 경로가 정확히 맞아야 하고(끝 슬래시가 붙으면 공개가 아님), 토큰을 읽지 않는다
+- 📌 JWT 검증: HS256 서명, 만료, `iss`=**`account-service`**(문자열 비교), `sub`, `role`. `exp`가 없는 토큰은 거절. 실패하면 401 (만료는 `TOKEN_EXPIRED`, 그 외는 `UNAUTHORIZED`)
+- 📌 역할: **USER, ADMIN** (common `UserRole`과 같은 값). `/api/v1/admin/**`은 ADMIN만, 일반 회원은 403 `FORBIDDEN`
+- 클라이언트가 보낸 `X-User-Id`, `X-User-Role`, `X-Request-Received-At`를 모두 제거한 뒤 Gateway가 다시 설정한다 (서비스, Audit이 이 헤더를 신뢰)
+  - `X-User-Id` = 토큰의 `sub`, `X-User-Role` = 토큰의 `role` (토큰이 없는 공개 경로에는 붙지 않음)
+  - `X-Request-Received-At` = Gateway 도착 시각 (UTC ISO-8601, 밀리초, 모든 요청). 청약 마감 판단 기준
+- Gateway는 `common`을 쓰지 않아 401·403 오류 응답을 직접 공통 형식으로 만든다 (`details`는 없으면 생략)
+- 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
-- 📌 JWT iss: **`account-service`**
-- 📌 역할: **USER, ADMIN** (common `UserRole`과 같은 값). `/api/v1/admin/**`은 ADMIN만
-- 📌 인증 공개 경로에 Swagger 추가: `/swagger-ui/**`, `/v3/api-docs/**`, `/*-service/v3/api-docs` (누락 시 401)
-- 클라이언트가 보낸 `X-User-Id`, `X-User-Role` 제거 → 검증한 토큰 값으로 다시 설정 (서비스, Audit이 이 헤더를 신뢰)
-- 라우트, Swagger 설정은 `GatewayRoutesTest`가 확인 → 라우트 변경 시 테스트도 수정
+- 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
 
 ---
 
@@ -106,7 +110,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 1. `docker-compose up -d postgres kafka kafka-init kafka-ui` (Kafka가 필요 없는 작업이면 `postgres`만). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
 2. `⌘8`/`Alt+8` Services 창 → Eureka 실행 → 나머지 실행
-3. http://localhost:8080/api/v1/unknown → 404면 게이트웨이 정상 (인증 필터 추가 후엔 401)
+3. http://localhost:8080/api/v1/unknown → 401 JSON(`UNAUTHORIZED`)이면 게이트웨이 정상 (토큰이 필요한 경로라서)
 
 > 💡 전부 켤 필요는 없습니다. **Eureka + 내 서비스 + 내 서비스가 호출하는 서비스**만 실행하면 됩니다.
 
@@ -389,7 +393,7 @@ try {
 - **통합 (게이트웨이)**: http://localhost:8080/swagger-ui/index.html → 오른쪽 위 드롭다운에서 서비스 선택
   - fetch error 500 가능: 서비스 Eureka 등록 → 게이트웨이 반영까지 최대 30초
 - 서비스별: `http://localhost:{서비스 포트}/swagger-ui/index.html` (IntelliJ 실행 시만. Docker는 서비스 포트 비공개)
-- 우상단 Authorize에 토큰만 입력 → `Bearer ` 자동 (인증 필터 추가 후)
+- 우상단 Authorize에 토큰만 입력 → `Bearer ` 자동 (통합 Swagger는 로그인으로 받은 `accessToken`이 필요)
 
 > 💡 통합 Swagger의 Try it out 요청은 **게이트웨이를 거쳐** 서비스로 갑니다 (실제 인증 흐름 그대로). 새 서비스를 추가하면 게이트웨이 `application.yml`에 api-docs 라우트와 `springdoc.swagger-ui.urls`를 추가합니다.
 
@@ -451,8 +455,7 @@ Kafka 데이터까지 모두 지우려면 `docker-compose down -v` (토픽은 `k
 | 파일 | 용도 | git |
 | --- | --- | --- |
 | `application.yml` | 포트, DB, Kafka, Eureka | ✅ |
-| `application-secret.yml` | JWT 시크릿 (resources에 직접 생성) | ❌ |
-| `.env` | Docker, 서비스가 함께 읽는 비밀값 (`.env.example` 복사) | ❌ |
+| `.env` | Docker, 서비스가 함께 읽는 비밀값: DB 비밀번호, `JWT_SECRET` (`.env.example` 복사) | ❌ |
 
 > ⚠️ 비밀값은 커밋하지 않습니다. 공유는 팀에서 승인한 비밀 관리 도구로 합니다.
 
@@ -460,14 +463,15 @@ Kafka 데이터까지 모두 지우려면 `docker-compose down -v` (토픽은 `k
 
 account-service(발급)와 api-gateway(검증)가 **같은 키** 사용 → 다르면 모든 요청 401
 
-```yaml
-# account-service, api-gateway 각각 src/main/resources/application-secret.yml
-jwt:
-  secret: 팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
+```bash
+# 루트 .env (두 서비스가 같은 파일을 읽는다. IntelliJ, Docker 모두 해당)
+JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
 ```
 
-- Docker는 `.env`의 `JWT_SECRET` 하나로 두 서비스에 같이 적용
-- 토큰 규격: HS256, `sub` = userId, `role`(USER/ADMIN), `iss` = account-service
+- 형식: **표준 Base64 문자열, 디코딩 후 32바이트 이상**. 비어 있거나 Base64가 아니거나 짧으면 account-service와 api-gateway가 기동할 때 실패한다
+- 새 키 만들기: `openssl rand -base64 33` (PowerShell: `$b = New-Object byte[] 33; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)`)
+- Docker도 `.env`의 `JWT_SECRET` 하나로 두 서비스에 같이 적용
+- 토큰 규격: HS256, `sub` = userId, `role`(USER/ADMIN), `iss` = account-service, `iat`, `exp`(필수, 1시간)
 
 로그인 흐름
 
@@ -506,6 +510,12 @@ jwt:
 
 - **로그인은 되는데 다른 요청이 전부 401 `UNAUTHORIZED`**
   - account-service와 gateway의 JWT 키가 같은지 확인
+
+- **account-service 또는 api-gateway가 기동할 때 `JWT_SECRET` 오류**
+  - `.env`의 `JWT_SECRET`이 비어 있거나, Base64가 아니거나, 디코딩 후 32바이트 미만 → [JWT 키](#-jwt-키)대로 값을 채움
+
+- **Gateway(8080)로 호출하면 `401`, 서비스 포트로 직접 호출하면 정상**
+  - 정상. Gateway는 `Authorization: Bearer {accessToken}`이 필요 (공개 경로 제외). 만료는 `TOKEN_EXPIRED`이니 다시 로그인
 
 - **Gateway 500/503: `Unable to find instance`**
   - 서비스 시작 직후 → Eureka 등록까지 약 30초 후 재시도

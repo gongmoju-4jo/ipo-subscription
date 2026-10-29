@@ -146,6 +146,17 @@ class AllocationCalculatorTest {
                 .isInstanceOf(ArithmeticException.class);
     }
 
+    // 비례 계산의 중간 곱이 long 범위를 넘어도 결과가 long에 들어가면 계산한다
+    @Test
+    void calculatesProportionalWhenIntermediateProductOverflowsLong() {
+        // 비례 물량 40억 x 비례 기준 30억 = 1.2 x 10^19 > Long.MAX_VALUE. 공모가 1원은 배정 대금이 넘치지 않게
+        AllocationCalculation result = calculator.calculate(
+                1, 4_000_000_000L, 0, 1, subscriptions(3_000_000_000L, 3_000_000_000L));
+
+        assertQuantities(result, new long[]{0, 0}, new long[]{2_000_000_000L, 2_000_000_000L});
+        assertThat(result.fractionalShareQuantity()).isZero();
+    }
+
     // 어떤 입력이든 청약 수량을 넘지 않고 물량을 남김없이 넘치지 않게 나눈다
     @Test
     void keepsInvariantsForRandomInputs() {

@@ -2,6 +2,7 @@ package com.gongmoju.allocation.domain.allocation;
 
 import com.gongmoju.allocation.domain.allocation.AllocationCalculation.SubscriptionAllocation;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -49,9 +50,13 @@ public class AllocationCalculator {
         for (int i = 0; i < subscriptions.size(); i++) {
             ConfirmedSubscription subscription = subscriptions.get(i);
             long proportionalBase = subscription.requestedQuantity() - equalAllocated[i];
+            // 결과는 proportionalQuantity 이하라 long에 들어가지만 중간 곱은 long을 넘을 수 있어 BigInteger로 계산
             long proportionalAllocated = undersubscribed
                     ? proportionalBase
-                    : Math.multiplyExact(proportionalQuantity, proportionalBase) / proportionalBaseTotal;
+                    : BigInteger.valueOf(proportionalQuantity)
+                            .multiply(BigInteger.valueOf(proportionalBase))
+                            .divide(BigInteger.valueOf(proportionalBaseTotal))
+                            .longValueExact();
             proportionalTotal += proportionalAllocated;
 
             long allocatedQuantity = equalAllocated[i] + proportionalAllocated;

@@ -59,8 +59,16 @@ public class DepositService {
             return replay(existing.get(), accountId, amount);
         }
 
-        // 입금: 예수금 잔고 증가
-        account.deposit(amount);
+        // 입금: 예수금 잔고 증가. 입금 후 예수금이 long 범위(약 922경 원)를 넘으면 500이 아니라 400으로 거절한다
+        // 실제 돈이라면 닿을 수 없는 값이지만, 가상 입금은 사용자가 금액을 직접 정하므로 서버 오류로 새지 않게 막는다
+        // (1회 상한이 정해지지 않아 @Max를 두지 않았고, 잔고를 알아야 알 수 있어서 요청 검증 다음 단계인 여기서 막는다)
+        try {
+            account.deposit(amount);
+        } catch (ArithmeticException e) {
+            throw new BusinessException(
+                    CommonErrorCode.VALIDATION_ERROR, "입금 후 예수금이 허용 범위를 넘습니다.", "amount"
+            );
+        }
         // 변경된 잔고 기준으로 입금 원장 생성 후 저장
         LedgerEntry entry = ledgerEntryRepository.save(LedgerEntry.deposit(account, amount, requestId));
         // 신규 입금 처리 결과 반환

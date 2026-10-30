@@ -259,6 +259,38 @@ class DepositApiTest {
     }
 
     @Test
+    void 입금_후_예수금이_long_범위를_넘으면_500이_아니라_400이고_잔고와_원장은_그대로다() throws Exception {
+        UUID richAccount = insertAccount(userA, "100000000002", 1_000, 0);
+
+        mockMvc.perform(deposit(userA, richAccount, body(UUID.randomUUID(), Long.MAX_VALUE)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.error.details[0].field").value("amount"));
+
+        assertThat(cashBalance(richAccount)).isEqualTo(1_000);
+        assertThat(ledgerCount()).isZero();
+    }
+
+    @Test
+    void 입금_후_예수금이_정확히_long_최댓값이면_입금되고_1원_더_넣으면_400이다() throws Exception {
+        UUID richAccount = insertAccount(userA, "100000000002", 1_000, 0);
+        UUID requestId = UUID.randomUUID();
+
+        mockMvc.perform(deposit(userA, richAccount, body(requestId, Long.MAX_VALUE - 1_000)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.cashBalance").value(Long.MAX_VALUE));
+        mockMvc.perform(deposit(userA, richAccount, body(UUID.randomUUID(), 1)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+        // 이미 처리한 요청의 재전송은 잔고가 가득 차 있어도 처음 결과를 200으로 돌려준다
+        mockMvc.perform(deposit(userA, richAccount, body(requestId, Long.MAX_VALUE - 1_000)))
+                .andExpect(status().isOk());
+
+        assertThat(cashBalance(richAccount)).isEqualTo(Long.MAX_VALUE);
+        assertThat(ledgerCount()).isEqualTo(1);
+    }
+
+    @Test
     void requestId가_없거나_UUID가_아니면_400으로_requestId를_알려준다() throws Exception {
         mockMvc.perform(deposit(userA, accountId, "{\"amount\":1000}"))
                 .andExpect(status().isBadRequest())

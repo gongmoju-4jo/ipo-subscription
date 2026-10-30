@@ -19,10 +19,13 @@ public final class KstTime {
     /**
      * 초 단위까지만 내려준다. DB에서 읽은 값은 마이크로초라서 그대로 내려주면 같은 값도 응답마다 자릿수가 달라질 수 있다.
      *
-     * @param instant 저장된 시각
-     * @return KST(+09:00) 시각 (초 단위)
+     * @param instant 저장된 시각. 아직 없는 시각(예: 확정 전 청약의 확정 시각)이면 null
+     * @return KST(+09:00) 시각 (초 단위). 입력이 null이면 null
      */
     public static OffsetDateTime of(Instant instant) {
+        if (instant == null) {
+            return null;
+        }
         return instant.truncatedTo(ChronoUnit.SECONDS).atOffset(KST);
     }
 }

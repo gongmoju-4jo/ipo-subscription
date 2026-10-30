@@ -20,6 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -71,7 +72,8 @@ class DepositApiTest {
                 .andExpect(jsonPath("$.data.amount").value(1_000_000))
                 .andExpect(jsonPath("$.data.cashBalance").value(1_000_000))
                 .andExpect(jsonPath("$.data.marginBalance").value(250_000))
-                .andExpect(jsonPath("$.data.createdAt").isNotEmpty());
+                // 응답 시각은 KST(+09:00), 초 단위다 (소수 초가 있으면 재전송 응답과 마지막 자리가 달라질 수 있다)
+                .andExpect(jsonPath("$.data.createdAt").value(matchesPattern("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\+09:00")));
 
         assertThat(cashBalance(accountId)).isEqualTo(1_000_000);
         assertThat(marginBalance(accountId)).isEqualTo(250_000);

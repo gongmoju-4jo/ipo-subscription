@@ -53,7 +53,8 @@ outbox:
     batch-size: 100
     # 이 횟수 이상 연속 실패하면 알림 로그. Consumer 재시도(3회)와 별개이고, 넘어도 발행은 계속 시도한다
     alert-threshold: 5
-    send-timeout: 5s
+    # Producer의 delivery.timeout.ms(10s, API 직접 발행과 같은 Producer를 씀) 이상으로 맞춘다. 발행기가 실패로 처리한 뒤 Producer가 재시도하지 않게 한다
+    send-timeout: 10s
 
 eureka:
   client:

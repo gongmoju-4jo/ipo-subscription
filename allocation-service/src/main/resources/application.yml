@@ -36,6 +36,9 @@ spring:
         enable.idempotence: true
         # Kafka가 죽었을 때 send()가 메타데이터를 기다리며 막히는 시간 (기본 60초). 발행 행마다 막히지 않게 send-timeout과 맞춘다
         max.block.ms: 5000
+        # Producer가 포기하는 시간(delivery.timeout.ms)을 발행기의 send-timeout 이하로 맞춘다. 발행기가 실패로 처리한 뒤에도 Producer가 재시도해서 중복이 쌓이지 않게 한다
+        request.timeout.ms: 3000
+        delivery.timeout.ms: 5000
 
 # Outbox 발행기 (서비스 3개가 같은 키)
 outbox:

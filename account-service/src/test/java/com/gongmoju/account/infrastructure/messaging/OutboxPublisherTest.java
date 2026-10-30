@@ -12,6 +12,7 @@ import org.mockito.stubbing.Answer;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -34,6 +36,7 @@ import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -235,8 +238,8 @@ class OutboxPublisherTest {
     }
 
     @Test
-    @DisplayName("성공한 행이 하나도 없으면 반복하지 않고 실행을 끝낸다")
-    void publishPending_stopsWhenNothingWasPublished() {
+    @DisplayName("실패한 행만 있으면 그 키를 뺀 조회로 한 번 더 조회하고, 보낼 행이 없으면 실행을 끝낸다")
+    void publishPending_queriesAgainWithoutFailedKeysAndEndsWhenNothingLeft() {
         // given
         Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{}");
         givenPending(List.of(outbox));
@@ -248,7 +251,55 @@ class OutboxPublisherTest {
 
         // then
         verify(outboxRepository, times(1)).findByPublishedAtIsNullOrderByCreatedAtAsc(any());
+        verify(outboxRepository, times(1))
+                .findByPublishedAtIsNullAndMessageKeyNotInOrderByCreatedAtAsc(eq(Set.of("key-1")), any());
         verify(kafkaTemplate, times(1)).send(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("실패하는 행이 batchSize만큼 앞을 차지해도, 실패한 키를 빼고 다시 조회해서 뒤의 정상 행을 발행한다")
+    void publishPending_publishesHealthyRowBeyondPageFilledWithFailingRows() {
+        // given
+        List<Outbox> all = new ArrayList<>();
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            all.add(pendingOutbox("margin.reserved", "bad-" + i, "{}"));
+        }
+        Outbox healthy = pendingOutbox("margin.reserved", "good-1", "{}");
+        all.add(healthy);
+        givenPending(all);
+        when(kafkaTemplate.send(anyString(), startsWith("bad-"), anyString())).thenReturn(failedFuture());
+        when(kafkaTemplate.send(anyString(), startsWith("good-"), anyString())).thenReturn(CompletableFuture.completedFuture(null));
+
+        // when
+        publisher.publishPending();
+
+        // then
+        assertThat(healthy.getPublishedAt()).isNotNull();
+        verify(kafkaTemplate, times(1)).send(anyString(), eq("good-1"), anyString());
+    }
+
+    @Test
+    @DisplayName("보낸 행이 하나도 확인되지 않고 시간이 초과되면 Kafka가 응답하지 않는 것으로 보고 다음 반복 없이 실행을 끝낸다")
+    void publishPending_endsRunWhenNothingConfirmedAndAckTimedOut() {
+        // given
+        publisher = newPublisher(Duration.ofMillis(50));
+        List<Outbox> all = new ArrayList<>();
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            all.add(pendingOutbox("margin.reserved", "key-" + i, "{}"));
+        }
+        Outbox beyondPage = pendingOutbox("margin.reserved", "key-beyond", "{}");
+        all.add(beyondPage);
+        givenPending(all);
+        when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenReturn(new CompletableFuture<>());
+
+        // when
+        publisher.publishPending();
+
+        // then
+        verify(kafkaTemplate, times(BATCH_SIZE)).send(anyString(), anyString(), anyString());
+        verify(kafkaTemplate, never()).send(anyString(), eq("key-beyond"), anyString());
+        verify(outboxRepository, never())
+                .findByPublishedAtIsNullAndMessageKeyNotInOrderByCreatedAtAsc(anyCollection(), any());
     }
 
     @Test
@@ -589,7 +640,19 @@ class OutboxPublisherTest {
     // DB처럼 동작하게 한다: 미발행 행만 돌려주고, 완료 표시하면 publishedAt이 채워진다
     private void givenPending(List<Outbox> outboxes) {
         when(outboxRepository.findByPublishedAtIsNullOrderByCreatedAtAsc(any()))
-                .thenAnswer(invocation -> outboxes.stream().filter(outbox -> outbox.getPublishedAt() == null).toList());
+                .thenAnswer(invocation -> {
+                    Pageable page = invocation.getArgument(0);
+                    return outboxes.stream().filter(outbox -> outbox.getPublishedAt() == null)
+                            .limit(page.getPageSize()).toList();
+                });
+        when(outboxRepository.findByPublishedAtIsNullAndMessageKeyNotInOrderByCreatedAtAsc(anyCollection(), any()))
+                .thenAnswer(invocation -> {
+                    Collection<String> excludedKeys = invocation.getArgument(0);
+                    Pageable page = invocation.getArgument(1);
+                    return outboxes.stream().filter(outbox -> outbox.getPublishedAt() == null)
+                            .filter(outbox -> !excludedKeys.contains(outbox.getMessageKey()))
+                            .limit(page.getPageSize()).toList();
+                });
         when(outboxRepository.markPublished(any(), anyCollection())).thenAnswer(markPublishedAnswer(outboxes));
     }
 

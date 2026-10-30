@@ -1,12 +1,11 @@
 package com.gongmoju.subscription.presentation.ipo;
 
-import com.gongmoju.common.exception.BusinessException;
 import com.gongmoju.common.exception.CommonErrorCode;
-import com.gongmoju.common.response.ApiErrorDetail;
 import com.gongmoju.common.response.ApiResponse;
 import com.gongmoju.common.response.PageResponse;
 import com.gongmoju.subscription.application.ipo.IpoService;
 import com.gongmoju.subscription.global.swagger.ApiErrorCodes;
+import com.gongmoju.subscription.presentation.support.PagingValidator;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -19,7 +18,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
 import java.util.UUID;
 
 // 인증(JWT 검증, 401)은 Gateway가 처리한다. 공모주 조회는 회원 ID를 쓰지 않아 X-User-Id를 읽지 않는다
@@ -42,7 +40,7 @@ public class IpoController {
             @ParameterObject Pageable pageable,
             @Parameter(hidden = true) @RequestParam(required = false) Integer page,
             @Parameter(hidden = true) @RequestParam(required = false) Integer size) {
-        validatePaging(page, size, pageable);
+        PagingValidator.validate(page, size, pageable.getPageSize(), MAX_PAGE_SIZE);
         return ApiResponse.success(
                 PageResponse.from(ipoService.list(pageable), IpoSummaryResponse::from),
                 "공모주 목록을 조회했습니다.");
@@ -53,23 +51,5 @@ public class IpoController {
     @GetMapping("/{ipoId}")
     public ApiResponse<IpoResponse> get(@PathVariable UUID ipoId) {
         return ApiResponse.success(IpoResponse.from(ipoService.get(ipoId)), "공모주를 조회했습니다.");
-    }
-
-    // 공통 Pageable 해석은 범위를 벗어난 값을 조용히 기본값/최대값으로 바꾼다. API 명세 v1.1은 400이므로 원래 요청 값을 여기서 직접 검증한다
-    // (숫자가 아닌 값은 Integer 변환에서 먼저 400이 된다). message는 요약, details의 reason은 필드별 사유 (API 명세 3.3 실패 예시)
-    // offset(page x size)이 int 범위를 넘으면 JPA가 예외를 던져 500이 되므로 page 상한을 size로 계산한다
-    private void validatePaging(Integer page, Integer size, Pageable pageable) {
-        int maxPage = Integer.MAX_VALUE / pageable.getPageSize();
-        if (page != null && (page < 0 || page > maxPage)) {
-            throw pagingError("page", "페이지 번호는 0 이상 " + maxPage + " 이하여야 합니다.");
-        }
-        if (size != null && (size < 1 || size > MAX_PAGE_SIZE)) {
-            throw pagingError("size", "페이지 크기는 1 이상 " + MAX_PAGE_SIZE + " 이하여야 합니다.");
-        }
-    }
-
-    private BusinessException pagingError(String field, String reason) {
-        return new BusinessException(CommonErrorCode.VALIDATION_ERROR, "페이지 요청 값이 올바르지 않습니다.",
-                List.of(new ApiErrorDetail(field, reason)));
     }
 }

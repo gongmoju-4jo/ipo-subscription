@@ -3,7 +3,7 @@ package com.gongmoju.account.domain.margin;
 import java.util.Optional;
 import java.util.UUID;
 
-// 증거금 저장소. 구현은 infrastructure/persistence (JPA)
+// 구현은 infrastructure/persistence (JPA)
 public interface MarginRepository {
 
     Margin save(Margin margin);

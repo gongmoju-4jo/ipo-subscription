@@ -46,6 +46,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_subscription_active
     ON subscription (ipo_id, user_id)
     WHERE status NOT IN ('REJECTED', 'CANCELLED');
 
+-- 아웃박스 실패 횟수는 음수가 될 수 없다
+ALTER TABLE outbox
+    DROP CONSTRAINT IF EXISTS ck_outbox_retry_count,
+    ADD CONSTRAINT ck_outbox_retry_count CHECK (retry_count >= 0);
+
 -- 아웃박스 미발행 조회
 CREATE INDEX IF NOT EXISTS ix_outbox_unpublished
     ON outbox (created_at)

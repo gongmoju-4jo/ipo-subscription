@@ -21,8 +21,24 @@ spring:
       hibernate.default_schema: allocation
       # 스키마는 init.sh가 만든다 (같은 이름). 서비스 계정은 DB CREATE 권한이 없어서 이 설정은 동작하지 않아도 된다
       hibernate.hbm2ddl.create_namespaces: true
+    # Hibernate가 테이블을 만든 뒤 schema.sql 실행
+    defer-datasource-initialization: true
+  sql:
+    init:
+      # schema.sql(제약, 부분 인덱스)을 기동할 때마다 실행한다. 여러 번 실행해도 된다
+      mode: always
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      # 이벤트 명세 공통 규칙: acks=all, enable.idempotence=true
+      acks: all
+      properties:
+        enable.idempotence: true
+        # Kafka가 죽었을 때 send()가 메타데이터를 기다리며 막히는 시간 (기본 60초). 발행 행마다 막히지 않게 send-timeout과 맞춘다
+        max.block.ms: 5000
+        # Producer가 포기하는 시간(delivery.timeout.ms)을 발행기의 send-timeout 이하로 맞춘다. 발행기가 실패로 처리한 뒤에도 Producer가 재시도해서 중복이 쌓이지 않게 한다
+        request.timeout.ms: 3000
+        delivery.timeout.ms: 5000
   cloud:
     openfeign:
       client:
@@ -32,6 +48,18 @@ spring:
           subscription-service:
             connect-timeout: 1000
             read-timeout: 5000
+
+# Outbox 발행기 (서비스 3개가 같은 키)
+outbox:
+  publisher:
+    # false면 스케줄 실행을 끈다
+    enabled: true
+    # 이전 실행이 끝난 뒤 다시 실행하기까지 쉬는 시간 (ISO-8601, @Scheduled가 읽는다)
+    interval: PT1S
+    batch-size: 100
+    # 이 횟수 이상 연속 실패하면 알림 로그. Consumer 재시도(3회)와 별개이고, 넘어도 발행은 계속 시도한다
+    alert-threshold: 5
+    send-timeout: 5s
 
 # 청약 서비스 호출 Circuit Breaker (SubscriptionClientAdapter가 페이지 호출마다 감싼다)
 # 호출이 공모주당 몇 번뿐이라 판단 범위, 최소 호출 수를 기본값(100)보다 작게 둔다. 기본값이면 Circuit Breaker가 열리지 않는다

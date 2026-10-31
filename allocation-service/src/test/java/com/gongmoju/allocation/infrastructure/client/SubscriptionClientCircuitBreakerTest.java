@@ -27,11 +27,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 // application.yml의 Circuit Breaker 설정이 실제로 적용되는지 확인한다. 청약 서비스 대신 가짜 Feign 클라이언트를 쓴다
+// schema.sql은 PostgreSQL 문법(부분 인덱스)이라 H2에서는 실행하지 않는다
 @SpringBootTest(properties = {
         "eureka.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:subscription-client-cb;MODE=PostgreSQL",
         "spring.datasource.username=sa",
-        "spring.datasource.password="
+        "spring.datasource.password=",
+        "spring.sql.init.mode=never"
 })
 class SubscriptionClientCircuitBreakerTest {
 

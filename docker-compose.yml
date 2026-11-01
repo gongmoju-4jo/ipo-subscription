@@ -97,7 +97,7 @@ services:
 
   # ===== 서비스 컨테이너 =====
   # 실행 전에 jar를 빌드해야 한다: ./gradlew build -x test (Dockerfile이 {모듈}/build/libs/*.jar를 복사한다)
-  # 호스트 포트는 api-gateway(8080)와 eureka-server 대시보드(8761)만 연다. 둘 다 127.0.0.1에만 바인딩한다
+  # 서비스 컨테이너 중 호스트에 여는 포트는 api-gateway(8080)와 eureka-server 대시보드(8761)만이다. 둘 다 127.0.0.1에만 바인딩한다
   # 서비스(8081~8083)는 토큰 없이 X-User-Id 헤더만으로 호출되므로 열지 않는다
   # 앱은 .env 파일을 컨테이너 안에서 읽지 못하므로 필요한 값을 환경변수로 받는다 (값은 docker-compose가 .env에서 읽어 전달한다)
   # 대시보드: http://localhost:8761 (EUREKA_PORT로 변경 가능. Windows 예약 포트에 걸리면 .env에서 바꾼다)
@@ -149,6 +149,8 @@ services:
     container_name: ipo-account-service
     environment:
       DB_HOST: postgres
+      # postgres가 만드는 DB 이름과 같아야 한다 (.env의 DB_NAME을 바꿨을 때도 맞도록 같은 값을 전달한다)
+      DB_NAME: ${DB_NAME:-ipo}
       # 자기 계정의 비밀번호만 전달한다 (관리자 DB_PASSWORD는 전달하지 않는다)
       ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
@@ -178,6 +180,7 @@ services:
     container_name: ipo-subscription-service
     environment:
       DB_HOST: postgres
+      DB_NAME: ${DB_NAME:-ipo}
       SUBSCRIPTION_DB_PASSWORD: ${SUBSCRIPTION_DB_PASSWORD:-}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       EUREKA_URL: http://eureka-server:8761/eureka/
@@ -205,6 +208,7 @@ services:
     container_name: ipo-allocation-service
     environment:
       DB_HOST: postgres
+      DB_NAME: ${DB_NAME:-ipo}
       ALLOCATION_DB_PASSWORD: ${ALLOCATION_DB_PASSWORD:-}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       EUREKA_URL: http://eureka-server:8761/eureka/

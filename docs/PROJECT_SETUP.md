@@ -122,7 +122,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 ```bash
 ./gradlew build -x test && docker-compose up -d --build   # 실행 (jar를 먼저 빌드해야 한다)
-docker-compose ps                                          # 전부 healthy가 될 때까지 대기 (1~2분)
+docker-compose ps                                          # 서비스 5개가 healthy인지 확인 (기동에 1~2분, 한 번 출력하고 끝나므로 반복해서 확인), kafka-init은 Exited (0)가 정상
 docker-compose logs -f {서비스 이름}                        # 로그
 docker-compose down                                        # 종료
 docker-compose down -v                                     # 종료 + DB, Kafka 데이터 초기화
@@ -130,7 +130,7 @@ docker-compose down -v                                     # 종료 + DB, Kafka 
 
 - 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키, DB 비밀번호(관리자 1개, 서비스별 3개). compose가 `.env`를 읽어 컨테이너에 환경변수로 전달한다 (컨테이너 안에는 `.env` 파일이 없다)
 - ⚠️ 코드 수정 후엔 위 `실행` 명령 그대로 (`./gradlew build` 빠지면 예전 코드로 뜸). 한 서비스만 고쳤다면 `./gradlew build -x test && docker-compose up -d --build {서비스 이름}`
-- 📌 내 PC에 열리는 포트는 `http://localhost:8080`(게이트웨이)과 `http://localhost:8761`(Eureka 대시보드) 둘뿐이다 (둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩). 서비스 포트(8081~8083)는 열지 않는다 → 서비스 포트 직접 접속 ❌
+- 📌 서비스 컨테이너 중 내 PC에 열리는 포트는 `http://localhost:8080`(게이트웨이)과 `http://localhost:8761`(Eureka 대시보드) 둘뿐이다 (둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩. PostgreSQL, Kafka, Kafka-UI는 별도로 열린다). 서비스 포트(8081~8083)는 열지 않는다 → 서비스 포트 직접 접속 ❌
   - 서비스는 토큰 없이 `X-User-Id` 헤더만으로 호출되므로 외부에 열면 안 된다. 서비스별 Swagger도 쓸 수 없고 통합 Swagger(`http://localhost:8080/swagger-ui/index.html`)를 쓴다
   - Eureka 등록 확인은 IntelliJ 때와 같이 `http://localhost:8761` 화면에서 한다
   - Eureka 포트가 이미 사용 중이거나 Windows 예약 포트라 기동되지 않으면 `.env`에서 `EUREKA_PORT`(기본 8761)를 바꾼다

@@ -29,7 +29,6 @@ module.exports = async ({ github, context }) => {
     `| 머지 | ${view.merge} |`,
     '',
     `- 커밋 \`${sha}\` · [실행 로그](${runUrl})`,
-    '- 이 표시는 안내용입니다. "CI 통과 필수" 규칙을 적용하기 전에는 ❌여도 머지 버튼이 눌립니다.',
     END,
   ].join('\n');
 

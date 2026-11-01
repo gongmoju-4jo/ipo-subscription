@@ -42,6 +42,13 @@ spring:
         max.block.ms: 5000
         request.timeout.ms: 5000
         delivery.timeout.ms: 10000
+    consumer:
+      group-id: subscription-requested  # 접수 Consumer 이름과 같은 값 (이벤트 명세 3-2)
+      auto-offset-reset: earliest       # 그룹이 처음 생길 때 이미 202를 응답한 메시지를 놓치지 않도록 처음부터 읽음
+      enable-auto-commit: false         # 처리가 끝난 레코드만 커밋함 (리스너 ack-mode: record)
+    listener:
+      ack-mode: record
+      concurrency: 3                    # 파티션 3개(.env의 KAFKA_TOPIC_PARTITIONS 기본값)와 같은 수. 초기값이며 부하 테스트 결과로 조정함
 
 # Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks, 멱등, max.block.ms)은 위 spring.kafka.producer를 함께 쓴다
 outbox:

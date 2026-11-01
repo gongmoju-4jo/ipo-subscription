@@ -86,3 +86,6 @@ done
   fi
 } >> "$OUT/limit.md"
 echo; tail -4 "$OUT/limit.md"; echo "→ $OUT/limit.md"
+# 판정에 실패해 중단했으면 호출한 쪽(스크립트, CI)이 성공으로 오해하지 않도록 0이 아닌 종료 코드로 끝낸다.
+# 한계에 닿았거나 닿지 않은 것은 정상 결과라서 0이다.
+[ -z "$FAILED" ] || exit 1

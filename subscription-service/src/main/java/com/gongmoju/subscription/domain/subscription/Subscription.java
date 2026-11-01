@@ -94,9 +94,14 @@ public class Subscription extends BaseEntity {
     private long version;
 
     // 접수 Consumer의 신규 요청 저장용 `PENDING` 청약 생성. `id`는 API가 `userId`와 `requestId`로 계산한 `subscriptionId`를 사용함
+    // 저장과 함께 증거금 확보 요청을 기록하므로 요청 횟수(`attempts`)는 1, 마지막 요청 시각(`lastRequestedAt`)은 현재 시각으로 설정함
     public static Subscription accept(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                       long requestedQuantity, long marginAmount, Instant receivedAt) {
-        return create(subscriptionId, requestId, ipo, userId, accountId, requestedQuantity, marginAmount, receivedAt);
+        Subscription subscription = create(subscriptionId, requestId, ipo, userId, accountId,
+                requestedQuantity, marginAmount, receivedAt);
+        subscription.attempts = 1;
+        subscription.lastRequestedAt = Instant.now();
+        return subscription;
     }
 
     // 증거금 인출 전에 거절된 청약 생성 (이중청약 등). 보상이 필요 없으며 `REJECTED`일 때만 거절 사유를 저장함

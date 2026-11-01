@@ -33,16 +33,18 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
     @Modifying
     @Query(value = """
             INSERT INTO subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,
-                                      margin_amount, status, reject_reason, attempts, received_at, version,
-                                      created_at, created_by, updated_at, updated_by)
+                                      margin_amount, status, reject_reason, attempts, last_requested_at, received_at,
+                                      version, created_at, created_by, updated_at, updated_by)
             VALUES (:id, :requestId, :ipoId, :userId, :accountId, :requestedQuantity,
-                    :marginAmount, :status, CAST(:rejectReason AS VARCHAR), 0, :receivedAt, 0,
+                    :marginAmount, :status, CAST(:rejectReason AS VARCHAR), :attempts,
+                    CAST(:lastRequestedAt AS TIMESTAMPTZ), :receivedAt, 0,
                     :now, :auditor, :now, :auditor)
             ON CONFLICT (request_id) DO NOTHING""", nativeQuery = true)
     int insertIfAbsent(@Param("id") UUID id, @Param("requestId") UUID requestId, @Param("ipoId") UUID ipoId,
                        @Param("userId") UUID userId, @Param("accountId") UUID accountId,
                        @Param("requestedQuantity") long requestedQuantity, @Param("marginAmount") long marginAmount,
                        @Param("status") String status, @Param("rejectReason") String rejectReason,
+                       @Param("attempts") int attempts, @Param("lastRequestedAt") Instant lastRequestedAt,
                        @Param("receivedAt") Instant receivedAt, @Param("now") Instant now,
                        @Param("auditor") String auditor);
 }

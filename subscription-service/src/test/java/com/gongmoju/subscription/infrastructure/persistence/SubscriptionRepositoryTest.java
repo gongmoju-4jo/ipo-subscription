@@ -88,7 +88,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    @DisplayName("처음 보는 requestId의 청약은 저장되고 true를 반환하며 PENDING, 시도 횟수 0으로 남는다")
+    @DisplayName("처음 보는 requestId의 청약은 저장되고 true를 반환하며 PENDING, 요청 횟수 1, 마지막 요청 시각과 함께 남는다")
     void insertIfAbsent_savesAndReturnsTrue_whenRequestIdIsNew() {
         // given
         Subscription subscription = pending(UUID.randomUUID(), userId, FIRST_RECEIVED_AT);
@@ -102,7 +102,8 @@ class SubscriptionRepositoryTest {
         assertThat(saved.getId()).isEqualTo(subscription.getId());
         assertThat(saved.getStatus()).isEqualTo(SubscriptionStatus.PENDING);
         assertThat(saved.getRejectReason()).isNull();
-        assertThat(saved.getAttempts()).isZero();
+        assertThat(saved.getAttempts()).isEqualTo(1);
+        assertThat(saved.getLastRequestedAt()).isNotNull();
         assertThat(saved.getMarginAmount()).isEqualTo(1_500_000);
         assertThat(saved.getReceivedAt()).isEqualTo(FIRST_RECEIVED_AT);
         // 검증 5가 트랜잭션 밖에서도 종목 ID를 비교할 수 있어야 함 (공모주는 `LAZY`)
@@ -162,6 +163,9 @@ class SubscriptionRepositoryTest {
         Subscription saved = subscriptionRepository.findByRequestId(rejected.getRequestId()).orElseThrow();
         assertThat(saved.getStatus()).isEqualTo(SubscriptionStatus.REJECTED);
         assertThat(saved.getRejectReason()).isEqualTo(RejectReason.ALREADY_SUBSCRIBED);
+        // 증거금 확보 요청을 보내지 않으므로 요청 횟수 0, 마지막 요청 시각 없음
+        assertThat(saved.getAttempts()).isZero();
+        assertThat(saved.getLastRequestedAt()).isNull();
     }
 
     @Test

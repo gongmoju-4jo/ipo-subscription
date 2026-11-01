@@ -45,7 +45,9 @@ class SubscriptionTest {
         assertThat(subscription.getReceivedAt()).isEqualTo(RECEIVED_AT);
         assertThat(subscription.getStatus()).isEqualTo(SubscriptionStatus.PENDING);
         assertThat(subscription.getRejectReason()).isNull();
-        assertThat(subscription.getAttempts()).isZero();
+        // 저장과 함께 증거금 확보 요청을 기록하므로 요청 횟수 1, 마지막 요청 시각이 있어야 함
+        assertThat(subscription.getAttempts()).isEqualTo(1);
+        assertThat(subscription.getLastRequestedAt()).isNotNull();
     }
 
     @Test
@@ -63,7 +65,9 @@ class SubscriptionTest {
         assertThat(subscription.getId()).isEqualTo(subscriptionId);
         assertThat(subscription.getRequestId()).isEqualTo(requestId);
         assertThat(subscription.getMarginAmount()).isEqualTo(1_500_000);
+        // 증거금 확보 요청을 보내지 않으므로 요청 횟수 0, 마지막 요청 시각 없음
         assertThat(subscription.getAttempts()).isZero();
+        assertThat(subscription.getLastRequestedAt()).isNull();
     }
 
     @ParameterizedTest(name = "수량 {0}")

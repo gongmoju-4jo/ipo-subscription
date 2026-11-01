@@ -43,6 +43,7 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
                 subscription.getIpo().getId(), subscription.getUserId(), subscription.getAccountId(),
                 subscription.getRequestedQuantity(), subscription.getMarginAmount(),
                 subscription.getStatus().name(), rejectReason == null ? null : rejectReason.name(),
+                subscription.getAttempts(), subscription.getLastRequestedAt(),
                 subscription.getReceivedAt(), Instant.now(), auditorAware.getCurrentAuditor().orElseThrow());
         return inserted == 1;
     }

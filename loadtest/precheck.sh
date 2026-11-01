@@ -48,10 +48,21 @@ FAIL=0
   if [ "$RC" -ne 0 ]; then
     echo "❌ Kafka 토픽 목록을 읽지 못했습니다: $TOPICS"; FAIL=1
   else
+    # 오프셋 도구는 일부 파티션을 읽지 못해도 종료 코드 0으로 끝나고 빠진 파티션은 말없이 합계에서 빠진다.
+    # 그래서 토픽의 파티션 수와 읽힌 오프셋 줄 수가 같은지 확인한다.
+    DESC=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --describe 2>&1); RC=$?
+    if [ "$RC" -ne 0 ]; then
+      echo "❌ Kafka 토픽 정보를 읽지 못했습니다: $DESC"; FAIL=1
+    fi
     for t in $(printf '%s\n' "$TOPICS" | grep '\.DLT$' | sort); do
       OFFS=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:29092 --topic "$t" 2>&1); RC=$?
       if [ "$RC" -ne 0 ]; then
         echo "❌ $t 오프셋을 읽지 못했습니다: $OFFS"; FAIL=1; continue
+      fi
+      EXPECT=$(printf '%s\n' "$DESC" | grep -F -- "Topic: $t"$'\t' | sed -n 's/.*PartitionCount: \([0-9][0-9]*\).*/\1/p' | head -1)
+      GOT=$(printf '%s\n' "$OFFS" | grep -cE '^[^:]+:[0-9]+:[0-9]+$')
+      if [ -z "$EXPECT" ] || [ "$GOT" != "$EXPECT" ]; then
+        echo "❌ $t 오프셋이 일부만 조회됐습니다 (파티션 ${EXPECT:-?}개 중 ${GOT}개)"; FAIL=1; continue
       fi
       echo "$t $(printf '%s\n' "$OFFS" | awk -F: '{s+=$3} END {print s+0}')"
     done
@@ -63,6 +74,11 @@ FAIL=0
     echo "❌ Consumer 그룹 lag을 읽지 못했습니다: $LAGS"; FAIL=1
   else
     printf '%s\n' "$LAGS" | grep -v '^$' || true
+    # 이 도구는 조회 중 오류가 나도(그룹 없음, 브로커 접속 불가 등) Error: 를 출력하고 종료 코드 0으로 끝난다.
+    # 그룹이 하나도 없어서 출력이 비는 것은 정상이다.
+    if printf '%s\n' "$LAGS" | grep -q '^Error:'; then
+      echo "❌ Consumer 그룹 lag 조회 중 오류가 발생했습니다 (위 출력 참고)"; FAIL=1
+    fi
   fi
 
   echo; [ "$FAIL" = 0 ] && echo "✅ 점검 통과" || echo "❌ 점검 실패: 위 항목을 해결한 뒤 측정하세요"

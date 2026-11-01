@@ -37,7 +37,7 @@ OUT="$DIR/results/$BASE"; mkdir -p "$OUT"
 } > "$OUT/limit.md"
 echo "단계별 결과 (한계 신호: 평균 500ms 초과, 실패율 1% 이상, 밀린 반복 1건 이상)"
 
-LIMIT=""; LAST_OK=""
+LIMIT=""; LAST_OK=""; FAILED=""
 for RATE in $RATES; do
   RUN="$BASE-r$RATE"
   IPO=$("$DIR/seed/new_ipo.sh" --name "$RUN") || { echo "공모주 생성 실패" >&2; exit 1; }
@@ -59,8 +59,12 @@ print(f"| {rate} | {thr:.1f} | {avg:.1f} | {p95:.1f} | {fail:.2f} | {drop} | {ve
 PY
 )
   STATUS="${ROW##*|}"; LINE="${ROW%|*}"
+  # python이 없거나 summary.json에 필요한 지표가 없어서 판정이 나오지 않으면 "여유"로 넘어가지 않고 실패로 처리한다
+  case "$STATUS" in OK|LIMIT|FAIL) ;; *) STATUS=FAIL; LINE="| $RATE | - | - | - | - | - | 판정 실패 | \`$RUN\` |" ;; esac
   echo "$LINE" >> "$OUT/limit.md"; echo "$LINE"
-  if [ "$STATUS" = LIMIT ] || [ "$STATUS" = FAIL ]; then
+  if [ "$STATUS" = FAIL ]; then
+    FAILED="$RATE"; break
+  elif [ "$STATUS" = LIMIT ]; then
     [ -z "$LIMIT" ] && LIMIT="$RATE"
     [ "$ALL" = 1 ] || break
   else
@@ -70,7 +74,9 @@ done
 
 {
   echo
-  if [ -n "$LIMIT" ]; then
+  if [ -n "$FAILED" ]; then
+    echo "**${FAILED}건/초 단계의 판정에 실패해 중단했습니다.** \`k6-r${FAILED}.out\`과 해당 단계의 \`summary.json\`을 확인하세요. 이 결과로 S1 요청 속도를 정하지 마세요."
+  elif [ -n "$LIMIT" ]; then
     LO=$(( (LIMIT * 5 + 9) / 10 )); HI=$(( LIMIT * 7 / 10 ))
     echo "**한계에 닿은 첫 속도: ${LIMIT}건/초** (직전에 여유 있던 속도: ${LAST_OK:-없음})"
     echo

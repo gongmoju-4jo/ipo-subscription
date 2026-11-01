@@ -27,7 +27,8 @@ sys.path.insert(0, os.path.join(HERE, "verify"))
 from check_requests import classify, parse  # noqa: E402
 
 JOBS = ["api-gateway", "subscription-service", "account-service", "allocation-service", "eureka-server"]
-TIME_RE = re.compile(r'time="(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)Z"')
+# 컨테이너의 k6는 UTC(Z)로, 설치형 k6는 로컬 시간대(+09:00 같은 오프셋)로 기록할 수 있다
+TIME_RE = re.compile(r'time="(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(Z|[+-]\d\d:\d\d)"')
 HTTP = 'uri!~"/actuator.*"'
 KST = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -90,7 +91,8 @@ def read_times_and_rows(log):
             rows.append(d)
             m = TIME_RE.search(line)
             if m:
-                times.append(datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp())
+                tz = "+00:00" if m.group(2) == "Z" else m.group(2)
+                times.append(datetime.datetime.fromisoformat(m.group(1) + tz).timestamp())
     return times, rows
 
 

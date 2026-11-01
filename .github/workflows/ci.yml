@@ -1,0 +1,53 @@
+name: CI
+
+# PR을 develop에 올릴 때와 develop에 머지될 때 빌드, 테스트를 실행한다.
+# (develop → main 대상은 첫 릴리스 때 branches에 main을 추가한다)
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+# 같은 PR에 새로 push하면 이전 실행은 취소한다
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: JDK 21 설정
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Gradle 캐시 (의존성, wrapper)
+      - name: Gradle 설정
+        uses: gradle/actions/setup-gradle@v4
+
+      # build는 test를 포함한다. .env와 비밀 환경변수 없이 통과해야 한다.
+      # Testcontainers 테스트는 러너에 설치된 Docker를 쓴다.
+      - name: 빌드, 테스트
+        run: ./gradlew build --continue
+
+      # 실패했을 때만 테스트 리포트를 내려받을 수 있게 올린다
+      - name: 실패 시 테스트 리포트 업로드
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 7

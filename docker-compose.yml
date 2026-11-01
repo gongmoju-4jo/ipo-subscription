@@ -1,5 +1,7 @@
-# 최소 구성: PostgreSQL만. Kafka, 서비스 컨테이너, 모니터링은 이어서 추가한다
-# 실행: docker-compose up -d postgres
+# 인프라(PostgreSQL, Kafka)와 서비스 컨테이너 5개. 모니터링은 이어서 추가한다
+# 개발할 때: 인프라만 띄우고 서비스는 IntelliJ로 실행한다 (docker-compose up -d postgres kafka kafka-init kafka-ui)
+# 전체 확인할 때: jar를 먼저 빌드하고 전부 띄운다 (./gradlew build -x test && docker-compose up -d --build)
+# 같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다 (포트 충돌, Eureka 중복 등록)
 services:
   postgres:
     image: postgres:16
@@ -92,6 +94,131 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+
+  # ===== 서비스 컨테이너 =====
+  # 실행 전에 jar를 빌드해야 한다: ./gradlew build -x test (Dockerfile이 {모듈}/build/libs/*.jar를 복사한다)
+  # 호스트 포트는 api-gateway(8080)만 연다. 서비스(8081~8083)는 토큰 없이 X-User-Id 헤더만으로 호출되므로 열지 않는다
+  # 앱은 .env 파일을 컨테이너 안에서 읽지 못하므로 필요한 값을 환경변수로 받는다 (값은 docker-compose가 .env에서 읽어 전달한다)
+  eureka-server:
+    build:
+      context: .
+      args:
+        MODULE: eureka-server
+    container_name: ipo-eureka-server
+    environment:
+      EUREKA_HOSTNAME: eureka-server
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8761/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  # 호스트 포트는 127.0.0.1에만 연다. 관리 포트(18090)는 헬스체크 전용이라 열지 않는다
+  api-gateway:
+    build:
+      context: .
+      args:
+        MODULE: api-gateway
+    container_name: ipo-api-gateway
+    environment:
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      # account-service와 같은 값이어야 한다. 비어 있거나 짧으면 기동할 때 실패한다
+      JWT_SECRET: ${JWT_SECRET:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:18090/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  account-service:
+    build:
+      context: .
+      args:
+        MODULE: account-service
+    container_name: ipo-account-service
+    environment:
+      DB_HOST: postgres
+      # 자기 계정의 비밀번호만 전달한다 (관리자 DB_PASSWORD는 전달하지 않는다)
+      ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      EUREKA_URL: http://eureka-server:8761/eureka/
+      JWT_SECRET: ${JWT_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  subscription-service:
+    build:
+      context: .
+      args:
+        MODULE: subscription-service
+    container_name: ipo-subscription-service
+    environment:
+      DB_HOST: postgres
+      SUBSCRIPTION_DB_PASSWORD: ${SUBSCRIPTION_DB_PASSWORD:-}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      EUREKA_URL: http://eureka-server:8761/eureka/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  allocation-service:
+    build:
+      context: .
+      args:
+        MODULE: allocation-service
+    container_name: ipo-allocation-service
+    environment:
+      DB_HOST: postgres
+      ALLOCATION_DB_PASSWORD: ${ALLOCATION_DB_PASSWORD:-}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      EUREKA_URL: http://eureka-server:8761/eureka/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8083/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
 
 volumes:
   postgres-data:

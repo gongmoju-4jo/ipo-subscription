@@ -140,6 +140,25 @@ docker-compose down -v                                     # 종료 + DB, Kafka 
 - 📌 **Docker 메모리 4GB 이상 권장** (Kafka 포함 시 2GB 부족)
   - Colima: `colima stop && colima start --cpus 4 --memory 6` / Docker Desktop: Settings → Resources → Memory
 
+#### 필요한 서비스만 띄우기
+
+> 전부 띄울 필요는 없습니다. 이름을 적은 서비스와 그 서비스가 의존하는 컨테이너만 올라옵니다.
+
+```bash
+./gradlew build -x test && docker-compose up -d --build api-gateway account-service   # 필요한 서비스만 실행
+docker-compose stop {서비스 이름}                                                      # 한 서비스만 중지
+docker-compose restart {서비스 이름}                                                   # 한 서비스만 재시작 (코드를 고쳤다면 위의 `--build` 명령)
+```
+
+| 서비스 | 같이 올라오는 것 |
+| --- | --- |
+| `eureka-server` | 없음 |
+| `api-gateway` | `eureka-server` |
+| `account-service`, `subscription-service`, `allocation-service` | `postgres`, `kafka`, `kafka-init`(토픽을 만들고 종료), `eureka-server` |
+
+- 서비스를 Gateway(`http://localhost:8080`)로 호출하려면 `api-gateway`와 호출할 서비스를 함께 적는다
+- `kafka-ui`는 의존 대상이 아니라 따로 적어야 올라온다
+
 #### IntelliJ 실행과 Docker 실행의 차이
 
 | | IntelliJ (개발) | Docker (확인) |

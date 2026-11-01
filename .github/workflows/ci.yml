@@ -1,0 +1,100 @@
+name: CI
+
+# PR을 develop에 올릴 때와 develop에 머지될 때 빌드, 테스트를 실행한다.
+# (develop → main 대상은 첫 릴리스 때 branches에 main을 추가한다)
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+# 같은 PR에 새로 push하면 이전 실행은 취소한다
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # PR 본문의 CI 결과 구간을 "진행 중"으로 바꾼다 (PR일 때만, 같은 저장소 브랜치만)
+  report-start:
+    name: report-start
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: PR 본문에 진행 중 표시
+        uses: actions/github-script@v7
+        env:
+          CI_STATE: pending
+        with:
+          script: |
+            await require('./.github/scripts/update-pr-status.js')({ github, context })
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # 빌드 스크립트를 실행하는 job이라 git 자격 증명을 남기지 않는다
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: JDK 21 설정
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Gradle 캐시 (의존성, wrapper)
+      - name: Gradle 설정
+        uses: gradle/actions/setup-gradle@v4
+
+      # build는 test를 포함한다. .env와 비밀 환경변수 없이 통과해야 한다.
+      # Testcontainers 테스트는 러너에 설치된 Docker를 쓴다.
+      - name: 빌드, 테스트
+        run: ./gradlew build --continue
+
+      # 실패했을 때만 테스트 리포트를 내려받을 수 있게 올린다
+      - name: 실패 시 테스트 리포트 업로드
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 7
+
+  # build 결과(통과, 실패)를 PR 본문에 표시한다. build가 실패해도 실행하고,
+  # 새 push로 취소된 실행은 보고하지 않는다 (새 실행의 진행 중 표시를 덮어쓰지 않도록)
+  report:
+    name: report
+    needs: [build, report-start]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: PR 본문에 CI 결과 표시
+        uses: actions/github-script@v7
+        env:
+          CI_STATE: ${{ needs.build.result }}
+        with:
+          script: |
+            await require('./.github/scripts/update-pr-status.js')({ github, context })

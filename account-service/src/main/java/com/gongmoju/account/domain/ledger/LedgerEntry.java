@@ -114,7 +114,7 @@ public class LedgerEntry {
         return new LedgerEntry(account, LedgerEntryType.DEPOSIT, amount, null, null, requestId);
     }
 
-    // 증거금 확보, 정산, 환불, 해제 거래의 원장 기록 생성
+    // 증거금 인출, 정산, 환불, 반환 거래의 원장 기록 생성
     // Margin 객체를 연결하고, 해당 Margin의 subscriptionId를 원장에 기록
     public static LedgerEntry ofMargin(Account account, LedgerEntryType type, long amount, Margin margin) {
         if (type == LedgerEntryType.DEPOSIT) {

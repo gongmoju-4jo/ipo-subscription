@@ -92,6 +92,7 @@ public class Account extends BaseEntity {
      *
      * @param amount 인출할 증거금 금액 (원)
      */
+    // todo: 테스트: marignbalance가 long.max_value에 가까울때 오버플로가 발생히도 두 잔액이 변경되지 않는지 확인
     public void reserveMargin(long amount) {
         requirePositive(amount);
         if (cashBalance < amount) {
@@ -103,7 +104,7 @@ public class Account extends BaseEntity {
     }
 
     // MARGIN_VOID: 증거금 인출 무효화; 청약증거금 전액 → 예수금 (확정 실패, 취소, 0주 배정)
-    //   정산 완료된 증거금의 해제는 호출 전에 Margin 상태로 검증
+    //   정산 완료된 증거금의 반환은 호출 전에 Margin 상태로 검증
     public void voidMargin(long amount) {
         withdrawMargin(amount);
         cashBalance = Math.addExact(cashBalance, amount);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 회차 시작 전 점검 (부하테스트-상세 3-4). 결과를 results/<run_id>/precheck.txt에 저장한다.
+# 회차 시작 전 점검. 결과를 results/<run_id>/precheck.txt에 저장한다.
 # 사용: ./precheck.sh --run-id <run_id>
 # 확인: Eureka의 서비스 4개 UP, 회원 CSV 토큰 나이(1시간 만료), Outbox 미발행 0건, DLT 토픽 메시지 수(기록), Consumer 그룹 lag
 # 환경변수: PG_CONTAINER(ipo-postgres), KAFKA_CONTAINER(ipo-kafka), EUREKA_URL(http://localhost:8761), USERS_CSV(data/users.csv)

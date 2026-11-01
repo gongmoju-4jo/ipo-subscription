@@ -4,7 +4,8 @@
 # 종료 코드 99는 임계값 위반이다. summary.json의 thresholds는 true가 위반(crossed), false가 통과다.
 # 사용: ./run-k6.sh s0 --ipo <공모주 ID> --run-id <run_id> [--users data/users.csv] [-e KEY=VALUE]...
 # 환경변수: K6_IMAGE(grafana/k6:1.3.0), K6_NETWORK(컨테이너 실행 시 compose 네트워크, 기본 ipo-subscription_default),
-#          BASE_URL(설치형 기본 http://localhost:8080, 컨테이너 기본 http://api-gateway:8080)
+#          BASE_URL(설치형 기본 http://localhost:8080, 컨테이너 기본 http://api-gateway:8080),
+#          K6_CPUS, K6_MEMORY(컨테이너 실행 시 k6 컨테이너의 CPU, 메모리 상한. 예: 1.0, 512m. 서비스와 같은 머신이면 k6도 CPU를 쓴다)
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -34,7 +35,10 @@ else
   HOSTDIR="$(cd "$DIR" && (pwd -W 2>/dev/null || pwd))"
   ENVS=(-e "BASE_URL=${BASE_URL:-http://api-gateway:8080}" -e "IPO_ID=$IPO" -e "RUN_ID=$RUN_ID" -e "USERS_CSV=/loadtest/$USERS")
   for e in ${EXTRA[@]+"${EXTRA[@]}"}; do ENVS+=(-e "$e"); done
-  docker run --rm --network "${K6_NETWORK:-ipo-subscription_default}" -v "$HOSTDIR:/loadtest" "${ENVS[@]}" "$K6_IMAGE" run \
+  LIMITS=()
+  [ -n "${K6_CPUS:-}" ] && LIMITS+=(--cpus "$K6_CPUS")
+  [ -n "${K6_MEMORY:-}" ] && LIMITS+=(--memory "$K6_MEMORY")
+  docker run --rm --network "${K6_NETWORK:-ipo-subscription_default}" -v "$HOSTDIR:/loadtest" ${LIMITS[@]+"${LIMITS[@]}"} "${ENVS[@]}" "$K6_IMAGE" run \
     --summary-export="/loadtest/results/$RUN_ID/summary.json" --console-output="/loadtest/results/$RUN_ID/requests.log" "/loadtest/k6/$SCEN.js"
 fi
 echo "→ $OUT/summary.json, $OUT/requests.log"

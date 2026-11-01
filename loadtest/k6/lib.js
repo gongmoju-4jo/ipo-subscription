@@ -45,7 +45,8 @@ export function uuidFromSeed(seed) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-// 합격, 목표 기준은 측정 전에 정한 값이다 (부하테스트-상세 1장). 측정 후에는 바꾸지 않는다
+// 합격, 목표 기준은 측정 전에 정한 값이고 측정 후에는 바꾸지 않는다.
+//   합격: 200건/초 이상, 평균 500ms 이하, 오류율 1% 미만 / 목표: 400건/초 이상, 평균 250ms 이하, p95 500ms 이하, 오류 0
 const THRESHOLDS = {
   pass: { http_reqs: ['rate>=200'], http_req_duration: ['avg<=500'], http_req_failed: ['rate<0.01'] },
   goal: { http_reqs: ['rate>=400'], http_req_duration: ['avg<=250', 'p(95)<=500'], http_req_failed: ['rate==0'] },

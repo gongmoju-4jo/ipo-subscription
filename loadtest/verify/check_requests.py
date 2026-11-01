@@ -3,7 +3,7 @@
 
 사용: python check_requests.py results/<run_id>/requests.log [--expect-requests 1000]
 
-- 결과 분류 (부하테스트-상세 6-3): 시스템 성공(202) / 마감 거절(422) / 그 밖의 4xx / 시스템 오류(5xx) / 타임아웃, 연결 실패(상태 0)
+- 결과 분류: 시스템 성공(202) / 마감 거절(422) / 그 밖의 4xx / 시스템 오류(5xx) / 타임아웃, 연결 실패(상태 0)
 - 같은 requestId로 여러 번 응답이 온 요청(S3 재전송)은 subscriptionId가 모두 같아야 한다. 다르면 종료 코드 2
 - --expect-requests를 주면 요청 수가 그 값과 같은지도 확인한다
 """

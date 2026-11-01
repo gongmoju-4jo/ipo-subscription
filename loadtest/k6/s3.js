@@ -1,4 +1,4 @@
-// S3: 재전송과 두 번째 계좌가 섞인 시나리오 (상세 계획 8장, 모두 [가정] 값이라 환경변수로 바꿀 수 있다).
+// S3: 재전송과 두 번째 계좌가 섞인 시나리오 (비율은 모두 가정한 값이라 환경변수로 바꿀 수 있다).
 //   정상 (전체 - RESEND - SECOND)건 + 같은 requestId 재전송 RESEND건 + 두 번째 계좌 청약 SECOND건 = 전체 1,000건
 //   재전송: 앞쪽 회원(0번부터)의 원래 요청과 같은 requestId. 응답의 subscriptionId가 원래 요청과 같아야 한다 (verify/check_requests.py로 대조)
 //   두 번째 계좌: SECOND_FROM번 회원부터. 회원 CSV에 accountId2가 있어야 한다 (seed_users.py --second-account-count)

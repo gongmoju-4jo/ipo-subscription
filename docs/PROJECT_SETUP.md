@@ -71,7 +71,7 @@ ipo-subscription/
 | account / subscription / allocation | 8081 / 8082 / 8083 |
 | PostgreSQL | 5432 |
 | Kafka / Kafka-UI | 29092 / 8989 |
-| gateway 관리 포트 | 18090 (헬스체크 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
+| gateway 관리 포트 | 18090 (헬스체크, 지표 수집 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
 
 ### 게이트웨이 라우팅
 
@@ -97,7 +97,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
   - `X-User-Id` = 토큰의 `sub`, `X-User-Role` = 토큰의 `role` (토큰이 없는 공개 경로에는 붙지 않음)
   - `X-Request-Received-At` = Gateway 도착 시각 (UTC ISO-8601, 밀리초, 모든 요청). 청약 마감 판단 기준
 - Gateway는 `common`을 쓰지 않아 401·403 오류 응답을 직접 공통 형식으로 만든다 (`details`는 없으면 생략)
-- 컨테이너 헬스체크용으로 **관리 포트(18090)의 `/actuator/health`만** 토큰 없이 열려 있다 (`SecurityConfig`의 헬스 체인). 8080의 `/actuator/**`와 관리 포트의 다른 엔드포인트는 계속 토큰이 필요하다 (`HealthEndpointSecurityTest`가 확인)
+- 컨테이너 헬스체크와 Prometheus 수집용으로 **관리 포트(18090)의 `/actuator/health`, `/actuator/prometheus`만** 토큰 없이 열려 있다 (`SecurityConfig`의 관리 체인). 8080의 `/actuator/**`와 관리 포트의 다른 엔드포인트는 계속 토큰이 필요하다 (`ManagementEndpointSecurityTest`가 확인)
 - 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
 - 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정

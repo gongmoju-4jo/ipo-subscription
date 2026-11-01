@@ -28,6 +28,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: PR 본문에 진행 중 표시
         uses: actions/github-script@v7
         env:
@@ -42,8 +44,11 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      # 빌드 스크립트를 실행하는 job이라 git 자격 증명을 남기지 않는다
       - name: 코드 가져오기
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: JDK 21 설정
         uses: actions/setup-java@v4
@@ -71,11 +76,12 @@ jobs:
             **/build/test-results/
           retention-days: 7
 
-  # build 결과(통과, 실패, 취소)를 PR 본문에 표시한다. build가 실패해도 실행한다.
+  # build 결과(통과, 실패)를 PR 본문에 표시한다. build가 실패해도 실행하고,
+  # 새 push로 취소된 실행은 보고하지 않는다 (새 실행의 진행 중 표시를 덮어쓰지 않도록)
   report:
     name: report
     needs: [build, report-start]
-    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -83,6 +89,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: PR 본문에 CI 결과 표시
         uses: actions/github-script@v7
         env:

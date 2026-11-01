@@ -154,7 +154,7 @@ docker-compose down -v                                     # 종료 + DB 초기�
 - 결과 확인: PR 화면 아래 Checks의 `build`
   - 통과: 초록 체크 / 실패: 빨간 ❌ → Details에서 실패한 step의 로그 확인
   - PR 본문 맨 끝 `## CI 결과` 표에도 진행 중, 통과, 실패가 표시된다. 이 구간(`<!-- ci-status:start -->` ~ `<!-- ci-status:end -->`)은 CI가 자동으로 갱신하니 지우거나 고치지 않는다
-- 실패했을 때: 실행 페이지 맨 아래 **Artifacts**의 `test-reports`(7일 보관)를 받아 압축을 풀고 `build/reports/tests/test/index.html`을 열면 로컬과 같은 테스트 리포트가 보인다
+- 실패했을 때: 실행 페이지 맨 아래 **Artifacts**의 `test-reports`(7일 보관)를 받아 압축을 풀고 실패한 모듈의 `{모듈}/build/reports/tests/test/index.html`(예: `account-service/build/reports/tests/test/index.html`)을 열면 로컬과 같은 테스트 리포트가 보인다
 - 로컬에서 먼저 확인: `./gradlew build` (Testcontainers 테스트가 있어 Docker를 켜 둔다)
 - 새로 push하면 같은 PR의 이전 실행은 취소되고 새로 실행된다
 - 포크에서 올린 PR은 본문 표시가 갱신되지 않는다 (빌드, 테스트는 실행됨)

@@ -39,6 +39,9 @@ module.exports = async ({ github, context }) => {
   });
   const body = data.body ?? '';
 
+  // 이 실행의 커밋이 PR의 현재 head가 아니면(그 사이 새로 push됨) 본문을 건드리지 않는다
+  if (data.head.sha !== pr.head.sha) return;
+
   const pattern = new RegExp(`${START}[\\s\\S]*?${END}`);
   const next = pattern.test(body)
     ? body.replace(pattern, () => block)

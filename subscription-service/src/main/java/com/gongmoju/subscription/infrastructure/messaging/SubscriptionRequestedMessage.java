@@ -4,11 +4,12 @@ import com.gongmoju.subscription.domain.subscription.SubscriptionRequested;
 import com.gongmoju.subscription.global.exception.InvalidEventException;
 
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.util.UUID;
+
+import static com.gongmoju.subscription.infrastructure.messaging.MessageSupport.parseTime;
+import static com.gongmoju.subscription.infrastructure.messaging.MessageSupport.require;
 
 /**
  * {@code subscription.requested} 메시지 본문 (이벤트 명세 1장 공통 필드 + 2-1). 공통 필드와 도메인 필드를 한 단계로 펼친다.
@@ -68,22 +69,5 @@ public record SubscriptionRequestedMessage(
         }
         Instant received = parseTime(receivedAt, "receivedAt");
         return new SubscriptionRequested(requestId, subscriptionId, userId, accountId, ipoId, requestedQuantity, received);
-    }
-
-    private static void require(Object value, String field) {
-        if (value == null) {
-            throw new InvalidEventException("필수 필드가 없습니다: " + field);
-        }
-    }
-
-    private static Instant parseTime(String value, String field) {
-        if (value == null || value.isBlank()) {
-            throw new InvalidEventException("필수 필드가 없습니다: " + field);
-        }
-        try {
-            return OffsetDateTime.parse(value).toInstant();
-        } catch (DateTimeParseException e) {
-            throw new InvalidEventException("시각 형식이 올바르지 않습니다: " + field + "=" + value);
-        }
     }
 }

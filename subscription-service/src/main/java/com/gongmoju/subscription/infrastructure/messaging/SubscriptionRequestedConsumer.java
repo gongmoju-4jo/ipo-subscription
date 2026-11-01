@@ -1,6 +1,5 @@
 package com.gongmoju.subscription.infrastructure.messaging;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gongmoju.subscription.application.subscription.AcceptResult;
 import com.gongmoju.subscription.application.subscription.SubscriptionAcceptService;
@@ -46,18 +45,7 @@ class SubscriptionRequestedConsumer {
     }
 
     private SubscriptionRequestedMessage parse(String payload) {
-        if (payload == null || payload.isBlank()) {
-            throw new InvalidEventException("메시지 본문이 비어 있습니다.");
-        }
-        try {
-            SubscriptionRequestedMessage message = objectMapper.readValue(payload, SubscriptionRequestedMessage.class);
-            if (message == null) {
-                throw new InvalidEventException("메시지 본문이 JSON 객체가 아닙니다.");
-            }
-            return message;
-        } catch (JsonProcessingException e) {
-            throw new InvalidEventException("메시지 JSON을 읽을 수 없습니다: " + e.getOriginalMessage(), e);
-        }
+        return MessageSupport.read(objectMapper, payload, SubscriptionRequestedMessage.class);
     }
 
     private boolean isActiveSubscriptionViolation(Throwable error) {

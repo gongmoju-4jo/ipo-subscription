@@ -17,6 +17,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # PR 본문의 CI 결과 구간을 "진행 중"으로 바꾼다 (PR일 때만, 같은 저장소 브랜치만)
+  report-start:
+    name: report-start
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: PR 본문에 진행 중 표시
+        uses: actions/github-script@v7
+        env:
+          CI_STATE: pending
+        with:
+          script: |
+            await require('./.github/scripts/update-pr-status.js')({ github, context })
+
   build:
     name: build
     runs-on: ubuntu-latest
@@ -51,3 +70,23 @@ jobs:
             **/build/reports/tests/
             **/build/test-results/
           retention-days: 7
+
+  # build 결과(통과, 실패, 취소)를 PR 본문에 표시한다. build가 실패해도 실행한다.
+  report:
+    name: report
+    needs: [build, report-start]
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: PR 본문에 CI 결과 표시
+        uses: actions/github-script@v7
+        env:
+          CI_STATE: ${{ needs.build.result }}
+        with:
+          script: |
+            await require('./.github/scripts/update-pr-status.js')({ github, context })

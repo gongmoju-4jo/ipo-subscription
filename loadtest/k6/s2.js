@@ -8,9 +8,11 @@ const vus = Number(__ENV.VUS || 100);
 const iters = Number(__ENV.ITERATIONS || 10);
 const users = loadUsers();
 
+// 202도 기대 상태에 들어 있어서 http_req_failed에는 잡히지 않는다. 마감된 공모주가 202로 접수되는 것을 놓치지 않도록
+// check(422, SUBSCRIPTION_CLOSED)가 하나라도 실패하면 임계값 위반(종료 코드 99)으로 처리한다.
 export const options = makeOptions('S2', {
   S2: { executor: 'per-vu-iterations', vus, iterations: iters, maxDuration: '2m' },
-});
+}, { checks: ['rate==1'] });
 
 export default function () {
   if (__ITER === 0) sleepRamp(vus);

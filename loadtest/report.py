@@ -181,6 +181,12 @@ def main():
         server_ok = False
         report += ["## 서버 지표 (Prometheus)", "", f"Prometheus({args.prometheus})에 연결하지 못해 생략했습니다: {e}", ""]
 
+    # 서비스의 수집(scrape)이 실패하면 그 서비스의 지표가 통째로 비어 표에서 조용히 빠진다. 누락으로 표시한다
+    missing = [j for j in JOBS if not data.get(j)] if server_ok else []
+    if missing:
+        report += ["## ⚠️ 서버 지표 누락", "",
+                   f"다음 서비스의 지표를 읽지 못했습니다: **{', '.join(missing)}**. Prometheus 수집 대상이 내려가 있거나(`up`이 0) 지표가 없는 경우입니다. 아래 표에서 이 서비스는 빠져 있으니 이 회차의 서버 지표는 완전하지 않습니다.", ""]
+
     if server_ok:
         report += ["## 서버 지표 (Prometheus)", "",
                    "구간 안의 증가량(끝 시점 - 시작 시점)과 최대값입니다. 평균 응답과 p95는 구간 전체의 요청 기준이라 앞뒤 여유 시간에 영향받지 않습니다.", "",
@@ -213,6 +219,13 @@ def main():
     path = os.path.join(out, "report.md")
     open(path, "w", encoding="utf-8", newline="\n").write("\n".join(report))
     print(f"→ {path}")
+    # 서버 지표가 완전하지 않으면 보고서는 저장하되 0이 아닌 종료 코드로 알린다
+    if not server_ok:
+        print("⚠️ Prometheus에 연결하지 못해 서버 지표가 없습니다", file=sys.stderr)
+        sys.exit(2)
+    if missing:
+        print(f"⚠️ 서버 지표를 읽지 못한 서비스: {', '.join(missing)}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

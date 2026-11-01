@@ -52,10 +52,11 @@ const THRESHOLDS = {
   goal: { http_reqs: ['rate>=400'], http_req_duration: ['avg<=250', 'p(95)<=500'], http_req_failed: ['rate==0'] },
 };
 
-export function makeOptions(scenarioName, scenarios) {
+// extraThresholds: 시나리오가 추가로 요구하는 임계값 (예: S2는 check가 전부 통과해야 한다)
+export function makeOptions(scenarioName, scenarios, extraThresholds = {}) {
   return {
     scenarios,
-    thresholds: THRESHOLDS[__ENV.THRESHOLD || 'pass'],
+    thresholds: { ...THRESHOLDS[__ENV.THRESHOLD || 'pass'], ...extraThresholds },
     tags: { scenario: scenarioName, run: RUN_ID },
     summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
   };

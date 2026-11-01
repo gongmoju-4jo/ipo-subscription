@@ -55,7 +55,9 @@ FAIL=0
       echo "❌ Kafka 토픽 정보를 읽지 못했습니다: $DESC"; FAIL=1
     fi
     for t in $(printf '%s\n' "$TOPICS" | grep '\.DLT$' | sort); do
-      OFFS=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:29092 --topic "$t" 2>&1); RC=$?
+      # --topic은 정규식(전체 일치)이라 토픽 이름의 .이 아무 글자로 읽히지 않게 이스케이프한다
+      TPAT=$(printf '%s' "$t" | sed 's/[.]/\./g')
+      OFFS=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:29092 --topic "$TPAT" 2>&1); RC=$?
       if [ "$RC" -ne 0 ]; then
         echo "❌ $t 오프셋을 읽지 못했습니다: $OFFS"; FAIL=1; continue
       fi

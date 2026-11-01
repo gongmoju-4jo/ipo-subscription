@@ -133,6 +133,27 @@ public class Subscription extends BaseEntity {
                 && requestedQuantity == event.requestedQuantity();
     }
 
+    /**
+     * 증거금 확보 성공 응답으로 {@code PENDING}을 {@code CONFIRMED}로 전환함. 증거금 ID와 확보 시각(확정 시각)을 저장하고, 상태가 바뀌었으므로 요청 횟수({@code attempts})를 0으로 초기화함 (ERD).
+     *
+     * @param marginId   계좌 서비스의 증거금 ID
+     * @param reservedAt 증거금 확보 시각
+     * @throws IllegalStateException    {@code PENDING}이 아닌 상태에서 호출한 경우
+     * @throws IllegalArgumentException {@code marginId} 또는 {@code reservedAt}이 없는 경우
+     */
+    public void confirm(UUID marginId, Instant reservedAt) {
+        if (status != SubscriptionStatus.PENDING) {
+            throw new IllegalStateException("PENDING 상태에서만 확정할 수 있습니다: " + status);
+        }
+        if (marginId == null || reservedAt == null) {
+            throw new IllegalArgumentException("증거금 ID와 확보 시각은 필수입니다.");
+        }
+        this.status = SubscriptionStatus.CONFIRMED;
+        this.marginId = marginId;
+        this.confirmedAt = reservedAt;
+        this.attempts = 0;
+    }
+
     private static Subscription create(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                        long requestedQuantity, long marginAmount, Instant receivedAt) {
         if (requestedQuantity < 1) {

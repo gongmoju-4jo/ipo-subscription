@@ -22,6 +22,11 @@ public interface SubscriptionRepository {
     boolean insertIfAbsent(Subscription subscription);
 
     /**
+     * 결과 이벤트 처리용 {@code subscriptionId} 기준 청약 조회. 트랜잭션 안에서 상태를 바꾸면 커밋 때 반영됨.
+     */
+    Optional<Subscription> findById(UUID subscriptionId);
+
+    /**
      * 재전송 판별용 {@code requestId} 기준 청약 조회.
      */
     Optional<Subscription> findByRequestId(UUID requestId);

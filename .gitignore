@@ -272,3 +272,8 @@ CLAUDE.local.md
 
 # 환경 변수
 .env
+
+### loadtest ###
+# 회원 CSV에는 로그인 토큰이 들어 있어서 커밋하지 않는다
+loadtest/data/*
+!loadtest/data/.gitkeep

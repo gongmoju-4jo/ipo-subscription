@@ -1,11 +1,17 @@
 package com.gongmoju.subscription.infrastructure.persistence;
 
 import com.gongmoju.subscription.domain.subscription.Subscription;
+import com.gongmoju.subscription.domain.subscription.SubscriptionStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -17,4 +23,26 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
 
     @EntityGraph(attributePaths = "ipo")
     Optional<Subscription> findByIdAndUserId(UUID id, UUID userId);
+
+    Optional<Subscription> findByRequestId(UUID requestId);
+
+    boolean existsByIpoIdAndUserIdAndStatusNotIn(UUID ipoId, UUID userId, Collection<SubscriptionStatus> statuses);
+
+    // 네이티브 쿼리는 JPA Auditing과 @Version을 거치지 않아서 created_*, updated_*, version을 직접 채운다
+    // ON CONFLICT 대상을 request_id로 명시해서 다른 UNIQUE 위반(uk_subscription_active)은 예외로 올라간다. 트랜잭션 안에서 호출한다
+    @Modifying
+    @Query(value = """
+            INSERT INTO subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,
+                                      margin_amount, status, reject_reason, attempts, received_at, version,
+                                      created_at, created_by, updated_at, updated_by)
+            VALUES (:id, :requestId, :ipoId, :userId, :accountId, :requestedQuantity,
+                    :marginAmount, :status, CAST(:rejectReason AS VARCHAR), 0, :receivedAt, 0,
+                    :now, :auditor, :now, :auditor)
+            ON CONFLICT (request_id) DO NOTHING""", nativeQuery = true)
+    int insertIfAbsent(@Param("id") UUID id, @Param("requestId") UUID requestId, @Param("ipoId") UUID ipoId,
+                       @Param("userId") UUID userId, @Param("accountId") UUID accountId,
+                       @Param("requestedQuantity") long requestedQuantity, @Param("marginAmount") long marginAmount,
+                       @Param("status") String status, @Param("rejectReason") String rejectReason,
+                       @Param("receivedAt") Instant receivedAt, @Param("now") Instant now,
+                       @Param("auditor") String auditor);
 }

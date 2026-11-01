@@ -92,4 +92,35 @@ public class Subscription extends BaseEntity {
     @Version
     @Column(nullable = false)
     private long version;
+
+    // 접수 Consumer가 새 요청을 저장할 때 쓴다 (PENDING). id는 API가 userId와 requestId로 계산한 subscriptionId
+    public static Subscription accept(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
+                                      long requestedQuantity, long marginAmount, Instant receivedAt) {
+        return create(subscriptionId, requestId, ipo, userId, accountId, requestedQuantity, marginAmount, receivedAt);
+    }
+
+    // 증거금을 인출하기 전에 거절된 청약 (이중청약 등). 보상이 필요 없고 REJECTED일 때만 거절 사유가 있다
+    public static Subscription reject(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
+                                      long requestedQuantity, long marginAmount, Instant receivedAt,
+                                      RejectReason rejectReason) {
+        Subscription subscription = create(subscriptionId, requestId, ipo, userId, accountId,
+                requestedQuantity, marginAmount, receivedAt);
+        subscription.status = SubscriptionStatus.REJECTED;
+        subscription.rejectReason = rejectReason;
+        return subscription;
+    }
+
+    private static Subscription create(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
+                                       long requestedQuantity, long marginAmount, Instant receivedAt) {
+        Subscription subscription = new Subscription();
+        subscription.id = subscriptionId;
+        subscription.requestId = requestId;
+        subscription.ipo = ipo;
+        subscription.userId = userId;
+        subscription.accountId = accountId;
+        subscription.requestedQuantity = requestedQuantity;
+        subscription.marginAmount = marginAmount;
+        subscription.receivedAt = receivedAt;
+        return subscription;
+    }
 }

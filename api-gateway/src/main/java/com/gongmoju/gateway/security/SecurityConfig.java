@@ -1,5 +1,7 @@
 package com.gongmoju.gateway.security;
 
+import org.springframework.boot.actuate.autoconfigure.security.reactive.EndpointRequest;
+import org.springframework.boot.actuate.health.HealthEndpoint;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -15,8 +17,10 @@ import org.springframework.security.web.server.util.matcher.ServerWebExchangeMat
 import reactor.core.publisher.Flux;
 
 /**
- * Gateway 보안 설정. 요청은 두 체인 중 먼저 맞는 쪽으로 처리된다.
+ * Gateway 보안 설정. 요청은 세 체인 중 먼저 맞는 쪽으로 처리된다.
  * <ul>
+ *   <li>헬스 체인: 관리 포트(management.server.port)의 health만 인증 없이 연다. 컨테이너 헬스체크용이고,
+ *       8080(서비스 포트)의 /actuator/**는 열지 않는다.</li>
  *   <li>공개 체인: 회원가입, 로그인, Swagger. 인증 대상에서 제외해서 토큰을 읽지도 않는다
  *       (만료된 토큰이 붙은 채 로그인해도 401이 되지 않는다).</li>
  *   <li>API 체인: 그 외 모든 요청. JWT를 검증하고 실패하면 401, 통과하면 토큰의 sub, role을 서비스로 넘길 헤더로 설정한다.
@@ -32,6 +36,19 @@ public class SecurityConfig {
             ServerWebExchangeMatchers.pathMatchers(HttpMethod.POST, "/api/v1/users", "/api/v1/auth/login"),
             ServerWebExchangeMatchers.pathMatchers(HttpMethod.GET,
                     "/swagger-ui/**", "/v3/api-docs/**", "/*-service/v3/api-docs"));
+
+    // 컨테이너 헬스체크용. 관리 포트가 따로 있을 때 그 포트의 health 엔드포인트만 인증 없이 연다
+    @Bean
+    @Order(0)
+    public SecurityWebFilterChain healthSecurityWebFilterChain(ServerHttpSecurity http) {
+        return http
+                .securityMatcher(EndpointRequest.to(HealthEndpoint.class))
+                .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
+                .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
+                .authorizeExchange(exchanges -> exchanges.anyExchange().permitAll())
+                .build();
+    }
 
     @Bean
     @Order(1)

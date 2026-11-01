@@ -1,6 +1,15 @@
 server:
   port: 8080
 
+management:
+  # 헬스체크 전용 포트. 외부(호스트)에 열지 않는다. 8080은 JWT가 필요해서 토큰 없는 헬스체크를 못 한다
+  server:
+    port: 18090
+  endpoints:
+    web:
+      exposure:
+        include: health
+
 spring:
   application:
     name: api-gateway

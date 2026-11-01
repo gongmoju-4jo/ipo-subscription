@@ -43,13 +43,27 @@ FAIL=0
   printf '%s\n' "$OB" | awk '$2 != 0 {bad=1} END {exit bad}' || { echo "❌ 미발행 Outbox가 남아 있습니다"; FAIL=1; }
 
   echo; echo "== DLT 토픽 메시지 수 (측정 후 증가분만 이번 회차 것. 기록용)"
-  for t in $(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list 2>/dev/null | grep '\.DLT$' | sort); do
-    N=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:29092 --topic "$t" 2>/dev/null | awk -F: '{s+=$3} END {print s+0}')
-    echo "$t $N"
-  done
+  # Kafka 명령이 실패하면 빈 결과나 0으로 보이지 않도록 점검 실패로 처리한다
+  TOPICS=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list 2>&1); RC=$?
+  if [ "$RC" -ne 0 ]; then
+    echo "❌ Kafka 토픽 목록을 읽지 못했습니다: $TOPICS"; FAIL=1
+  else
+    for t in $(printf '%s\n' "$TOPICS" | grep '\.DLT$' | sort); do
+      OFFS=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:29092 --topic "$t" 2>&1); RC=$?
+      if [ "$RC" -ne 0 ]; then
+        echo "❌ $t 오프셋을 읽지 못했습니다: $OFFS"; FAIL=1; continue
+      fi
+      echo "$t $(printf '%s\n' "$OFFS" | awk -F: '{s+=$3} END {print s+0}')"
+    done
+  fi
 
   echo; echo "== Consumer 그룹 lag (모두 0이어야 한다. 그룹이 없으면 아무것도 나오지 않는다)"
-  docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:29092 --describe --all-groups 2>&1 | grep -v '^$' || true
+  LAGS=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:29092 --describe --all-groups 2>&1); RC=$?
+  if [ "$RC" -ne 0 ]; then
+    echo "❌ Consumer 그룹 lag을 읽지 못했습니다: $LAGS"; FAIL=1
+  else
+    printf '%s\n' "$LAGS" | grep -v '^$' || true
+  fi
 
   echo; [ "$FAIL" = 0 ] && echo "✅ 점검 통과" || echo "❌ 점검 실패: 위 항목을 해결한 뒤 측정하세요"
 } 2>&1 | tee "$OUT/precheck.txt"

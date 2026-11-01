@@ -24,6 +24,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 for r in $RATES; do case "$r" in ''|*[!0-9]*) echo "속도는 숫자여야 합니다: $r" >&2; exit 1 ;; esac; done
+# 같은 속도를 두 번 주면 같은 run_id, 같은 결과 폴더를 쓰게 되어 앞 단계의 결과가 다음 단계의 결과로 오인될 수 있다
+DUP=$(printf '%s\n' $RATES | sort | uniq -d | tr '\n' ' ')
+[ -z "$DUP" ] || { echo "같은 속도를 두 번 줄 수 없습니다: $DUP" >&2; exit 1; }
 
 BASE="limit-$(date +%m%d-%H%M%S)"
 OUT="$DIR/results/$BASE"; mkdir -p "$OUT"
@@ -41,6 +44,8 @@ LIMIT=""; LAST_OK=""; FAILED=""
 for RATE in $RATES; do
   RUN="$BASE-r$RATE"
   IPO=$("$DIR/seed/new_ipo.sh" --name "$RUN") || { echo "공모주 생성 실패" >&2; exit 1; }
+  # k6가 요약 파일을 만들지 못하고 실패했을 때 이전 결과가 남아 있어 그것을 판정하지 않도록 실행 전에 지운다
+  rm -f "$DIR/results/$RUN/summary.json"
   # 임계값을 어기면 종료 코드가 99지만 여기서는 직접 판정하므로 무시한다
   "$DIR/run-k6.sh" s1 --ipo "$IPO" --run-id "$RUN" --users "$USERS" -e "RATE=$RATE" -e "DURATION=$DURATION" > "$OUT/k6-r$RATE.out" 2>&1 || true
   ROW=$(python - "$PYDIR/results/$RUN/summary.json" "$RATE" "$RUN" <<'PY'

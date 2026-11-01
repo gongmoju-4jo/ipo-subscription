@@ -93,13 +93,13 @@ public class Subscription extends BaseEntity {
     @Column(nullable = false)
     private long version;
 
-    // 접수 Consumer가 새 요청을 저장할 때 쓴다 (PENDING). id는 API가 userId와 requestId로 계산한 subscriptionId
+    // 접수 Consumer의 신규 요청 저장용 `PENDING` 청약 생성. `id`는 API가 `userId`와 `requestId`로 계산한 `subscriptionId`를 사용함
     public static Subscription accept(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                       long requestedQuantity, long marginAmount, Instant receivedAt) {
         return create(subscriptionId, requestId, ipo, userId, accountId, requestedQuantity, marginAmount, receivedAt);
     }
 
-    // 증거금을 인출하기 전에 거절된 청약 (이중청약 등). 보상이 필요 없고 REJECTED일 때만 거절 사유가 있다
+    // 증거금 인출 전에 거절된 청약 생성 (이중청약 등). 보상이 필요 없으며 `REJECTED`일 때만 거절 사유를 저장함
     public static Subscription reject(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                       long requestedQuantity, long marginAmount, Instant receivedAt,
                                       RejectReason rejectReason) {
@@ -110,8 +110,28 @@ public class Subscription extends BaseEntity {
         return subscription;
     }
 
+    /**
+     * 같은 {@code requestId}로 재전송된 요청이 최초 저장된 청약과 동일한 내용인지 검증함 (이벤트 명세 2-1 검증 5).
+     * {@code eventId}, {@code occurredAt}, {@code receivedAt}은 재전송마다 달라지므로 비교 대상에서 제외함.
+     *
+     * @param event 재전송된 요청
+     * @return 회원, 계좌, 종목, 수량이 모두 같으면 {@code true}
+     */
+    public boolean isSameRequest(SubscriptionRequested event) {
+        return userId.equals(event.userId())
+                && accountId.equals(event.accountId())
+                && ipo.getId().equals(event.ipoId())
+                && requestedQuantity == event.requestedQuantity();
+    }
+
     private static Subscription create(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                        long requestedQuantity, long marginAmount, Instant receivedAt) {
+        if (requestedQuantity < 1) {
+            throw new IllegalArgumentException("청약 수량은 1 이상이어야 합니다: " + requestedQuantity);
+        }
+        if (marginAmount < 1) {
+            throw new IllegalArgumentException("증거금은 1 이상이어야 합니다: " + marginAmount);
+        }
         Subscription subscription = new Subscription();
         subscription.id = subscriptionId;
         subscription.requestId = requestId;

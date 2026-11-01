@@ -19,7 +19,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 class SubscriptionRepositoryAdapter implements SubscriptionRepository {
 
-    // 이중청약 방지 부분 UNIQUE(uk_subscription_active)와 같은 기준: 이 상태가 아니면 유효한 청약
+    // 이중청약 방지 부분 UNIQUE(`uk_subscription_active`)와 동일한 기준으로, 이 상태가 아니면 유효한 청약으로 판단함
     private static final List<SubscriptionStatus> INACTIVE_STATUSES =
             List.of(SubscriptionStatus.REJECTED, SubscriptionStatus.CANCELLED);
 

@@ -36,7 +36,7 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// 부분 UNIQUE(uk_subscription_active)와 ON CONFLICT는 H2에서 동작하지 않아서 실제 PostgreSQL(Testcontainers)로 확인한다. Docker가 필요하다
+// 부분 UNIQUE(`uk_subscription_active`)와 `ON CONFLICT`는 H2에서 지원되지 않으므로 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
 @DisplayName("청약 저장소 (PostgreSQL)")
@@ -66,7 +66,7 @@ class SubscriptionRepositoryTest {
     private Ipo ipo;
     private UUID userId;
 
-    // 공모주 생성 메서드가 없어서(시드 데이터만 사용) SQL로 넣는다
+    // 공모주 생성 메서드가 없으므로(시드 데이터만 사용) SQL로 직접 저장함
     @BeforeEach
     void setUp() {
         ipoId = UUID.randomUUID();
@@ -105,7 +105,7 @@ class SubscriptionRepositoryTest {
         assertThat(saved.getAttempts()).isZero();
         assertThat(saved.getMarginAmount()).isEqualTo(1_500_000);
         assertThat(saved.getReceivedAt()).isEqualTo(FIRST_RECEIVED_AT);
-        // 검증 5가 트랜잭션 밖에서도 종목 ID를 비교할 수 있어야 한다 (공모주는 LAZY)
+        // 검증 5가 트랜잭션 밖에서도 종목 ID를 비교할 수 있어야 함 (공모주는 `LAZY`)
         assertThat(saved.getIpo().getId()).isEqualTo(ipoId);
     }
 
@@ -175,7 +175,7 @@ class SubscriptionRepositoryTest {
         assertThatThrownBy(() -> insert(second))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasCauseInstanceOf(ConstraintViolationException.class)
-                // 다른 무결성 위반(NOT NULL, FK)과 구분해서 재시도 대상으로 분류할 수 있는지 확인
+                // 다른 무결성 위반(`NOT NULL`, FK)과 구분하여 재시도 대상으로 분류할 수 있는지 검증함
                 .satisfies(e -> assertThat(((ConstraintViolationException) e.getCause()).getConstraintName())
                         .isEqualTo("uk_subscription_active"));
         assertThat(count("WHERE ipo_id = ? AND user_id = ?", ipoId, userId)).isEqualTo(1);
@@ -238,8 +238,8 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    @DisplayName("같은 requestId를 동시에 저장하면 한 건만 저장되고 나머지는 예외 없이 false를 반환한다")
-    void insertIfAbsent_savesOnlyOneWithoutException_whenSameRequestIdInsertsConcurrently() throws Exception {
+    @DisplayName("같은 requestId를 동시에 저장하면 한 건만 저장되고, 나머지는 false를 반환하거나 uk_subscription_active 위반이 난다")
+    void insertIfAbsent_savesOnlyOne_whenSameRequestIdInsertsConcurrently() throws Exception {
         // given
         UUID requestId = UUID.randomUUID();
         Subscription first = pending(requestId, userId, FIRST_RECEIVED_AT);
@@ -249,7 +249,11 @@ class SubscriptionRepositoryTest {
         List<Object> outcomes = insertConcurrently(first, second);
 
         // then
-        assertThat(outcomes).containsExactlyInAnyOrder(true, false);
+        // `ON CONFLICT (request_id)`는 `request_id` 충돌만 걸러냄. 같은 회원, 같은 종목이라 부분 UNIQUE가 먼저 감지되면 위반 예외가 날 수 있으며,
+        // 이 경우 재시도에서 `findByRequestId`로 기존 청약을 찾아 처리함. 어느 쪽이든 저장은 한 건이어야 함
+        assertThat(outcomes).filteredOn(Boolean.TRUE::equals).hasSize(1);
+        assertThat(outcomes).filteredOn(outcome -> !Boolean.TRUE.equals(outcome)).hasSize(1)
+                .allSatisfy(outcome -> assertThat(isDuplicateRequestOutcome(outcome)).isTrue());
         assertThat(count("WHERE request_id = ?", requestId)).isEqualTo(1);
     }
 
@@ -321,7 +325,7 @@ class SubscriptionRepositoryTest {
         return transactionTemplate.execute(status -> subscriptionRepository.insertIfAbsent(subscription));
     }
 
-    // 두 스레드가 같은 시점에 각자의 트랜잭션으로 저장한다. 결과는 저장 여부(Boolean) 또는 던져진 예외(Throwable), 순서는 제출 순서와 같다
+    // 두 스레드가 `CyclicBarrier`로 같은 시점에 출발하여 각자의 트랜잭션으로 저장함. 결과는 저장 여부(`Boolean`) 또는 던져진 예외(`Throwable`)이며 순서는 제출 순서와 같음
     private List<Object> insertConcurrently(Subscription first, Subscription second) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CyclicBarrier barrier = new CyclicBarrier(2);
@@ -344,6 +348,16 @@ class SubscriptionRepositoryTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    // 같은 requestId의 중복 저장 결과: 저장하지 않고 `false`를 반환했거나, `uk_subscription_active` 위반으로 예외가 난 경우
+    private boolean isDuplicateRequestOutcome(Object outcome) {
+        if (Boolean.FALSE.equals(outcome)) {
+            return true;
+        }
+        return outcome instanceof DataIntegrityViolationException e
+                && e.getCause() instanceof ConstraintViolationException cause
+                && "uk_subscription_active".equals(cause.getConstraintName());
     }
 
     private Subscription pending(UUID requestId, UUID user, Instant receivedAt) {

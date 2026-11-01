@@ -15,13 +15,13 @@ public interface SubscriptionRepository {
     // 회원 본인의 청약 한 건. 없거나 다른 회원의 청약이면 빈 값
     Optional<Subscription> findByIdAndUserId(UUID subscriptionId, UUID userId);
 
-    // 같은 requestId의 청약이 없을 때만 저장한다 (INSERT ... ON CONFLICT (request_id) DO NOTHING). 저장했으면 true, 이미 있으면 false
-    // 다른 UNIQUE 위반(uk_subscription_active)은 삼키지 않고 예외로 올린다
+    // `INSERT ... ON CONFLICT (request_id) DO NOTHING` 기반 저장. 같은 `requestId`의 청약이 없을 때만 저장하며, 저장하면 `true`, 이미 있으면 `false`를 반환함
+    // 다른 UNIQUE 위반(`uk_subscription_active`)은 삼키지 않고 예외로 전파함
     boolean insertIfAbsent(Subscription subscription);
 
-    // 재전송 판별용. 같은 requestId의 청약
+    // 재전송 판별용 `requestId` 기준 청약 조회
     Optional<Subscription> findByRequestId(UUID requestId);
 
-    // 같은 회원이 같은 종목에 유효한 청약(REJECTED, CANCELLED가 아닌 것)이 있는지. 이중청약 판정용
+    // 이중청약 판정용 조회. 같은 회원이 같은 종목에 유효한 청약(`REJECTED`, `CANCELLED`가 아닌 것)을 보유했는지 확인함
     boolean existsActiveByIpoIdAndUserId(UUID ipoId, UUID userId);
 }

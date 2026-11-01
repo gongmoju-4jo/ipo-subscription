@@ -3,12 +3,16 @@ package com.gongmoju.subscription.domain.subscription;
 import com.gongmoju.subscription.domain.ipo.Ipo;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @DisplayName("청약 생성")
 class SubscriptionTest {
@@ -60,5 +64,70 @@ class SubscriptionTest {
         assertThat(subscription.getRequestId()).isEqualTo(requestId);
         assertThat(subscription.getMarginAmount()).isEqualTo(1_500_000);
         assertThat(subscription.getAttempts()).isZero();
+    }
+
+    @ParameterizedTest(name = "수량 {0}")
+    @ValueSource(longs = {0, -1})
+    @DisplayName("청약 수량이 1보다 작으면 생성하지 못한다")
+    void accept_throws_whenRequestedQuantityIsNotPositive(long requestedQuantity) {
+        // given
+
+        // when, then
+        assertThatThrownBy(() -> Subscription.accept(subscriptionId, requestId, ipo, userId, accountId,
+                requestedQuantity, 1_500_000, RECEIVED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @ParameterizedTest(name = "증거금 {0}")
+    @ValueSource(longs = {0, -1})
+    @DisplayName("증거금이 1보다 작으면 생성하지 못한다 (REJECTED도 같은 규칙)")
+    void reject_throws_whenMarginAmountIsNotPositive(long marginAmount) {
+        // given
+
+        // when, then
+        assertThatThrownBy(() -> Subscription.reject(subscriptionId, requestId, ipo, userId, accountId,
+                100, marginAmount, RECEIVED_AT, RejectReason.ALREADY_SUBSCRIBED))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("회원, 계좌, 종목, 수량이 같으면 같은 요청이다 (receivedAt이 달라도)")
+    void isSameRequest_returnsTrue_whenContentIsSame() {
+        // given
+        UUID ipoId = UUID.randomUUID();
+        when(ipo.getId()).thenReturn(ipoId);
+        Subscription subscription = Subscription.accept(subscriptionId, requestId, ipo, userId, accountId,
+                100, 1_500_000, RECEIVED_AT);
+        SubscriptionRequested resent = new SubscriptionRequested(requestId, subscriptionId, userId, accountId, ipoId,
+                100, RECEIVED_AT.plusSeconds(3));
+
+        // when
+        boolean same = subscription.isSameRequest(resent);
+
+        // then
+        assertThat(same).isTrue();
+    }
+
+    @ParameterizedTest(name = "{0}이 다르면 다른 요청")
+    @ValueSource(strings = {"userId", "accountId", "ipoId", "requestedQuantity"})
+    @DisplayName("회원, 계좌, 종목, 수량 중 하나라도 다르면 다른 요청이다")
+    void isSameRequest_returnsFalse_whenAnyFieldDiffers(String differingField) {
+        // given
+        UUID ipoId = UUID.randomUUID();
+        when(ipo.getId()).thenReturn(ipoId);
+        Subscription subscription = Subscription.accept(subscriptionId, requestId, ipo, userId, accountId,
+                100, 1_500_000, RECEIVED_AT);
+        SubscriptionRequested resent = new SubscriptionRequested(requestId, subscriptionId,
+                "userId".equals(differingField) ? UUID.randomUUID() : userId,
+                "accountId".equals(differingField) ? UUID.randomUUID() : accountId,
+                "ipoId".equals(differingField) ? UUID.randomUUID() : ipoId,
+                "requestedQuantity".equals(differingField) ? 101 : 100,
+                RECEIVED_AT);
+
+        // when
+        boolean same = subscription.isSameRequest(resent);
+
+        // then
+        assertThat(same).isFalse();
     }
 }

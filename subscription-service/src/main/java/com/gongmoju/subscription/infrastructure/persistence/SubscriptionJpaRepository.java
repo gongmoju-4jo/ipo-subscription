@@ -28,8 +28,8 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
 
     boolean existsByIpoIdAndUserIdAndStatusNotIn(UUID ipoId, UUID userId, Collection<SubscriptionStatus> statuses);
 
-    // 네이티브 쿼리는 JPA Auditing과 @Version을 거치지 않아서 created_*, updated_*, version을 직접 채운다
-    // ON CONFLICT 대상을 request_id로 명시해서 다른 UNIQUE 위반(uk_subscription_active)은 예외로 올라간다. 트랜잭션 안에서 호출한다
+    // 네이티브 쿼리는 JPA Auditing과 `@Version`을 거치지 않으므로 `created_*`, `updated_*`, `version`을 직접 채움
+    // `ON CONFLICT` 대상을 `request_id`로 명시하여 다른 UNIQUE 위반(`uk_subscription_active`)은 예외로 전파됨. 트랜잭션 안에서 호출해야 함
     @Modifying
     @Query(value = """
             INSERT INTO subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,

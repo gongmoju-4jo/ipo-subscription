@@ -10,6 +10,10 @@ dependencies {
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.17'
 	runtimeOnly 'org.postgresql:postgresql'
 
+	// 비밀번호 BCrypt 해시, JWT(HS256) 발급. 보안 필터는 붙지 않는다 (버전은 Boot BOM)
+	implementation 'org.springframework.security:spring-security-crypto'
+	implementation 'org.springframework.security:spring-security-oauth2-jose'
+
 	// contextLoads 등 DB 없이 띄우는 테스트용
 	testRuntimeOnly 'com.h2database:h2'
 

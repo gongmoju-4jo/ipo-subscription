@@ -110,6 +110,18 @@ class DepositServiceTest {
     }
 
     @Test
+    void 입금_후_예수금이_long_범위를_넘으면_검증_오류이고_잔고와_원장은_그대로다() {
+        depositService.deposit(accountId, userId, 1_000, UUID.randomUUID());
+
+        assertThatThrownBy(() -> depositService.deposit(accountId, userId, Long.MAX_VALUE, UUID.randomUUID()))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.VALIDATION_ERROR);
+        assertThat(cashBalance()).isEqualTo(1_000);
+        assertThat(ledgerCount()).isEqualTo(1);
+    }
+
+    @Test
     void requestId가_없으면_증거금_원장을_재요청으로_보지_않고_거절한다() {
         // request_id가 NULL인 증거금 원장 (findByRequestId(null)이 이 행을 찾으면 409가 난다)
         UUID marginId = UUID.randomUUID();

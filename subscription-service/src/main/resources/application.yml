@@ -13,16 +13,48 @@ spring:
     # 서비스별 전용 계정 (init.sh가 만든다). 자기 스키마만 쓸 수 있다
     username: subscription_app
     password: ${SUBSCRIPTION_DB_PASSWORD}
+  sql:
+    init:
+      # schema.sql(제약, 부분 인덱스), data.sql(공모주 시드)을 기동할 때마다 실행한다. 두 파일 모두 여러 번 실행해도 된다
+      mode: always
   jpa:
     hibernate:
       ddl-auto: update
+    # Hibernate가 테이블을 만든 뒤 schema.sql, data.sql 실행
+    defer-datasource-initialization: true
     open-in-view: false
     properties:
       hibernate.default_schema: subscription
       # 스키마는 init.sh가 만든다 (같은 이름). 서비스 계정은 DB CREATE 권한이 없어서 이 설정은 동작하지 않아도 된다
       hibernate.hbm2ddl.create_namespaces: true
+  jackson:
+    deserialization:
+      # 소수(100.5)를 정수 필드(청약 수량 등)로 잘라서 받지 않고 400으로 응답한다
+      accept-float-as-int: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      # 브로커 저장 확인(acks=all) 후에만 202를 준다 (D-13). 재전송 중복은 idempotence로 막는다
+      acks: all
+      properties:
+        enable.idempotence: true
+        # 브로커가 없거나 느리면 오래 기다리지 않고 500으로 응답한다 (메타데이터 대기 5초, 전송 전체 10초)
+        max.block.ms: 5000
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
+
+# Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks, 멱등, max.block.ms)은 위 spring.kafka.producer를 함께 쓴다
+outbox:
+  publisher:
+    # false면 스케줄 실행을 끈다
+    enabled: true
+    # 이전 실행이 끝난 뒤 다시 실행하기까지 쉬는 시간 (ISO-8601, @Scheduled가 읽는다)
+    interval: PT1S
+    batch-size: 100
+    # 이 횟수 이상 연속 실패하면 알림 로그. Consumer 재시도(3회)와 별개이고, 넘어도 발행은 계속 시도한다
+    alert-threshold: 5
+    # Producer의 delivery.timeout.ms(10s, API 직접 발행과 같은 Producer를 씀) 이상으로 맞춘다. 발행기가 실패로 처리한 뒤 Producer가 재시도하지 않게 한다
+    send-timeout: 10s
 
 eureka:
   client:

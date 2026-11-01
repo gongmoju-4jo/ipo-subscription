@@ -1,6 +1,8 @@
 package com.gongmoju.account.presentation.account;
 
 import com.gongmoju.account.application.account.AccountService;
+import com.gongmoju.account.application.account.DepositResult;
+import com.gongmoju.account.application.account.DepositService;
 import com.gongmoju.account.application.account.OpenAccountResult;
 import com.gongmoju.account.global.swagger.ApiErrorCodes;
 import com.gongmoju.account.presentation.support.RequestUser;
@@ -37,6 +39,7 @@ public class AccountController {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final AccountService accountService;
+    private final DepositService depositService;
 
     @Operation(summary = "계좌 개설", description = "같은 requestId로 다시 요청하면 계좌를 새로 만들지 않고 처음 계좌를 200으로 반환한다.")
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.DUPLICATE_RESOURCE})
@@ -75,6 +78,22 @@ public class AccountController {
             @PathVariable UUID accountId) {
         UUID userId = RequestUser.userId(userIdHeader);
         return ApiResponse.success(AccountResponse.from(accountService.get(userId, accountId)), "계좌를 조회했습니다.");
+    }
+
+    @Operation(summary = "가상 입금",
+            description = "본인 계좌에 입금한다. 같은 requestId로 다시 요청하면 입금을 다시 하지 않고 처음 결과를 200으로 반환한다. 청약증거금(marginBalance)은 바뀌지 않는다.")
+    @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED,
+            CommonErrorCode.RESOURCE_NOT_FOUND, CommonErrorCode.DUPLICATE_RESOURCE})
+    @PostMapping("/{accountId}/deposits")
+    public ResponseEntity<ApiResponse<DepositResponse>> deposit(
+            @Parameter(hidden = true) @RequestHeader(value = RequestUser.HEADER, required = false) String userIdHeader,
+            @PathVariable UUID accountId,
+            @Valid @RequestBody DepositRequest request) {
+        UUID userId = RequestUser.userId(userIdHeader);
+        DepositResult result = depositService.deposit(accountId, userId, request.amount(), UUID.fromString(request.requestId()));
+        HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
+        return ResponseEntity.status(status)
+                .body(ApiResponse.success(DepositResponse.from(result), "입금이 완료되었습니다."));
     }
 
     // 공통 Pageable 해석은 범위를 벗어난 값을 조용히 기본값/최대값으로 바꾼다. API 명세 v1.1은 400이므로 원래 요청 값을 여기서 직접 검증한다

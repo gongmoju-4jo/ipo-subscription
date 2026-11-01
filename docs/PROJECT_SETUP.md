@@ -23,7 +23,7 @@
 ```bash
 git clone {레포 주소}
 cd ipo-subscription
-cp .env.example .env    # .env의 DB_PASSWORD, ACCOUNT_DB_PASSWORD, SUBSCRIPTION_DB_PASSWORD, ALLOCATION_DB_PASSWORD에 직접 정한 값을 넣는다
+cp .env.example .env    # .env의 DB_PASSWORD, ACCOUNT_DB_PASSWORD, SUBSCRIPTION_DB_PASSWORD, ALLOCATION_DB_PASSWORD에 직접 정한 값을, JWT_SECRET에 팀 공용 키를 넣는다 (아래 "JWT 키")
 docker-compose up -d postgres kafka kafka-init kafka-ui
 ```
 
@@ -33,7 +33,7 @@ docker-compose up -d postgres kafka kafka-init kafka-ui
 
 필요: **JDK 21**, Docker + Compose v2 이상, IntelliJ
 
-> ✏️ docker-compose에는 현재 PostgreSQL, Kafka, Kafka-UI가 있습니다. 서비스 컨테이너, 모니터링이 추가되면 갱신합니다.
+> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI와 서비스 컨테이너 5개가 있습니다. 모니터링이 추가되면 갱신합니다.
 
 ### 📌 Claude Code
 
@@ -53,7 +53,7 @@ ipo-subscription/
 ├── build.gradle            공통 버전, 의존성 (Boot 3.5.16, Cloud 2025.0.3, Java 21)
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
-├── docker-compose.yml      로컬 인프라 (현재 PostgreSQL, Kafka, Kafka-UI)
+├── docker-compose.yml      로컬 인프라(PostgreSQL, Kafka, Kafka-UI)와 서비스 컨테이너 5개
 ├── docker/postgres/        서비스별 스키마, DB 계정 생성 스크립트
 ├── common/                 공통 라이브러리 (실행 X)
 ├── eureka-server/
@@ -71,6 +71,7 @@ ipo-subscription/
 | account / subscription / allocation | 8081 / 8082 / 8083 |
 | PostgreSQL | 5432 |
 | Kafka / Kafka-UI | 29092 / 8989 |
+| gateway 관리 포트 | 18090 (헬스체크 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
 
 ### 게이트웨이 라우팅
 
@@ -85,16 +86,21 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 새 외부 경로 → `api-gateway/.../application.yml`에 추가
 - `/internal/**`은 라우팅 X (Feign 전용, 외부 접근 불가)
 
-### 📌 게이트웨이 구현 시 확인
+### 📌 게이트웨이 인증
 
-현재: 라우트 + 통합 Swagger만. 인증 필터, 공통 오류 응답 없음
+현재: 라우트 + 통합 Swagger + **JWT 인증 필터** (토큰 검증, 사용자 헤더 설정, 공개/관리자 경로, 401·403 공통 응답)
 
+- 📌 **Gateway(8080)를 거치는 요청은 토큰이 필요**하다. 공개 경로만 예외: `POST /api/v1/users`, `POST /api/v1/auth/login`, Swagger(`GET /swagger-ui/**`, `/v3/api-docs/**`, `/*-service/v3/api-docs`). 공개 경로는 메서드와 경로가 정확히 맞아야 하고(끝 슬래시가 붙으면 공개가 아님), 토큰을 읽지 않는다
+- 📌 JWT 검증: HS256 서명, 만료, `iss`=**`account-service`**(문자열 비교), `sub`, `role`. `exp`가 없는 토큰은 거절. 실패하면 401 (만료는 `TOKEN_EXPIRED`, 그 외는 `UNAUTHORIZED`)
+- 📌 역할: **USER, ADMIN** (common `UserRole`과 같은 값). `/api/v1/admin/**`은 ADMIN만, 일반 회원은 403 `FORBIDDEN`
+- 클라이언트가 보낸 `X-User-Id`, `X-User-Role`, `X-Request-Received-At`를 모두 제거한 뒤 Gateway가 다시 설정한다 (서비스, Audit이 이 헤더를 신뢰)
+  - `X-User-Id` = 토큰의 `sub`, `X-User-Role` = 토큰의 `role` (토큰이 없는 공개 경로에는 붙지 않음)
+  - `X-Request-Received-At` = Gateway 도착 시각 (UTC ISO-8601, 밀리초, 모든 요청). 청약 마감 판단 기준
+- Gateway는 `common`을 쓰지 않아 401·403 오류 응답을 직접 공통 형식으로 만든다 (`details`는 없으면 생략)
+- 컨테이너 헬스체크용으로 **관리 포트(18090)의 `/actuator/health`만** 토큰 없이 열려 있다 (`SecurityConfig`의 헬스 체인). 8080의 `/actuator/**`와 관리 포트의 다른 엔드포인트는 계속 토큰이 필요하다 (`HealthEndpointSecurityTest`가 확인)
+- 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
-- 📌 JWT iss: **`account-service`**
-- 📌 역할: **USER, ADMIN** (common `UserRole`과 같은 값). `/api/v1/admin/**`은 ADMIN만
-- 📌 인증 공개 경로에 Swagger 추가: `/swagger-ui/**`, `/v3/api-docs/**`, `/*-service/v3/api-docs` (누락 시 401)
-- 클라이언트가 보낸 `X-User-Id`, `X-User-Role` 제거 → 검증한 토큰 값으로 다시 설정 (서비스, Audit이 이 헤더를 신뢰)
-- 라우트, Swagger 설정은 `GatewayRoutesTest`가 확인 → 라우트 변경 시 테스트도 수정
+- 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
 
 ---
 
@@ -106,26 +112,66 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 1. `docker-compose up -d postgres kafka kafka-init kafka-ui` (Kafka가 필요 없는 작업이면 `postgres`만). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
 2. `⌘8`/`Alt+8` Services 창 → Eureka 실행 → 나머지 실행
-3. http://localhost:8080/api/v1/unknown → 404면 게이트웨이 정상 (인증 필터 추가 후엔 401)
+3. http://localhost:8080/api/v1/unknown → 401 JSON(`UNAUTHORIZED`)이면 게이트웨이 정상 (토큰이 필요한 경로라서)
 
 > 💡 전부 켤 필요는 없습니다. **Eureka + 내 서비스 + 내 서비스가 호출하는 서비스**만 실행하면 됩니다.
 
 ### Docker
 
-> ✏️ 서비스 컨테이너는 아직 compose에 없습니다. 추가된 뒤 아래 명령을 사용합니다.
+> 서비스 5개(eureka-server, api-gateway, account, subscription, allocation)를 컨테이너로 띄워 전체를 확인하는 방식입니다. **개발 방식을 바꾸는 것이 아니라** 통합 확인, 부하 테스트, 배포 전 점검용입니다. 코드는 그대로이고 접속 주소는 compose가 환경변수로 넣어 줍니다.
 
 ```bash
-./gradlew build -x test && docker-compose up -d --build   # 실행
+./gradlew build -x test && docker-compose up -d --build   # 실행 (jar를 먼저 빌드해야 한다)
+docker-compose ps                                          # 서비스 5개가 healthy인지 확인 (기동에 1~2분, 한 번 출력하고 끝나므로 반복해서 확인), kafka-init은 Exited (0)가 정상
 docker-compose logs -f {서비스 이름}                        # 로그
 docker-compose down                                        # 종료
-docker-compose down -v                                     # 종료 + DB 초기화
+docker-compose down -v                                     # 종료 + DB, Kafka 데이터 초기화
 ```
 
-- 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키, DB 비밀번호(관리자 1개, 서비스별 3개)
-- ⚠️ 코드 수정 후엔 위 `실행` 명령 그대로 (`./gradlew build` 빠지면 예전 코드로 뜸)
-- 📌 서비스 포트 직접 접속 ❌ → `localhost:8080`(게이트웨이)으로 요청
-- ⚠️ **Docker 메모리 4GB 이상 권장** (Kafka 포함 시 2GB 부족)
+- 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키, DB 비밀번호(관리자 1개, 서비스별 3개). compose가 `.env`를 읽어 컨테이너에 환경변수로 전달한다 (컨테이너 안에는 `.env` 파일이 없다)
+- ⚠️ 코드 수정 후엔 위 `실행` 명령 그대로 (`./gradlew build` 빠지면 예전 코드로 뜸). 한 서비스만 고쳤다면 `./gradlew build -x test && docker-compose up -d --build {서비스 이름}`
+- 📌 서비스 컨테이너 중 내 PC에 열리는 포트는 `http://localhost:8080`(게이트웨이)과 `http://localhost:8761`(Eureka 대시보드) 둘뿐이다 (둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩. PostgreSQL, Kafka, Kafka-UI는 별도로 열린다). 서비스 포트(8081~8083)는 열지 않는다 → 서비스 포트 직접 접속 ❌
+  - 서비스는 토큰 없이 `X-User-Id` 헤더만으로 호출되므로 외부에 열면 안 된다. 서비스별 Swagger도 쓸 수 없고 통합 Swagger(`http://localhost:8080/swagger-ui/index.html`)를 쓴다
+  - Eureka 등록 확인은 IntelliJ 때와 같이 `http://localhost:8761` 화면에서 한다
+  - Eureka 포트가 이미 사용 중이거나 Windows 예약 포트라 기동되지 않으면 `.env`에서 `EUREKA_PORT`(기본 8761)를 바꾼다
+- 기동 순서는 compose가 제어한다: postgres, kafka 준비 → 토픽 생성(`kafka-init`) → eureka-server → 서비스. 서비스가 모두 `healthy`여도 Gateway가 서비스를 찾는 데 최대 30초 걸려 처음 요청이 503일 수 있다
+- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너까지 전부 올라온다.** jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui`)
+- ⚠️ **같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다** (포트 충돌, Eureka 중복 등록). 특히 IntelliJ의 Eureka를 켠 채 Docker 전체를 띄우면 8761이 충돌한다. 일부 서비스만 IntelliJ로 띄워 컨테이너 Eureka에 붙이는 구성은 확인하지 않았고 지원하지 않는다
+- 📌 **Docker 메모리 4GB 이상 권장** (Kafka 포함 시 2GB 부족)
   - Colima: `colima stop && colima start --cpus 4 --memory 6` / Docker Desktop: Settings → Resources → Memory
+
+#### 필요한 서비스만 띄우기
+
+> 전부 띄울 필요는 없습니다. 이름을 적은 서비스와 그 서비스가 의존하는 컨테이너만 올라옵니다.
+
+```bash
+./gradlew build -x test && docker-compose up -d --build api-gateway account-service   # 필요한 서비스만 실행
+docker-compose stop {서비스 이름}                                                      # 한 서비스만 중지
+docker-compose restart {서비스 이름}                                                   # 한 서비스만 재시작 (코드를 고쳤다면 위의 `--build` 명령)
+```
+
+| 서비스 | 같이 올라오는 것 |
+| --- | --- |
+| `eureka-server` | 없음 |
+| `api-gateway` | `eureka-server` |
+| `account-service`, `subscription-service`, `allocation-service` | `postgres`, `kafka`, `kafka-init`(토픽을 만들고 종료), `eureka-server` |
+
+- 서비스를 Gateway(`http://localhost:8080`)로 호출하려면 `api-gateway`와 호출할 서비스를 함께 적는다
+- `kafka-ui`는 의존 대상이 아니라 따로 적어야 올라온다
+
+#### IntelliJ 실행과 Docker 실행의 차이
+
+| | IntelliJ (개발) | Docker (확인) |
+|---|---|---|
+| 서비스 실행 | IntelliJ에서 앱 실행 | 컨테이너 |
+| DB, Kafka, Eureka 주소 | `localhost` (기본값) | `postgres`, `kafka:29092`, `eureka-server` (compose가 환경변수로 전달) |
+| 설정 값(비밀번호, 키) | 앱이 `.env`를 직접 읽음 | compose가 `.env`를 읽어 환경변수로 전달 |
+| 서비스 포트(8081~8083) | 내 PC에 열림 (토큰 없이 직접 호출 가능) | 열지 않음, Gateway 경유만 |
+| 코드 반영 | 앱 재시작 | jar 빌드 후 이미지 재빌드 |
+
+- DB, Kafka는 두 방식 모두 같은 컨테이너(`ipo-postgres`, `ipo-kafka`)를 써서 **데이터가 이어진다**
+- 컨테이너로 확인하는 것이 필요한 경우: 토큰 없는 직접 호출로는 못 잡는 Gateway 인증, `X-Request-Received-At`(청약 마감 판단 기준) 흐름, 환경변수 전달 누락
+- 처음부터 확인하는 순서: 통합 Swagger에서 회원가입 → 로그인 → Authorize에 토큰 입력 → 계좌 개설 → 입금 → 공모주 조회
 
 ### Kafka
 
@@ -142,6 +188,20 @@ docker-compose down -v                                     # 종료 + DB 초기�
   - 새 토픽 → 이벤트 명세 문서 먼저 수정한 뒤 스크립트의 `TOPICS`에 추가
 - 호스트 포트 변경: `.env`의 `KAFKA_PORT`(기본 29092), `KAFKA_UI_PORT`(기본 8989)
   - `KAFKA_PORT`를 바꾸면 서비스 실행 시 `KAFKA_BOOTSTRAP_SERVERS`도 `localhost:{바꾼 포트}`로 맞춘다
+
+### CI (GitHub Actions)
+
+`develop`을 대상으로 PR을 올리거나 `develop`에 머지되면 자동으로 `./gradlew build`(전체 모듈 빌드 + 테스트)가 실행된다. 설정은 `.github/workflows/ci.yml`. `.env`와 비밀 환경변수 없이 통과해야 한다.
+
+- 결과 확인: PR 화면 아래 Checks의 `build`
+  - 통과: 초록 체크 / 실패: 빨간 ❌ → Details에서 실패한 step의 로그 확인
+  - PR 본문 맨 끝 `## CI 결과` 표에도 진행 중, 통과, 실패가 표시된다. 이 구간(`<!-- ci-status:start -->` ~ `<!-- ci-status:end -->`)은 CI가 자동으로 갱신하니 지우거나 고치지 않는다
+- 실패했을 때: 실행 페이지 맨 아래 **Artifacts**의 `test-reports`(7일 보관)를 받아 압축을 풀고 실패한 모듈의 `{모듈}/build/reports/tests/test/index.html`(예: `account-service/build/reports/tests/test/index.html`)을 열면 로컬과 같은 테스트 리포트가 보인다
+- 로컬에서 먼저 확인: `./gradlew build` (Testcontainers 테스트가 있어 Docker를 켜 둔다)
+- 새로 push하면 같은 PR의 이전 실행은 취소되고 새로 실행된다
+- 포크에서 올린 PR은 본문 표시가 갱신되지 않는다 (빌드, 테스트는 실행됨)
+- 머지 차단: `build`를 필수 체크로 지정하기 전에는 CI가 실패해도 머지 버튼은 눌린다. 지정되면 통과해야 머지할 수 있다
+- `develop → main` PR에 대한 CI는 아직 없다 (첫 릴리스 때 추가)
 
 ---
 
@@ -389,7 +449,7 @@ try {
 - **통합 (게이트웨이)**: http://localhost:8080/swagger-ui/index.html → 오른쪽 위 드롭다운에서 서비스 선택
   - fetch error 500 가능: 서비스 Eureka 등록 → 게이트웨이 반영까지 최대 30초
 - 서비스별: `http://localhost:{서비스 포트}/swagger-ui/index.html` (IntelliJ 실행 시만. Docker는 서비스 포트 비공개)
-- 우상단 Authorize에 토큰만 입력 → `Bearer ` 자동 (인증 필터 추가 후)
+- 우상단 Authorize에 토큰만 입력 → `Bearer ` 자동 (통합 Swagger는 로그인으로 받은 `accessToken`이 필요)
 
 > 💡 통합 Swagger의 Try it out 요청은 **게이트웨이를 거쳐** 서비스로 갑니다 (실제 인증 흐름 그대로). 새 서비스를 추가하면 게이트웨이 `application.yml`에 api-docs 라우트와 `springdoc.swagger-ui.urls`를 추가합니다.
 
@@ -451,8 +511,7 @@ Kafka 데이터까지 모두 지우려면 `docker-compose down -v` (토픽은 `k
 | 파일 | 용도 | git |
 | --- | --- | --- |
 | `application.yml` | 포트, DB, Kafka, Eureka | ✅ |
-| `application-secret.yml` | JWT 시크릿 (resources에 직접 생성) | ❌ |
-| `.env` | Docker, 서비스가 함께 읽는 비밀값 (`.env.example` 복사) | ❌ |
+| `.env` | Docker, 서비스가 함께 읽는 비밀값: DB 비밀번호, `JWT_SECRET` (`.env.example` 복사) | ❌ |
 
 > ⚠️ 비밀값은 커밋하지 않습니다. 공유는 팀에서 승인한 비밀 관리 도구로 합니다.
 
@@ -460,14 +519,15 @@ Kafka 데이터까지 모두 지우려면 `docker-compose down -v` (토픽은 `k
 
 account-service(발급)와 api-gateway(검증)가 **같은 키** 사용 → 다르면 모든 요청 401
 
-```yaml
-# account-service, api-gateway 각각 src/main/resources/application-secret.yml
-jwt:
-  secret: 팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
+```bash
+# 루트 .env (두 서비스가 같은 파일을 읽는다. IntelliJ, Docker 모두 해당)
+JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
 ```
 
-- Docker는 `.env`의 `JWT_SECRET` 하나로 두 서비스에 같이 적용
-- 토큰 규격: HS256, `sub` = userId, `role`(USER/ADMIN), `iss` = account-service
+- 형식: **표준 Base64 문자열, 디코딩 후 32바이트 이상**. 비어 있거나 Base64가 아니거나 짧으면 account-service와 api-gateway가 기동할 때 실패한다
+- 새 키 만들기: `openssl rand -base64 33` (PowerShell: `$b = New-Object byte[] 33; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)`)
+- Docker도 `.env`의 `JWT_SECRET` 하나로 두 서비스에 같이 적용
+- 토큰 규격: HS256, `sub` = userId, `role`(USER/ADMIN), `iss` = account-service, `iat`, `exp`(필수, 1시간)
 
 로그인 흐름
 
@@ -507,6 +567,12 @@ jwt:
 - **로그인은 되는데 다른 요청이 전부 401 `UNAUTHORIZED`**
   - account-service와 gateway의 JWT 키가 같은지 확인
 
+- **account-service 또는 api-gateway가 기동할 때 `JWT_SECRET` 오류**
+  - `.env`의 `JWT_SECRET`이 비어 있거나, Base64가 아니거나, 디코딩 후 32바이트 미만 → [JWT 키](#-jwt-키)대로 값을 채움
+
+- **Gateway(8080)로 호출하면 `401`, 서비스 포트로 직접 호출하면 정상**
+  - 정상. Gateway는 `Authorization: Bearer {accessToken}`이 필요 (공개 경로 제외). 만료는 `TOKEN_EXPIRED`이니 다시 로그인
+
 - **Gateway 500/503: `Unable to find instance`**
   - 서비스 시작 직후 → Eureka 등록까지 약 30초 후 재시도
 
@@ -518,3 +584,11 @@ jwt:
 
 - **Docker 앱이 종료됨**
   - 메모리 부족 확인 → Colima: `colima start --memory 6 --cpus 4`
+
+- **Docker에서 서비스가 `unhealthy`이거나 `starting`에서 안 넘어감**
+  - `docker-compose logs {서비스 이름}`에서 `APPLICATION FAILED`나 `ERROR`를 확인한다
+  - `JWT_SECRET`(account, gateway) 또는 서비스별 DB 비밀번호가 `.env`에 비어 있거나 형식이 틀리면 기동에 실패한다 → [JWT 키](#-jwt-키), [DB와 설정](#10-db와-설정)
+  - 서비스는 postgres, kafka, `kafka-init`(토픽 생성 완료), eureka-server가 준비된 뒤에 시작한다. 앞 단계가 `healthy`인지 `docker-compose ps`로 본다
+
+- **`docker-compose up`을 쳤더니 이미지 빌드 오류 (`build/libs/*.jar` 없음)**
+  - jar를 먼저 빌드한다: `./gradlew build -x test`. 인프라만 필요하면 서비스 이름 없이 `up` 하지 말고 `docker-compose up -d postgres kafka kafka-init kafka-ui`

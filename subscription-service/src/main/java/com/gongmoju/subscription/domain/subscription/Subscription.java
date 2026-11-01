@@ -24,7 +24,11 @@ import java.util.UUID;
 @Getter
 @Entity
 @Table(name = "subscription",
-        indexes = @Index(name = "ix_subscription_ipo_status", columnList = "ipo_id, status"))
+        indexes = {
+                @Index(name = "ix_subscription_ipo_status", columnList = "ipo_id, status"),
+                // 내 청약 목록 조회 (F-04): 회원의 청약을 최신순으로
+                @Index(name = "ix_subscription_user_created", columnList = "user_id, created_at DESC")
+        })
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Subscription extends BaseEntity {
 

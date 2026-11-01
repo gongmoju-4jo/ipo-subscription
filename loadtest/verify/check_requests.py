@@ -28,30 +28,37 @@ def parse(line):
     return None
 
 
+def load_rows(path):
+    rows = []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            d = parse(line)
+            if d:
+                rows.append(d)
+    return rows
+
+
+def classify(r):
+    s = r["status"]
+    if s == 202: return "시스템 성공 (202)"
+    if s == 422 and r.get("code") == "SUBSCRIPTION_CLOSED": return "업무 거절: 마감 (422)"
+    if 400 <= s < 500: return "그 밖의 4xx"
+    if s >= 500: return "시스템 오류: 5xx"
+    return "시스템 오류: 타임아웃, 연결 실패 (상태 0)"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("log")
     ap.add_argument("--expect-requests", type=int)
     args = ap.parse_args()
 
-    rows = []
-    with open(args.log, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            d = parse(line)
-            if d:
-                rows.append(d)
+    rows = load_rows(args.log)
     total = len(rows)
     by_status = collections.Counter(r["status"] for r in rows)
     by_code = collections.Counter((r["status"], r.get("code") or "-") for r in rows)
 
-    def cls(r):
-        s = r["status"]
-        if s == 202: return "시스템 성공 (202)"
-        if s == 422 and r.get("code") == "SUBSCRIPTION_CLOSED": return "업무 거절: 마감 (422)"
-        if 400 <= s < 500: return "그 밖의 4xx"
-        if s >= 500: return "시스템 오류: 5xx"
-        return "시스템 오류: 타임아웃, 연결 실패 (상태 0)"
-    by_class = collections.Counter(cls(r) for r in rows)
+    by_class = collections.Counter(classify(r) for r in rows)
 
     print(f"요청 수: {total}")
     print("상태 코드별:", dict(sorted(by_status.items())))

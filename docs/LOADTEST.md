@@ -27,6 +27,8 @@
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js` |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
 | `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 10종 실행 |
+| `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
+| `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
 | `loadtest/sql/slow-queries.sql` | 슬로우 쿼리 확인 |
 
 모니터링은 `docker-compose up`에 함께 올라옵니다: Prometheus `http://localhost:9090`, Grafana `http://localhost:3000` (계정 `admin`, 비밀번호는 `.env`의 `GRAFANA_ADMIN_PASSWORD`). Grafana에 "측정 대시보드"가 자동으로 등록됩니다.
@@ -41,7 +43,8 @@
 | --- | --- | --- |
 | k6 | k6를 설치하고 실행 (`K6_MODE=local`) | `grafana/k6` 이미지로 실행 (`K6_MODE=container`) |
 | Gateway 주소 | `http://localhost:8080` | `http://api-gateway:8080` (호스트 포트를 거치지 않음) |
-| 회원 시드 (Python) | Python 3이 설치돼 있으면 그대로 실행 | `python:3.12-slim` 컨테이너로 실행 |
+| 회원 시드, 보고서 (Python) | Python 3이 설치돼 있으면 그대로 실행 | `python:3.12-slim` 컨테이너로 실행 |
+| Prometheus 주소 (보고서) | `http://localhost:9090` | `PROMETHEUS_URL=http://prometheus:9090` |
 | 자원 상한 | 없음 (내 PC 자원을 그대로 씀) | `K6_CPUS`, `K6_MEMORY`로 k6 컨테이너 상한 설정 |
 
 - `K6_MODE`를 주지 않으면(`auto`) k6가 설치돼 있을 때 설치형, 없으면 컨테이너로 실행합니다.
@@ -56,6 +59,8 @@
 cp .env.example .env     # GRAFANA_ADMIN_PASSWORD에 직접 정한 값을 넣는다 (기본값 없음, 비어 있으면 Grafana가 시작되지 않는다)
 ./gradlew build -x test && docker-compose up -d --build
 ```
+
+기동 직후 약 30초는 Gateway가 서비스를 찾지 못해 503이 날 수 있습니다. 시드 스크립트는 최대 90초까지 기다리며 다시 시도합니다.
 
 회원 시드는 BCrypt 때문에 CPU를 많이 써서, 자원 상한을 건 상태에서는 1,000명에 2분 넘게 걸립니다. **시드는 상한 없이 먼저 하고, 시드가 끝난 뒤 상한을 적용합니다.**
 
@@ -107,6 +112,7 @@ loadtest/run-k6.sh s0 --ipo $IPO --run-id $RUN                                  
 python loadtest/verify/check_requests.py loadtest/results/$RUN/requests.log --expect-requests 1000    # 4. 요청 로그 분석
 loadtest/verify.sh --ipo $IPO --run-id $RUN                                                           # 5. 정합성 SQL
 docker exec -i ipo-postgres psql -U postgres -d ipo -f - < loadtest/sql/slow-queries.sql              # 6. 슬로우 쿼리 확인
+python loadtest/report.py --run-id $RUN                                                               # 7. 회차 보고서 생성
 ```
 
 - 2, 6번은 `compose.perf.yml`로 띄웠을 때만 동작합니다 (`pg_stat_statements` 필요).
@@ -114,6 +120,7 @@ docker exec -i ipo-postgres psql -U postgres -d ipo -f - < loadtest/sql/slow-que
 - 3번 종료 코드가 99이면 합격 기준을 어긴 것입니다 (6장).
 - 5번의 정합성 SQL 대부분은 Consumer가 구현된 뒤에야 의미 있는 값이 나옵니다. 그 전에는 청약 행이 생기지 않습니다.
 - 5번 전에 Kafka Consumer lag이 0이고 `PENDING`이 0건인지 확인합니다 (Kafka-UI Consumers 탭 또는 `kafka-consumer-groups.sh --describe`).
+- 7번은 `results/$RUN/report.md`를 만듭니다 (k6 요약, 결과 분류, 서비스별 서버 지표). Prometheus가 구간 끝 이후의 수집을 마칠 때까지 몇 초 기다립니다. 5, 6번까지 끝낸 뒤에 실행하면 `precheck.txt`, `sql_result.txt`도 원본 목록에 들어갑니다. 컨테이너에서 실행하면 `PROMETHEUS_URL=http://prometheus:9090`을 줍니다.
 - 측정 후 Grafana "측정 대시보드"에서 측정 구간을 캡처합니다.
 
 같은 조건으로 최소 3회 반복하고, 첫 회차는 워밍업(JVM, 커넥션 풀)으로 버립니다. 개선 전후 비교는 한 번에 하나만 바꿉니다.
@@ -132,6 +139,20 @@ docker exec -i ipo-postgres psql -U postgres -d ipo -f - < loadtest/sql/slow-que
 - S3의 비율은 가정한 값이라 `S3_RESEND`, `S3_SECOND`, `S3_SECOND_FROM`으로 바꿀 수 있습니다.
 - S0~S4 모두 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`).
 
+### S1 요청 속도 정하기
+
+S1의 속도는 한계를 찾은 뒤 그 **50~70%**로 고정합니다. 한계 탐색 스크립트가 속도를 올려 가며 단계마다 새 공모주로 짧게 실행합니다.
+
+```bash
+loadtest/find-limit.sh                                  # 기본 50, 100, 200, 400, 800건/초를 단계당 20초씩
+loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
+```
+
+- 한계 신호는 **평균 응답 500ms 초과, 실패율 1% 이상, 밀린 반복(`dropped_iterations`) 1건 이상** 중 하나입니다. 처음 한계에 닿으면 멈추고(`--all`이면 끝까지), 그 속도의 50~70%를 추천합니다.
+- 결과는 `results/limit-{시각}/limit.md`, 단계별 원본은 `results/limit-{시각}-r{속도}/`에 남습니다.
+- 서비스를 새로 띄운 직후 첫 단계는 워밍업(JVM, 커넥션 풀)의 영향으로 낮게 나올 수 있어서, 한계에 닿은 속도를 한 번 더 확인합니다.
+- 고른 속도는 `-e RATE=...`로 넘기거나 `loadtest/k6/s1.js`의 기본값으로 정하고, 측정 전에 확정합니다.
+
 ## 6. 결과 파일
 
 `loadtest/results/{run_id}/`에 저장됩니다.
@@ -142,10 +163,13 @@ docker exec -i ipo-postgres psql -U postgres -d ipo -f - < loadtest/sql/slow-que
 | `requests.log` | 요청마다 requestId, subscriptionId, 상태 코드 |
 | `precheck.txt` | 사전 점검 결과 (DLT 메시지 수 포함) |
 | `sql_result.txt` | 정합성 SQL 결과 |
+| `report.md` | 회차 보고서 (k6 요약, 결과 분류, 서비스별 서버 지표) |
+| `prometheus.json` | 보고서의 서버 지표 질의와 응답 원본 |
 
 - 합격 기준은 처리량 200건/초 이상, 평균 500ms 이하, 오류율 1% 미만이고, 목표 기준은 400건/초 이상, 평균 250ms 이하, p95 500ms 이하, 오류 0입니다. 기본은 합격 기준이고 `-e THRESHOLD=goal`로 목표 기준을 씁니다. 기준은 측정 전에 정하고 측정 후에는 바꾸지 않습니다.
 - 기준을 어기면 종료 코드 99입니다. **`summary.json`의 `thresholds`는 `true`가 위반, `false`가 통과**입니다.
 - 오류율은 시스템 오류(5xx, 타임아웃, 연결 실패)만 셉니다. 업무 거절(이중청약, 잔액 부족, 마감)은 오류율에서 제외하고 `check_requests.py`의 결과 분류로 봅니다.
+- 한계 탐색 결과는 `loadtest/results/limit-{시각}/`에 따로 남습니다.
 - 결과 폴더를 레포에 올릴지는 정해지지 않았습니다 (`.gitignore`에 넣지 않았습니다).
 
 ## 7. 환경변수
@@ -161,10 +185,12 @@ docker exec -i ipo-postgres psql -U postgres -d ipo -f - < loadtest/sql/slow-que
 | `K6_CPUS`, `K6_MEMORY` | 없음 | `run-k6.sh` (컨테이너 실행, 예: `1.0`, `512m`) |
 | `BASE_URL` | 로컬 `http://localhost:8080`, 컨테이너 `http://api-gateway:8080` | `run-k6.sh`, `seed_users.py` |
 | `LOADTEST_PASSWORD` | `loadtest1234` | `seed_users.py` (시드 회원의 비밀번호) |
+| `PROMETHEUS_URL` | `http://localhost:9090` | `report.py` (`--prometheus`로도 지정) |
 
 ## 8. 주의
 
 - 측정 중에는 다른 무거운 프로그램(브라우저, 빌드, IDE 인덱싱)을 끕니다. IntelliJ를 켜 두었다면 서비스는 Docker에서만 띄우고, 노트북은 전원을 연결합니다.
 - 토큰은 발급 후 1시간 안에 모든 회차를 끝냅니다. 넘으면 401 `TOKEN_EXPIRED`가 섞입니다 (`precheck.sh`가 50분을 넘으면 알려 줍니다).
+- 보고서의 서버 지표는 구간 안의 모든 요청을 셉니다 (앞뒤 여유 10초 포함). 서버 요청 수가 k6 요청 수와 다르면 시드나 이전 회차의 요청이 섞인 것이니, 시드나 이전 회차 직후에는 바로 측정하지 않습니다.
 - 한 요청은 한 회원입니다. 같은 회원이 같은 공모주에 여러 번 요청하면 이중청약 거절이 섞입니다.
 - 결과를 쓸 때는 "로컬 단일 머신, Docker, 인스턴스 1개" 같은 환경 한계를 같이 씁니다. 측정하지 않은 값은 "측정하지 않음"이라고 씁니다.

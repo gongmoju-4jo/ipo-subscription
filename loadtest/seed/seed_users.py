@@ -25,12 +25,15 @@ from concurrent.futures import ThreadPoolExecutor
 NS = uuid.UUID("6f1b6c5e-0000-4000-8000-0000000000a1")  # 고정 requestId 생성용 네임스페이스
 
 
-def call(base, method, path, body=None, token=None, retries=4):
+def call(base, method, path, body=None, token=None, retries=4, wait_503=90):
+    """503(Gateway가 서비스를 아직 못 찾음)은 기동 직후 최대 30초쯤 나오므로 wait_503초까지 기다리며 다시 시도한다."""
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
     data = json.dumps(body).encode() if body is not None else None
-    for attempt in range(retries):
+    deadline = time.time() + wait_503
+    attempt = 0
+    while True:
         req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
@@ -42,15 +45,15 @@ def call(base, method, path, body=None, token=None, retries=4):
                 payload = json.loads(raw) if raw else {}
             except ValueError:
                 payload = {}
-            if e.code == 503 and attempt < retries - 1:  # Gateway가 서비스를 아직 못 찾는 경우
-                time.sleep(2 + attempt * 2)
+            if e.code == 503 and time.time() < deadline:
+                time.sleep(3)
                 continue
             return e.code, payload
         except (urllib.error.URLError, ConnectionError, TimeoutError):
-            if attempt == retries - 1:
+            attempt += 1
+            if attempt >= retries:
                 raise
             time.sleep(1 + attempt)
-    raise RuntimeError("unreachable")
 
 
 def rid(*parts):

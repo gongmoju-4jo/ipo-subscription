@@ -130,12 +130,13 @@ docker-compose down -v                                     # 종료 + DB, Kafka 
 
 - 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키, DB 비밀번호(관리자 1개, 서비스별 3개). compose가 `.env`를 읽어 컨테이너에 환경변수로 전달한다 (컨테이너 안에는 `.env` 파일이 없다)
 - ⚠️ 코드 수정 후엔 위 `실행` 명령 그대로 (`./gradlew build` 빠지면 예전 코드로 뜸). 한 서비스만 고쳤다면 `./gradlew build -x test && docker-compose up -d --build {서비스 이름}`
-- 📌 접속은 `http://localhost:8080`(게이트웨이)만 열려 있다 (내 PC에서만 접속되도록 127.0.0.1에 바인딩). 서비스 포트(8081~8083)와 Eureka 대시보드(8761)는 열지 않는다 → 서비스 포트 직접 접속 ❌
+- 📌 내 PC에 열리는 포트는 `http://localhost:8080`(게이트웨이)과 `http://localhost:8761`(Eureka 대시보드) 둘뿐이다 (둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩). 서비스 포트(8081~8083)는 열지 않는다 → 서비스 포트 직접 접속 ❌
   - 서비스는 토큰 없이 `X-User-Id` 헤더만으로 호출되므로 외부에 열면 안 된다. 서비스별 Swagger도 쓸 수 없고 통합 Swagger(`http://localhost:8080/swagger-ui/index.html`)를 쓴다
-  - Eureka 등록 확인: `docker-compose exec eureka-server curl -s -H "Accept: application/json" http://localhost:8761/eureka/apps`
+  - Eureka 등록 확인은 IntelliJ 때와 같이 `http://localhost:8761` 화면에서 한다
+  - Eureka 포트가 이미 사용 중이거나 Windows 예약 포트라 기동되지 않으면 `.env`에서 `EUREKA_PORT`(기본 8761)를 바꾼다
 - 기동 순서는 compose가 제어한다: postgres, kafka 준비 → 토픽 생성(`kafka-init`) → eureka-server → 서비스. 서비스가 모두 `healthy`여도 Gateway가 서비스를 찾는 데 최대 30초 걸려 처음 요청이 503일 수 있다
 - ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너까지 전부 올라온다.** jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui`)
-- ⚠️ **같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다** (포트 충돌, Eureka 중복 등록). Eureka 포트를 열지 않았으므로 일부는 IntelliJ, 일부는 Docker로 섞는 구성도 안 된다
+- ⚠️ **같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다** (포트 충돌, Eureka 중복 등록). 특히 IntelliJ의 Eureka를 켠 채 Docker 전체를 띄우면 8761이 충돌한다. 일부 서비스만 IntelliJ로 띄워 컨테이너 Eureka에 붙이는 구성은 확인하지 않았고 지원하지 않는다
 - 📌 **Docker 메모리 4GB 이상 권장** (Kafka 포함 시 2GB 부족)
   - Colima: `colima stop && colima start --cpus 4 --memory 6` / Docker Desktop: Settings → Resources → Memory
 
@@ -180,7 +181,7 @@ docker-compose down -v                                     # 종료 + DB, Kafka 
 - 로컬에서 먼저 확인: `./gradlew build` (Testcontainers 테스트가 있어 Docker를 켜 둔다)
 - 새로 push하면 같은 PR의 이전 실행은 취소되고 새로 실행된다
 - 포크에서 올린 PR은 본문 표시가 갱신되지 않는다 (빌드, 테스트는 실행됨)
-- 머지 차단: `build`를 필수 체크로 지정하기 전에는 CI가 실패해도 머지 버튼은 눌린다. 지정되면 통과해야 머지할 수 있다 (적용 시점은 팀 결정 후 이 문서를 갱신)
+- 머지 차단: `build`를 필수 체크로 지정하기 전에는 CI가 실패해도 머지 버튼은 눌린다. 지정되면 통과해야 머지할 수 있다
 - `develop → main` PR에 대한 CI는 아직 없다 (첫 릴리스 때 추가)
 
 ---

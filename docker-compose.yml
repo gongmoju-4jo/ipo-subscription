@@ -97,8 +97,10 @@ services:
 
   # ===== 서비스 컨테이너 =====
   # 실행 전에 jar를 빌드해야 한다: ./gradlew build -x test (Dockerfile이 {모듈}/build/libs/*.jar를 복사한다)
-  # 호스트 포트는 api-gateway(8080)만 연다. 서비스(8081~8083)는 토큰 없이 X-User-Id 헤더만으로 호출되므로 열지 않는다
+  # 호스트 포트는 api-gateway(8080)와 eureka-server 대시보드(8761)만 연다. 둘 다 127.0.0.1에만 바인딩한다
+  # 서비스(8081~8083)는 토큰 없이 X-User-Id 헤더만으로 호출되므로 열지 않는다
   # 앱은 .env 파일을 컨테이너 안에서 읽지 못하므로 필요한 값을 환경변수로 받는다 (값은 docker-compose가 .env에서 읽어 전달한다)
+  # 대시보드: http://localhost:8761 (EUREKA_PORT로 변경 가능. Windows 예약 포트에 걸리면 .env에서 바꾼다)
   eureka-server:
     build:
       context: .
@@ -107,6 +109,8 @@ services:
     container_name: ipo-eureka-server
     environment:
       EUREKA_HOSTNAME: eureka-server
+    ports:
+      - "127.0.0.1:${EUREKA_PORT:-8761}:8761"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8761/actuator/health"]
       interval: 5s

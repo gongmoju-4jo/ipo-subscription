@@ -35,7 +35,9 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// 접수 처리(검증, 저장, 증거금 확보 요청 기록)를 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요
+/**
+ * 접수 처리(검증, 저장, 증거금 확보 요청 기록)를 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
+ */
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
 @DisplayName("접수 처리 (PostgreSQL)")
@@ -63,7 +65,9 @@ class SubscriptionAcceptServiceTest {
     private UUID accountId;
     private Instant receivedAt;
 
-    // 공모주 생성 메서드가 없으므로(시드 데이터만 사용) SQL로 직접 저장함
+    /**
+     * 공모주 생성 메서드가 없으므로(시드 데이터만 사용) SQL로 직접 저장함.
+     */
     @BeforeEach
     void setUp() {
         ipoId = UUID.randomUUID();
@@ -200,7 +204,7 @@ class SubscriptionAcceptServiceTest {
     }
 
     @Test
-    @DisplayName("subscriptionId가 userId와 requestId로 계산한 값과 다르면 InvalidEventException이 나고 아무것도 저장하지 않는다 (검증 2)")
+    @DisplayName("subscriptionId가 userId와 requestId로 계산한 값과 다르면 InvalidEventException이 나고 아무것도 저장하지 않는다")
     void accept_throws_whenSubscriptionIdDoesNotMatch() {
         // given
         UUID requestId = UUID.randomUUID();
@@ -214,7 +218,7 @@ class SubscriptionAcceptServiceTest {
     }
 
     @Test
-    @DisplayName("종목이 없으면 InvalidEventException이 나고 아무것도 저장하지 않는다 (검증 3)")
+    @DisplayName("종목이 없으면 InvalidEventException이 나고 아무것도 저장하지 않는다")
     void accept_throws_whenIpoDoesNotExist() {
         // given
         UUID requestId = UUID.randomUUID();
@@ -227,7 +231,7 @@ class SubscriptionAcceptServiceTest {
     }
 
     @Test
-    @DisplayName("receivedAt이 청약 마감 시각 이후이면 InvalidEventException이 나고 아무것도 저장하지 않는다 (검증 3)")
+    @DisplayName("receivedAt이 청약 마감 시각 이후이면 InvalidEventException이 나고 아무것도 저장하지 않는다")
     void accept_throws_whenReceivedAtIsAfterEnd() {
         // given
         UUID requestId = UUID.randomUUID();
@@ -283,7 +287,9 @@ class SubscriptionAcceptServiceTest {
                 ipoId, requestedQuantity, receivedAt);
     }
 
-    // 두 스레드가 같은 시점에 각자의 트랜잭션으로 처리함. 결과는 처리 결과(AcceptResult) 또는 던져진 예외(Throwable)이며 순서는 제출 순서와 같음
+    /**
+     * 두 스레드가 같은 시점에 각자의 트랜잭션으로 처리함. 결과는 처리 결과(AcceptResult) 또는 던져진 예외(Throwable)이며 순서는 제출 순서와 같음.
+     */
     private List<Object> acceptConcurrently(SubscriptionRequested first, SubscriptionRequested second) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CyclicBarrier barrier = new CyclicBarrier(2);

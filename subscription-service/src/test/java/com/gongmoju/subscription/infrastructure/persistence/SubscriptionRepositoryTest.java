@@ -36,7 +36,9 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// 부분 UNIQUE(`uk_subscription_active`)와 `ON CONFLICT`는 H2에서 지원되지 않으므로 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요
+/**
+ * 부분 UNIQUE({@code uk_subscription_active})와 {@code ON CONFLICT}는 H2에서 지원되지 않으므로 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
+ */
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
 @DisplayName("청약 저장소 (PostgreSQL)")
@@ -66,7 +68,9 @@ class SubscriptionRepositoryTest {
     private Ipo ipo;
     private UUID userId;
 
-    // 공모주 생성 메서드가 없으므로(시드 데이터만 사용) SQL로 직접 저장함
+    /**
+     * 공모주 생성 메서드가 없으므로(시드 데이터만 사용) SQL로 직접 저장함.
+     */
     @BeforeEach
     void setUp() {
         ipoId = UUID.randomUUID();
@@ -106,7 +110,7 @@ class SubscriptionRepositoryTest {
         assertThat(saved.getLastRequestedAt()).isNotNull();
         assertThat(saved.getMarginAmount()).isEqualTo(1_500_000);
         assertThat(saved.getReceivedAt()).isEqualTo(FIRST_RECEIVED_AT);
-        // 검증 5가 트랜잭션 밖에서도 종목 ID를 비교할 수 있어야 함 (공모주는 `LAZY`)
+        // 재전송 내용 비교가 트랜잭션 밖에서도 종목 ID를 비교할 수 있어야 함 (공모주는 `LAZY`)
         assertThat(saved.getIpo().getId()).isEqualTo(ipoId);
     }
 
@@ -329,7 +333,9 @@ class SubscriptionRepositoryTest {
         return transactionTemplate.execute(status -> subscriptionRepository.insertIfAbsent(subscription));
     }
 
-    // 두 스레드가 `CyclicBarrier`로 같은 시점에 출발하여 각자의 트랜잭션으로 저장함. 결과는 저장 여부(`Boolean`) 또는 던져진 예외(`Throwable`)이며 순서는 제출 순서와 같음
+    /**
+     * 두 스레드가 {@code CyclicBarrier}로 같은 시점에 출발하여 각자의 트랜잭션으로 저장함. 결과는 저장 여부({@code Boolean}) 또는 던져진 예외({@code Throwable})이며 순서는 제출 순서와 같음.
+     */
     private List<Object> insertConcurrently(Subscription first, Subscription second) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CyclicBarrier barrier = new CyclicBarrier(2);
@@ -354,7 +360,9 @@ class SubscriptionRepositoryTest {
         }
     }
 
-    // 같은 requestId의 중복 저장 결과: 저장하지 않고 `false`를 반환했거나, `uk_subscription_active` 위반으로 예외가 난 경우
+    /**
+     * 같은 requestId의 중복 저장 결과: 저장하지 않고 {@code false}를 반환했거나, {@code uk_subscription_active} 위반으로 예외가 난 경우.
+     */
     private boolean isDuplicateRequestOutcome(Object outcome) {
         if (Boolean.FALSE.equals(outcome)) {
             return true;

@@ -19,7 +19,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-@DisplayName("접수 Consumer 저장 전 검증 (검증 2, 3)")
+@DisplayName("접수 Consumer 저장 전 검증 (subscriptionId 재계산, 종목)")
 class SubscriptionRequestValidatorTest {
 
     private static final Instant RECEIVED_AT = Instant.parse("2026-10-27T06:59:58.123Z");
@@ -55,7 +55,7 @@ class SubscriptionRequestValidatorTest {
     }
 
     @Test
-    @DisplayName("subscriptionId가 userId와 requestId로 계산한 값과 다르면 종목을 조회하지 않고 InvalidEventException이 난다 (검증 2)")
+    @DisplayName("subscriptionId가 userId와 requestId로 계산한 값과 다르면 종목을 조회하지 않고 InvalidEventException이 난다")
     void validate_throws_whenSubscriptionIdDoesNotMatch() {
         // given
         SubscriptionRequested tampered = new SubscriptionRequested(requestId, UUID.randomUUID(), userId,
@@ -69,7 +69,7 @@ class SubscriptionRequestValidatorTest {
     }
 
     @Test
-    @DisplayName("종목이 없으면 InvalidEventException이 난다 (검증 3)")
+    @DisplayName("종목이 없으면 InvalidEventException이 난다")
     void validate_throws_whenIpoDoesNotExist() {
         // given
         when(ipoRepository.findById(ipoId)).thenReturn(Optional.empty());
@@ -81,7 +81,7 @@ class SubscriptionRequestValidatorTest {
     }
 
     @Test
-    @DisplayName("receivedAt이 청약 마감 시각과 같거나 이후이면 InvalidEventException이 난다 (검증 3)")
+    @DisplayName("receivedAt이 청약 마감 시각과 같거나 이후이면 InvalidEventException이 난다")
     void validate_throws_whenReceivedAtIsNotBeforeEnd() {
         // given
         when(ipo.isBeforeSubscriptionEnd(RECEIVED_AT)).thenReturn(false);
@@ -93,7 +93,7 @@ class SubscriptionRequestValidatorTest {
     }
 
     @Test
-    @DisplayName("증거금률이 100%가 아닌 종목이면 InvalidEventException이 난다 (검증 3)")
+    @DisplayName("증거금률이 100%가 아닌 종목이면 InvalidEventException이 난다")
     void validate_throws_whenMarginRateIsNotFull() {
         // given
         when(ipo.hasFullMarginRate()).thenReturn(false);

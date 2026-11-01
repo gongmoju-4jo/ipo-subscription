@@ -15,7 +15,7 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@DisplayName("subscription.requested 메시지를 접수 내용으로 변환 (검증 1)")
+@DisplayName("subscription.requested 메시지를 접수 내용으로 변환 (필수 필드, 형식 검증)")
 class SubscriptionRequestedMessageTest {
 
     private static final UUID EVENT_ID = UUID.randomUUID();

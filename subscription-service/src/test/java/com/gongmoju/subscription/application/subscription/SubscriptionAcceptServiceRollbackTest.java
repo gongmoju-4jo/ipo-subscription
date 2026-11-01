@@ -25,7 +25,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 
-// 증거금 확보 요청 기록이 실패하면 청약 저장도 함께 롤백되는지 검증함 (같은 트랜잭션). 기록기를 실패하도록 대체하므로 별도 클래스로 분리함. Docker 필요
+/**
+ * 증거금 확보 요청 기록이 실패하면 청약 저장도 함께 롤백되는지 검증함 (같은 트랜잭션). 기록기를 실패하도록 대체하므로 별도 클래스로 분리함. Docker 필요.
+ */
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
 @DisplayName("접수 처리 롤백 (PostgreSQL)")
@@ -47,7 +49,9 @@ class SubscriptionAcceptServiceRollbackTest {
 
     private UUID ipoId;
 
-    // 공모주 생성 메서드가 없으므로(시드 데이터만 사용) SQL로 직접 저장함
+    /**
+     * 공모주 생성 메서드가 없으므로(시드 데이터만 사용) SQL로 직접 저장함.
+     */
     @BeforeEach
     void setUp() {
         ipoId = UUID.randomUUID();

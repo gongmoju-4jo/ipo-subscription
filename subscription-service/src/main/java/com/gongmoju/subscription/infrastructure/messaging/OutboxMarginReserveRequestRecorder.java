@@ -8,8 +8,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
-// `margin.reserve-requested`를 `Outbox`에 기록함 (이벤트 명세 2-1). 파티션 키는 `accountId`, 집계 주체는 청약(`SUBSCRIPTION`, ERD)
-// payload에는 도메인 필드만 담고 공통 필드(`eventId`, `eventType`, `occurredAt`)는 발행기가 붙임
+/**
+ * {@code margin.reserve-requested}를 {@code Outbox}에 기록함 (이벤트 명세 2-1). 파티션 키는 {@code accountId}, 집계 주체는 청약({@code SUBSCRIPTION}, ERD).
+ * payload에는 도메인 필드만 담고 공통 필드({@code eventId}, {@code eventType}, {@code occurredAt})는 발행기가 붙임.
+ */
 @Component
 class OutboxMarginReserveRequestRecorder implements MarginReserveRequestRecorder {
 
@@ -40,7 +42,9 @@ class OutboxMarginReserveRequestRecorder implements MarginReserveRequestRecorder
         }
     }
 
-    // 이벤트 명세 2-1 `margin.reserve-requested`의 도메인 필드. `amount`는 청약의 `margin_amount`와 같은 값
+    /**
+     * 이벤트 명세 2-1 {@code margin.reserve-requested}의 도메인 필드. {@code amount}는 청약의 {@code margin_amount}와 같은 값.
+     */
     private record Payload(UUID subscriptionId, UUID userId, UUID accountId, UUID ipoId, long amount) {
     }
 }

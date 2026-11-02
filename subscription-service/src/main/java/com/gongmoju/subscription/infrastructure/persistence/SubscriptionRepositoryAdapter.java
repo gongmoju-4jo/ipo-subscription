@@ -37,6 +37,11 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     }
 
     @Override
+    public Optional<Subscription> findById(UUID subscriptionId) {
+        return jpaRepository.findById(subscriptionId);
+    }
+
+    @Override
     public boolean insertIfAbsent(Subscription subscription) {
         RejectReason rejectReason = subscription.getRejectReason();
         int inserted = jpaRepository.insertIfAbsent(subscription.getId(), subscription.getRequestId(),

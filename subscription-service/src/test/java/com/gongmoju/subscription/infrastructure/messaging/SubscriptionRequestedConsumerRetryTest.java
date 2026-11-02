@@ -10,6 +10,7 @@ import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -71,11 +73,22 @@ class SubscriptionRequestedConsumerRetryTest {
         registry.add("spring.kafka.bootstrap-servers", kafka::getBootstrapServers);
     }
 
+    /**
+     * 컨텍스트(리스너)가 시작되기 전에 토픽을 먼저 만듦 (운영은 kafka-init이 만듦). 리스너가 먼저 구독하면 브로커 기본값(파티션 1개)으로 자동 생성되기 때문.
+     */
+    @BeforeAll
+    static void createTopics() throws Exception {
+        KafkaTestSupport.createTopicsWithDlt(kafka.getBootstrapServers(), TOPIC);
+    }
+
     @MockitoBean
     private MarginReserveRequestRecorder marginReserveRequestRecorder;
 
     @Autowired
     private KafkaTemplate<String, String> kafkaTemplate;
+
+    @Autowired
+    private KafkaListenerEndpointRegistry listenerRegistry;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -90,7 +103,9 @@ class SubscriptionRequestedConsumerRetryTest {
      * 공모주 생성 메서드가 없으므로(시드 데이터만 사용) SQL로 직접 저장함.
      */
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
+        // 리스너가 파티션을 모두 할당받은 뒤 시작함
+        KafkaTestSupport.awaitAssignment(listenerRegistry, TOPIC);
         ipoId = UUID.randomUUID();
         userId = UUID.randomUUID();
         jdbcTemplate.update("""

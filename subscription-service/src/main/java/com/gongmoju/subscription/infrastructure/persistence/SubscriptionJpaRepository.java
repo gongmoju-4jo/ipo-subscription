@@ -49,4 +49,11 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
                        @Param("attempts") int attempts, @Param("lastRequestedAt") Instant lastRequestedAt,
                        @Param("receivedAt") Instant receivedAt, @Param("now") Instant now,
                        @Param("auditor") String auditor);
+
+    // 응답에 공모주 정보가 없어서 공모주를 읽지 않는다.
+    // 메서드 이름 쿼리(findByIpoIdAndStatus)는 ipo 테이블을 조인해 조건을 걸어서, s.ipo.id로 subscription.ipo_id 컬럼에 직접 건다
+    @Query(value = "select s from Subscription s where s.ipo.id = :ipoId and s.status = :status",
+            countQuery = "select count(s) from Subscription s where s.ipo.id = :ipoId and s.status = :status")
+    Page<Subscription> findByIpoIdAndStatus(@Param("ipoId") UUID ipoId, @Param("status") SubscriptionStatus status,
+                                            Pageable pageable);
 }

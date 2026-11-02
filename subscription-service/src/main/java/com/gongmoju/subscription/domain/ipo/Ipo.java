@@ -120,4 +120,17 @@ public class Ipo extends BaseEntity {
     public boolean hasFullMarginRate() {
         return marginRate.compareTo(BigDecimal.ONE) == 0;
     }
+
+    /**
+     * 배정용 확정 청약 목록을 줄 수 있는지 검증한다 (API 명세 4.1). 마감(CLOSED) 이후에는 확정 청약이 더 생기거나 바뀌지 않는다.
+     *
+     * @throws BusinessException CLOSED가 아니면 INVALID_STATUS_TRANSITION(409)
+     */
+    public void validateClosed() {
+        if (status != IpoStatus.CLOSED) {
+            throw new BusinessException(SubscriptionErrorCode.INVALID_STATUS_TRANSITION,
+                    SubscriptionErrorCode.INVALID_STATUS_TRANSITION.getMessage(),
+                    List.of(new ApiErrorDetail("ipoId", "마감된 공모주가 아닙니다.")));
+        }
+    }
 }

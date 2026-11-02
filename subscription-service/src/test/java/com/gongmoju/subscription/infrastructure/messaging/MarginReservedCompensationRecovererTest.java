@@ -119,6 +119,37 @@ class MarginReservedCompensationRecovererTest {
     }
 
     @Test
+    @DisplayName("검증 실패가 원인 체인 안쪽에 감싸여 있어도(리스너 예외 → 트랜잭션 예외 → IllegalArgumentException) 보상을 시도하지 않고 바로 DLT로 보낸다")
+    void accept_sendsToDltWithoutCompensation_whenValidationFailureIsNestedDeeply() {
+        // given
+        ConsumerRecord<String, String> record = reservedRecord(validJson());
+        Exception original = listenerFailure(new IllegalStateException("트랜잭션 실패", new IllegalArgumentException("잘못된 값")));
+
+        // when
+        recoverer.accept(record, original);
+
+        // then
+        verifyNoInteractions(compensationService);
+        verify(deadLetterRecoverer).accept(record, original);
+    }
+
+    @Test
+    @DisplayName("원인 체인이 여러 단계여도 검증 실패가 없으면 일시 오류로 보고 보상 착수를 시도한다")
+    void accept_startsCompensation_whenNestedCauseIsNotValidationFailure() {
+        // given
+        ConsumerRecord<String, String> record = reservedRecord(validJson());
+        Exception original = listenerFailure(new IllegalStateException("트랜잭션 실패", new IllegalStateException("DB 연결 끊김")));
+        when(compensationService.startConfirmFailedCompensation(subscriptionId)).thenReturn(CompensationResult.STARTED);
+
+        // when
+        recoverer.accept(record, original);
+
+        // then
+        verify(compensationService).startConfirmFailedCompensation(subscriptionId);
+        verify(deadLetterRecoverer, never()).accept(any(), any());
+    }
+
+    @Test
     @DisplayName("본문을 읽을 수 없으면 보상 착수 없이 DLT로 보낸다")
     void accept_sendsToDlt_whenPayloadIsBroken() {
         // given

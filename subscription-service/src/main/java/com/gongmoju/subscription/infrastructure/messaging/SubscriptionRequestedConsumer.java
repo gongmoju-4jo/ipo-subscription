@@ -26,10 +26,13 @@ class SubscriptionRequestedConsumer {
     // 동시 요청으로 발생하는 이중청약 UNIQUE 위반. 롤백 후 재시도하면 기존 청약을 찾아 REJECTED로 저장됨
     static final String ACTIVE_SUBSCRIPTION_CONSTRAINT = "uk_subscription_active";
 
+    // 이벤트 명세 3-2의 Consumer 이름. 리스너마다 직접 지정
+    static final String CONSUMER_NAME = "subscription-requested";
+
     private final ObjectMapper objectMapper;
     private final SubscriptionAcceptService acceptService;
 
-    @KafkaListener(topics = SubscriptionRequestedMessage.TOPIC)
+    @KafkaListener(topics = SubscriptionRequestedMessage.TOPIC, groupId = CONSUMER_NAME)
     void consume(String payload) {
         // 필수 필드와 형식을 검증하면서 메시지를 접수 내용으로 변환함
         SubscriptionRequested event = parse(payload).toEvent();

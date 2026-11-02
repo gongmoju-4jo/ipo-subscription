@@ -39,3 +39,7 @@ ALTER TABLE outbox DROP CONSTRAINT IF EXISTS ck_outbox_retry_count;
 ALTER TABLE outbox ADD CONSTRAINT ck_outbox_retry_count CHECK (retry_count >= 0);
 -- 미발행 조회 (발행기가 published_at IS NULL인 행만 읽는다)
 CREATE INDEX IF NOT EXISTS ix_outbox_unpublished ON outbox (created_at) WHERE published_at IS NULL;
+
+-- margin_void_intent: 처음 받은 반환 사유 (margin.void-requested의 reason과 같은 값)
+ALTER TABLE margin_void_intent DROP CONSTRAINT IF EXISTS ck_margin_void_intent_reason;
+ALTER TABLE margin_void_intent ADD CONSTRAINT ck_margin_void_intent_reason CHECK (reason IN ('CONFIRM_FAILED', 'TIMEOUT', 'USER_CANCEL'));

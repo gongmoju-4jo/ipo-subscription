@@ -8,7 +8,7 @@ import org.springframework.stereotype.Repository;
 import java.util.Optional;
 import java.util.UUID;
 
-// 도메인 메서드 이름이 Spring Data 쿼리 규칙에 묶이지 않게 JPA 저장소를 감싼다
+// 도메인 repository 인터페이서와 spring data jpa 구현체를 연결하는 어댑터
 @Repository
 @RequiredArgsConstructor
 class MarginRepositoryAdapter implements MarginRepository {

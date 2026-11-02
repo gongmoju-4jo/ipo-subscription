@@ -23,4 +23,6 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
 	testImplementation 'org.testcontainers:junit-jupiter'
 	testImplementation 'org.testcontainers:postgresql'
+	// Kafka를 거치는 Consumer 통합 테스트용 (재시도, DLT). 실행 시 Docker 필요
+	testImplementation 'org.testcontainers:kafka'
 }

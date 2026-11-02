@@ -129,7 +129,9 @@ public class MarginReserveService {
         //   - 원장이 margin_id를 참조하므로 margin을 먼저 저장한다.
         //   - 저장할 때 margin_id와 created_at(reservedAt)이 정해진다.
         Margin margin = marginRepository.save(
-                Margin.withdraw(account, command.subscriptionId(), command.ipoId(), command.amount()));
+                Margin.withdraw(
+                        account, command.subscriptionId(), command.ipoId(), command.amount()
+                ));
         log.debug("[증거금 인출] margin 저장. marginId={}, status={}, createdAt={}", margin.getId(), margin.getStatus(), margin.getCreatedAt());
 
         // 9. 원장 생성, 저장: 인출 후 변경된 계좌 잔액 기록.

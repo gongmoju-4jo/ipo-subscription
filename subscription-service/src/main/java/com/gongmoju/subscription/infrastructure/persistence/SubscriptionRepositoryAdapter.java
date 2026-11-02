@@ -62,4 +62,9 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     public boolean existsActiveByIpoIdAndUserId(UUID ipoId, UUID userId) {
         return jpaRepository.existsByIpoIdAndUserIdAndStatusNotIn(ipoId, userId, INACTIVE_STATUSES);
     }
+
+    @Override
+    public Page<Subscription> findByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status, Pageable pageable) {
+        return jpaRepository.findByIpoIdAndStatus(ipoId, status, pageable);
+    }
 }

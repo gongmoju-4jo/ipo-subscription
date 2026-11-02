@@ -39,6 +39,12 @@ docker-compose ps                 # 서비스 healthy 확인. Gateway가 서비�
 Q2=100 ./scripts/happy.sh                 # Gateway(8080)를 거쳐 호출. 토큰은 출력하지 않는다
 ```
 
+> 스크립트는 시드 공모주 A, B를 사용한다. 시드의 청약 기간은 DB를 처음 만든 날 기준(첫날 10:00 ~ 다음 날 16:00)이라, 기간이 지나면 청약이 거절된다. 그때는 PostgreSQL 볼륨을 다시
+> 만든다 ([PROJECT_SETUP 10장](../PROJECT_SETUP.md#10-db와-설정)).
+>
+> 기대한 결과(`CONFIRMED`, `INSUFFICIENT_BALANCE`, `ALREADY_SUBSCRIBED`)가 아니거나 청약 응답이 202가 아니면 스크립트가 `실패: ...`를 찍고 종료 코드 1로
+> 끝난다.
+
 > 처음 실행 때 회원가입이 503이었다 (Gateway가 아직 서비스를 못 찾음). 30초쯤 뒤 다시 실행한 결과가 아래 출력이다.
 
 ## 1. 컨테이너 상태
@@ -186,6 +192,38 @@ ACC=20d804e5-bd75-4cb5-a2bd-c67bbf303dc5 SUB=c56f1326-818b-32e7-bab6-62b5e76df4f
            subscription_id            |              account_id              |  status  |   reject_reason   
 --------------------------------------+--------------------------------------+----------+-------------------
  2c8a7e42-080f-3701-914a-caa89133fbdb | 9d4e0000-0000-4000-8000-000000000002 | REJECTED | ACCOUNT_NOT_FOUND
+(1 row)
+```
+
+잔고 변화 없음 근거 (DB, 계좌 0행, 이 청약의 증거금 0행, 원장 0행)
+
+```sql
+select count(*) account_rows
+from account.account
+where account_id = '9d4e0000-0000-4000-8000-000000000002';
+select count(*) margin_rows
+from account.margin
+where subscription_id = '2c8a7e42-080f-3701-914a-caa89133fbdb';
+select count(*) ledger_rows
+from account.ledger_entry l
+         join account.margin m on l.margin_id = m.margin_id
+where m.subscription_id = '2c8a7e42-080f-3701-914a-caa89133fbdb';
+```
+
+```
+ account_rows 
+--------------
+            0
+(1 row)
+
+ margin_rows 
+-------------
+           0
+(1 row)
+
+ ledger_rows 
+-------------
+           0
 (1 row)
 ```
 

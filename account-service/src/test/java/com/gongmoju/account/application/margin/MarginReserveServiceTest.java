@@ -1,5 +1,6 @@
 package com.gongmoju.account.application.margin;
 
+import com.gongmoju.account.global.exception.InvalidEventException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,8 +27,9 @@ import java.util.concurrent.Future;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// 실제 PostgreSQL(Testcontainers)에서 증거금 인출의 정상 경로(1단계)와 거절, 선행 반환 기록(2단계)을 확인한다. Docker가 필요하다
+// 실제 PostgreSQL(Testcontainers)에서 증거금 인출의 정상 경로(1단계), 거절과 선행 반환 기록(2단계), 중복 처리(3단계)를 확인한다. Docker가 필요하다
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
 class MarginReserveServiceTest {
@@ -45,12 +47,14 @@ class MarginReserveServiceTest {
 
     private UUID userId;
     private UUID accountId;
+    private UUID ipoId;
 
     // 회원 생성 메서드 대신 SQL로 넣는다 (DepositServiceTest와 같은 방식). 예수금 20,000원으로 시작
     @BeforeEach
     void setUp() {
         userId = UUID.randomUUID();
         accountId = UUID.randomUUID();
+        ipoId = UUID.randomUUID();
         jdbcTemplate.update("""
                 INSERT INTO users (user_id, login_id, password_hash, name, role, created_at, updated_at, created_by, updated_by)
                 VALUES (?, ?, 'hash', '테스트', 'USER', now(), now(), 'test', 'test')""",
@@ -223,6 +227,137 @@ class MarginReserveServiceTest {
         assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event", Long.class)).isEqualTo(1L);
     }
 
+    @Test
+    void 같은_eventId를_다시_받으면_아무것도_하지_않는다() {
+        ReserveMarginCommand command = command(UUID.randomUUID(), 15_000);
+
+        marginReserveService.reserve(command);
+        marginReserveService.reserve(command);
+
+        assertReservedOnce(15_000);
+        assertThat(count("outbox")).isEqualTo(1L);
+        assertThat(count("processed_event")).isEqualTo(1L);
+    }
+
+    @Test
+    void 같은_eventId가_동시에_와도_한_번만_처리된다() throws Exception {
+        ReserveMarginCommand command = command(UUID.randomUUID(), 1_000);
+
+        runConcurrently(10, () -> marginReserveService.reserve(command));
+
+        assertReservedOnce(1_000);
+        assertThat(count("outbox")).isEqualTo(1L);
+        assertThat(count("processed_event")).isEqualTo(1L);
+    }
+
+    @Test
+    void PENDING인_청약을_다시_요청하면_돈은_그대로고_같은_margin_reserved를_재발행한다() {
+        UUID subscriptionId = UUID.randomUUID();
+
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+        marginReserveService.reserve(command(subscriptionId, 15_000)); // 새 eventId
+
+        assertReservedOnce(15_000);
+        List<Map<String, Object>> outbox = jdbcTemplate.queryForList("""
+                SELECT event_type, aggregate_id, payload->>'marginId' AS margin_id, payload->>'reservedAt' AS reserved_at
+                FROM outbox ORDER BY created_at""");
+        assertThat(outbox).hasSize(2);
+        assertThat(outbox).allSatisfy(row -> assertThat(row.get("event_type")).isEqualTo("margin.reserved"));
+        // 재발행은 최초 인출의 marginId, reservedAt을 그대로 쓴다
+        assertThat(outbox.get(1).get("margin_id")).isEqualTo(outbox.get(0).get("margin_id"));
+        assertThat(outbox.get(1).get("reserved_at")).isEqualTo(outbox.get(0).get("reserved_at"));
+        assertThat(count("processed_event")).isEqualTo(2L);
+    }
+
+    @Test
+    void 이미_반환된_청약을_다시_요청하면_돈도_응답도_없다() {
+        UUID subscriptionId = UUID.randomUUID();
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+        // 반환 처리는 다른 이슈라 상태만 SQL로 바꾼다
+        jdbcTemplate.update("UPDATE margin SET status = 'VOIDED' WHERE subscription_id = ?", subscriptionId);
+
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+
+        assertReservedOnce(15_000);
+        assertThat(count("outbox")).isEqualTo(1L); // 처음 인출의 응답만
+        assertThat(count("processed_event")).isEqualTo(2L);
+    }
+
+    @Test
+    void 이미_정산된_청약을_다시_요청하면_돈도_응답도_없다() {
+        UUID subscriptionId = UUID.randomUUID();
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+        jdbcTemplate.update("UPDATE margin SET status = 'POSTED', posted_amount = 10000 WHERE subscription_id = ?", subscriptionId);
+
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+
+        assertReservedOnce(15_000);
+        assertThat(count("outbox")).isEqualTo(1L);
+        assertThat(count("processed_event")).isEqualTo(2L);
+    }
+
+    @Test
+    void 같은_청약인데_금액이_다르면_예외로_롤백한다() {
+        UUID subscriptionId = UUID.randomUUID();
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+
+        assertThatThrownBy(() -> marginReserveService.reserve(command(subscriptionId, 14_000)))
+                .isInstanceOf(InvalidEventException.class);
+
+        assertMismatchRolledBack();
+    }
+
+    @Test
+    void 같은_청약인데_종목이_다르면_예외로_롤백한다() {
+        UUID subscriptionId = UUID.randomUUID();
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+
+        assertThatThrownBy(() -> marginReserveService.reserve(new ReserveMarginCommand(
+                UUID.randomUUID(), subscriptionId, userId, accountId, UUID.randomUUID(), 15_000)))
+                .isInstanceOf(InvalidEventException.class);
+
+        assertMismatchRolledBack();
+    }
+
+    @Test
+    void 같은_청약인데_계좌가_다르면_예외로_롤백한다() {
+        UUID subscriptionId = UUID.randomUUID();
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+        // 같은 회원의 다른 계좌 (소유권 검사는 통과해야 기존 margin 비교까지 간다)
+        UUID otherAccountId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO account (account_id, user_id, request_id, account_number, cash_balance, margin_balance, created_at, updated_at, created_by, updated_by)
+                VALUES (?, ?, ?, '100000000002', 20000, 0, now(), now(), 'test', 'test')""",
+                otherAccountId, userId, UUID.randomUUID());
+
+        assertThatThrownBy(() -> marginReserveService.reserve(new ReserveMarginCommand(
+                UUID.randomUUID(), subscriptionId, userId, otherAccountId, ipoId, 15_000)))
+                .isInstanceOf(InvalidEventException.class);
+
+        assertMismatchRolledBack();
+    }
+
+    // 불일치: 첫 인출만 남고 두 번째 요청은 처리 기록까지 롤백된다 (재시도 후 DLT 대상)
+    private void assertMismatchRolledBack() {
+        assertReservedOnce(15_000);
+        assertThat(count("outbox")).isEqualTo(1L);
+        assertThat(count("processed_event")).isEqualTo(1L);
+    }
+
+    // 돈이 한 번만 옮겨졌는지: 잔고, margin, 원장이 모두 1건분
+    private void assertReservedOnce(long amount) {
+        Map<String, Object> account = jdbcTemplate.queryForMap(
+                "SELECT cash_balance, margin_balance FROM account WHERE account_id = ?", accountId);
+        assertThat(account.get("cash_balance")).isEqualTo(20_000L - amount);
+        assertThat(account.get("margin_balance")).isEqualTo(amount);
+        assertThat(count("margin")).isEqualTo(1L);
+        assertThat(count("ledger_entry")).isEqualTo(1L);
+    }
+
+    private long count(String table) {
+        return jdbcTemplate.queryForObject("SELECT count(*) FROM " + table, Long.class);
+    }
+
     // 거절: 예외 없이 커밋되고, 돈은 그대로, reserve-failed 1건과 처리 기록 1건이 남는다
     private void assertRejected(UUID subscriptionId, UUID messageKeyAccountId, String reason) {
         assertNothingMoved();
@@ -257,7 +392,7 @@ class MarginReserveServiceTest {
     }
 
     private ReserveMarginCommand command(UUID subscriptionId, long amount) {
-        return new ReserveMarginCommand(UUID.randomUUID(), subscriptionId, userId, accountId, UUID.randomUUID(), amount);
+        return new ReserveMarginCommand(UUID.randomUUID(), subscriptionId, userId, accountId, ipoId, amount);
     }
 
     // threads개를 동시에 출발시킨다. 하나라도 예외면 get()에서 테스트가 실패한다

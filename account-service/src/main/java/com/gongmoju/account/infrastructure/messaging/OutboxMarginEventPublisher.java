@@ -68,7 +68,7 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
     // 증거금 이벤트 공통 저장. 메시지 키는 accountId
     private void save(String topic, UUID aggregateId, UUID accountId, Object payload) {
         outboxRepository.save(Outbox.of(AGGREGATE_TYPE, aggregateId, topic, accountId.toString(), toJson(payload)));
-        log.debug("Outbox 저장. topic={}, aggregateId={}, key={}, payload={}", topic, aggregateId, accountId, payload);
+        log.debug("[Outbox] 저장. topic={}, aggregateId={}, key={}, payload={}", topic, aggregateId, accountId, payload);
     }
 
     // 직렬화 실패 시 예외를 전파해 인출과 Outbox 저장을 같이 롤백한다. (응답 없이 돈만 이동하지 않도록)

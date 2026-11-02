@@ -8,11 +8,13 @@ import com.gongmoju.account.domain.margin.MarginEventPublisher;
 import com.gongmoju.account.domain.margin.MarginReserveFailed;
 import com.gongmoju.account.domain.margin.MarginReserved;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.UUID;
 
 // 메시지 키는 accountId (이벤트 명세 3장)
 
@@ -24,6 +26,7 @@ import java.time.format.DateTimeFormatter;
  * {@link MarginReserveService#reserve(ReserveMarginCommand)}에서 호출된다.
  * 실제 Kafka 전송은 별도 OutboxPublisher가 담당한다.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 class OutboxMarginEventPublisher implements MarginEventPublisher {
@@ -51,9 +54,7 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
                 event.subscriptionId(), event.marginId(), event.amount(),
                 EVENT_TIME_FORMAT.format(OffsetDateTime.ofInstant(event.reservedAt(), KST)));
 
-        outboxRepository.save(Outbox.of(
-                AGGREGATE_TYPE, event.marginId(), MARGIN_RESERVED,
-                event.accountId().toString(), toJson(payload)));
+        save(MARGIN_RESERVED, event.marginId(), event.accountId(), payload);
     }
 
     // 거절은 margin이 없어서 aggregateId에 청약 ID를 쓴다
@@ -61,9 +62,13 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
     public void publishReserveFailed(MarginReserveFailed event) {
         MarginReserveFailedPayload payload = new MarginReserveFailedPayload(event.subscriptionId(), event.reason().name());
 
-        outboxRepository.save(Outbox.of(
-                AGGREGATE_TYPE, event.subscriptionId(), MARGIN_RESERVE_FAILED,
-                event.accountId().toString(), toJson(payload)));
+        save(MARGIN_RESERVE_FAILED, event.subscriptionId(), event.accountId(), payload);
+    }
+
+    // 증거금 이벤트 공통 저장. 메시지 키는 accountId
+    private void save(String topic, UUID aggregateId, UUID accountId, Object payload) {
+        outboxRepository.save(Outbox.of(AGGREGATE_TYPE, aggregateId, topic, accountId.toString(), toJson(payload)));
+        log.debug("Outbox 저장. topic={}, aggregateId={}, key={}, payload={}", topic, aggregateId, accountId, payload);
     }
 
     // 직렬화 실패 시 예외를 전파해 인출과 Outbox 저장을 같이 롤백한다. (응답 없이 돈만 이동하지 않도록)

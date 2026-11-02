@@ -7,6 +7,7 @@ import com.gongmoju.account.domain.ledger.LedgerEntryRepository;
 import com.gongmoju.common.exception.BusinessException;
 import com.gongmoju.common.exception.CommonErrorCode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +21,7 @@ import java.util.UUID;
  * 계좌 잠금, 본인 확인, 중복 입금 검사, 잔고 변경 및 원장 저장을
  * 하나의 트랜잭션에서 처리한다.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DepositService {
@@ -43,6 +45,8 @@ public class DepositService {
             throw new IllegalArgumentException("입금은 requestId가 필요합니다.");
         }
 
+        log.debug("입금 시작. accountId={}, userId={}, amount={}, requestId={}", accountId, userId, amount, requestId);
+
         // 잔고 변경 전 락을 먼저 건다.
         // 이미 조회한 엔티티는 JPA 캐시에 남아 있을 수 있으므로 잠금 조회를 먼저 수행
         Account account = accountRepository.findByIdForUpdate(accountId)
@@ -56,6 +60,7 @@ public class DepositService {
         // 같은 요청 ID로 이미 처리한 입금이 있다면 기존 결과를 반환한다.
         Optional<LedgerEntry> existing = ledgerEntryRepository.findByRequestId(requestId);
         if (existing.isPresent()) { // 처리한 적 있는 경우
+            log.info("입금 재요청: 기존 결과 반환. accountId={}, requestId={}", accountId, requestId);
             return replay(existing.get(), accountId, amount);
         }
 
@@ -65,12 +70,15 @@ public class DepositService {
         try {
             account.deposit(amount);
         } catch (ArithmeticException e) {
+            log.info("입금 거절: 예수금 허용 범위 초과. accountId={}, amount={}", accountId, amount);
             throw new BusinessException(
                     CommonErrorCode.VALIDATION_ERROR, "입금 후 예수금이 허용 범위를 넘습니다.", "amount"
             );
         }
         // 변경된 잔고 기준으로 입금 원장 생성 후 저장
         LedgerEntry entry = ledgerEntryRepository.save(LedgerEntry.deposit(account, amount, requestId));
+        log.info("입금 완료. accountId={}, amount={}, cashBalanceAfter={}, requestId={}",
+                accountId, amount, entry.getCashBalanceAfter(), requestId);
         // 신규 입금 처리 결과 반환
         return DepositResult.of(entry, true);
     }
@@ -87,6 +95,8 @@ public class DepositService {
     private DepositResult replay(LedgerEntry entry, UUID accountId, long amount) {
         if (!entry.getAccount().getId().equals(accountId) ||
                 entry.getAmount() != amount) {
+            log.warn("같은 requestId로 다른 입금 요청. requestId={}, 기존 accountId={}, amount={}, 요청 accountId={}, amount={}",
+                    entry.getRequestId(), entry.getAccount().getId(), entry.getAmount(), accountId, amount);
             throw new BusinessException(
                     CommonErrorCode.DUPLICATE_RESOURCE, "같은 requestId로 다른 입금 요청이 있습니다.", "requestId"
             );

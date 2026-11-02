@@ -67,6 +67,11 @@ outbox:
     alert-threshold: 5
     send-timeout: 5s
 
+logging:
+  level:
+    # 운영 기본 INFO. 로컬에서 처리 단계를 보려면 .env에 ACCOUNT_LOG_LEVEL=DEBUG
+    com.gongmoju.account: ${ACCOUNT_LOG_LEVEL:INFO}
+
 jwt:
   # 서명 키. .env의 JWT_SECRET (api-gateway와 같은 값). 비어 있으면 기동할 때 실패한다
   secret: ${JWT_SECRET:}

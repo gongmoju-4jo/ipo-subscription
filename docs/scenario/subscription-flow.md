@@ -1,20 +1,23 @@
-# 해피 시나리오 연동 확인 (#18)
+# 청약 흐름 연동 확인: 정상 경로, 거절 경로 (#18)
 
-로그인 → 입금 → 청약 202 → 증거금 인출 → CONFIRMED, 잔액 부족 → REJECTED를 Docker로 전부 띄워서 확인했다.
+Docker로 전부 띄워서 청약 흐름을 확인했다.
+
+- 정상 경로: 로그인 → 입금 → 청약 202 → 증거금 인출 → `CONFIRMED`
+- 거절 경로: 잔액 부족, 없는 계좌, 이중청약 → `REJECTED`
 
 ## 한눈에 보기
 
-| 확인 항목                             | 결과                                                                  |
-|-----------------------------------|---------------------------------------------------------------------|
-| compose 전체 기동                     | 서비스 5개 healthy                                                      |
-| 토픽                                | 10개 + DLT 10개 = 20개, 모두 파티션 3                                       |
-| 가입 → 로그인 → 계좌 개설 → 입금 200,000     | 성공                                                                  |
-| 청약 10주 (공모주 A, 150,000원)          | 202 → 2초 뒤 `CONFIRMED`                                              |
-| 잔고                                | 예수금 50,000 / 청약증거금 150,000                                          |
-| 원장                                | 2행 (`DEPOSIT`, `MARGIN_PENDING`)                                    |
-| 잔액 부족 청약 (공모주 B 100주, 500,000원)   | 202 → 2초 뒤 `REJECTED`, `rejectReason=INSUFFICIENT_BALANCE`          |
-| 없는 계좌로 청약 (Swagger로 직접)           | 202 → 0.6초 뒤 `REJECTED`, `rejectReason=ACCOUNT_NOT_FOUND`, 잔고 변화 없음 |
-| 이중청약 (공모주 A에 requestId만 바꿔 다시 청약) | 202 → 1초 뒤 `REJECTED`, `rejectReason=ALREADY_SUBSCRIBED`, 잔고 변화 없음  |
+| 구분 | 확인 항목                             | 결과                                                                  |
+|----|-----------------------------------|---------------------------------------------------------------------|
+| 환경 | compose 전체 기동                     | 서비스 5개 healthy                                                      |
+| 환경 | 토픽                                | 10개 + DLT 10개 = 20개, 모두 파티션 3                                       |
+| 정상 | 가입 → 로그인 → 계좌 개설 → 입금 200,000     | 성공                                                                  |
+| 정상 | 청약 10주 (공모주 A, 150,000원)          | 202 → 2초 뒤 `CONFIRMED`                                              |
+| 정상 | 잔고                                | 예수금 50,000 / 청약증거금 150,000                                          |
+| 정상 | 원장                                | 2행 (`DEPOSIT`, `MARGIN_PENDING`)                                    |
+| 거절 | 잔액 부족 청약 (공모주 B 100주, 500,000원)   | 202 → 2초 뒤 `REJECTED`, `rejectReason=INSUFFICIENT_BALANCE`          |
+| 거절 | 없는 계좌로 청약 (Swagger로 직접)           | 202 → 0.6초 뒤 `REJECTED`, `rejectReason=ACCOUNT_NOT_FOUND`, 잔고 변화 없음 |
+| 거절 | 이중청약 (공모주 A에 requestId만 바꿔 다시 청약) | 202 → 1초 뒤 `REJECTED`, `rejectReason=ALREADY_SUBSCRIBED`, 잔고 변화 없음  |
 
 ## 측정 환경
 
@@ -36,7 +39,7 @@
 ```bash
 ./gradlew build -x test && docker-compose up -d --build
 docker-compose ps                 # 서비스 healthy 확인. Gateway가 서비스를 찾는 데 최대 30초 (처음 요청 503 가능)
-Q2=100 ./scripts/happy.sh                 # Gateway(8080)를 거쳐 호출. 토큰은 출력하지 않는다
+Q2=100 ./scripts/subscription-flow.sh     # Gateway(8080)를 거쳐 호출. 토큰은 출력하지 않는다
 ```
 
 > 스크립트는 시드 공모주 A, B를 사용한다. 시드의 청약 기간은 DB를 처음 만든 날 기준(첫날 10:00 ~ 다음 날 16:00)이라, 기간이 지나면 청약이 거절된다. 그때는 PostgreSQL 볼륨을 다시
@@ -89,7 +92,7 @@ subscription.requested PartitionCount: 3
 subscription.requested.DLT PartitionCount: 3
 ```
 
-## 3. 시나리오 실행 출력 (`Q2=100 ./scripts/happy.sh`)
+## 3. 정상 경로, 거절 경로 1 (잔액 부족): 스크립트 실행 출력 (`Q2=100 ./scripts/subscription-flow.sh`)
 
 > 8번 제목은 "10주"로 잘못 찍혔다. 실제로 보낸 건 100주(500,000원)다. 스크립트 제목은 고쳤다.
 
@@ -151,7 +154,7 @@ ACC=20d804e5-bd75-4cb5-a2bd-c67bbf303dc5 SUB=c56f1326-818b-32e7-bab6-62b5e76df4f
 [ntainer#0-2-C-1] c.g.a.a.margin.MarginReserveService      : [증거금 인출] 거절 INSUFFICIENT_BALANCE(예수금 부족). eventId=9d2de802-03fc-465d-9c5a-62371be72f88, subscriptionId=ff6efb7a-8cb3-384e-a047-fe9545b0871e, accountId=20d804e5-bd75-4cb5-a2bd-c67bbf303dc5, amount=500000, cashBalance=50000
 ```
 
-## 6. 실패 경로 2: 없는 계좌로 청약 (Swagger로 직접 확인)
+## 6. 거절 경로 2: 없는 계좌로 청약 (Swagger로 직접 확인)
 
 통합 Swagger에서 `investor01`로 로그인한 뒤, 본인 계좌가 아닌 accountId(Swagger 예시값)로 청약했다.
 
@@ -236,7 +239,7 @@ where m.subscription_id = '2c8a7e42-080f-3701-914a-caa89133fbdb';
 2026-11-02T22:39:41.665+09:00  INFO 1 --- [subscription-service] [ntainer#0-1-C-1] c.g.s.i.m.MarginReserveFailedConsumer    : 증거금 확보 실패 응답 처리 완료. result=REJECTED, eventId=225734ae-e4f1-4fd7-8fe4-927f0a4d283f, subscriptionId=2c8a7e42-080f-3701-914a-caa89133fbdb
 ```
 
-## 7. 실패 경로 3: 이중청약
+## 7. 거절 경로 3: 이중청약
 
 같은 사람이 같은 종목(공모주 A)에 requestId만 바꿔서 다시 청약했다. 스크립트 9, 10번 단계다 (2026-11-02 23:14 실행).
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 해피 시나리오: 가입 → 로그인 → 계좌 개설 → 입금 → 청약 202 → CONFIRMED, 잔액 부족 → REJECTED
+# 청약 흐름 확인: 가입 → 로그인 → 계좌 개설 → 입금 → 청약 202 → CONFIRMED (정상), 잔액 부족, 이중청약 → REJECTED (거절)
 set -euo pipefail
 GW=${GW:-http://localhost:8080}
 IPO=8b2d0000-0000-4000-8000-000000000001   # 테스트 공모주 A, 공모가 15,000, 최소 10주

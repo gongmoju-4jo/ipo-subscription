@@ -6,7 +6,7 @@ s1.js와 같은 방식으로 단계별 요청 순번(idx) 범위를 계산해서
 사용: python stage_table.py --run-id <run_id> [--stages 100,200,300,433,600,800] [--hold 90] [--ramp 10] [--warmup 60] [--results-dir results]
 단계 값은 s1.js를 실행할 때 쓴 STAGES, HOLD, RAMP, WARMUP과 같아야 한다.
 """
-import argparse, collections, datetime, json, os, re
+import argparse, collections, datetime, json, math, os, re
 
 def main():
     ap = argparse.ArgumentParser()
@@ -24,7 +24,8 @@ def main():
     bounds, n, rate = [], 0, steps[0]
     def add(target, sec, tag):
         nonlocal n, rate
-        lo = n; n += round((rate + target) / 2 * sec); rate = target; bounds.append((tag, lo, n))
+        # s1.js의 Math.round와 같게 .5는 올린다 (파이썬 round는 .5를 짝수로 맞춰서 경계가 어긋난다)
+        lo = n; n += math.floor((rate + target) / 2 * sec + 0.5); rate = target; bounds.append((tag, lo, n))
     if a.warmup > 0: add(steps[0], a.warmup, "warmup")
     for s in steps:
         if a.ramp > 0: add(s, a.ramp, "ramp")
@@ -39,6 +40,10 @@ def main():
             if lo <= idx < hi:
                 t = datetime.datetime.fromisoformat(mm.group(1).replace("Z", "+00:00")).timestamp()
                 times[tag].append(t); break
+    dropped = int(m.get("dropped_iterations", {}).get("count", 0))
+    if dropped > 0:
+        # 밀린 반복이 있으면 요청 순번과 시각이 어긋나 단계 경계가 틀어질 수 있다. 무효 회차라는 표시를 맨 위에 남기고 표는 참고용으로 출력한다
+        print("⚠️ 무효 회차: 밀린 반복(dropped_iterations) %d건. 단계 경계가 어긋날 수 있어 아래 표는 참고용이다.\n" % dropped)
     rows = ["| 단계(건/초) | 요청 수 | 실제 처리량(건/초) | 평균(ms) | p95(ms) | p99(ms) | 오류율 | 기준 통과(평균 500ms, 오류 1%) |", "|---|---|---|---|---|---|---|---|"]
     for s in steps:
         dur = m.get(f"http_req_duration{{stage:{s}}}"); fail = m.get(f"http_req_failed{{stage:{s}}}"); cnt = m.get(f"http_reqs{{stage:{s}}}")

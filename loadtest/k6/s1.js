@@ -8,7 +8,7 @@
 //   HOLD     단계 유지 시간, 기본 90s      RAMP  단계 사이 전환 시간, 기본 10s
 //   WARMUP   측정에서 제외하는 워밍업 시간, 기본 60s (0s면 생략)
 //   PRE_VUS, MAX_VUS  k6 가상 사용자 수, 기본 300, 800. MAX_VUS가 모자라 요청이 밀리면 dropped_iterations가 생기고 그 회차는 무효다
-//   RATE(+DURATION)  한 속도만 일정하게 (find-limit.sh가 사용). 이때는 단계, 워밍업 없이 전체 구간이 기준이다
+//   RATE(+DURATION)  한 속도만 일정하게 (find-limit.sh가 사용). 이때는 단계, 워밍업 없이 전체 구간이 기준이고, dropped_iterations 임계값만 단계 모드와 같이 건다
 // 임계값: 단계마다 평균 응답, 실패율 기준(THRESHOLD=pass 500ms/1%, goal 250ms/p95 500ms/0%)을 따로 걸어서, 처음 넘는 단계가 한계 지점이다. dropped_iterations가 1건이라도 있으면 종료 코드 99
 // 회원 1,000명을 돌려 쓰므로 한 바퀴가 지나면 같은 회원의 요청이 이중청약 거절(Consumer가 판정, HTTP는 202)이 된다.
 import exec from 'k6/execution';
@@ -33,6 +33,7 @@ if (SINGLE !== null) {
     stages: [{ target: SINGLE, duration: __ENV.DURATION || '60s' }],
     preAllocatedVUs: Number(__ENV.PRE_VUS || 100), maxVUs: Number(__ENV.MAX_VUS || 500),
   };
+  extra = { dropped_iterations: ['count==0'] }; // 직접 실행해도 밀린 반복이 있으면 종료 코드 99 (find-limit.sh는 종료 코드를 무시하고 summary를 직접 판정한다)
 } else {
   const steps = (__ENV.STAGES || '100,200,300,433,600,800').split(',').map(Number);
   const hold = toSec(__ENV.HOLD || '90s');

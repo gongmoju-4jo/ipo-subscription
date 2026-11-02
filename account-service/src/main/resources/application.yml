@@ -54,6 +54,16 @@ spring:
         # Producer가 포기하는 시간(delivery.timeout.ms)을 발행기의 send-timeout 이하로 맞춘다. 발행기가 실패로 처리한 뒤에도 Producer가 재시도해서 중복이 쌓이지 않게 한다
         request.timeout.ms: 3000
         delivery.timeout.ms: 5000
+    consumer:
+      # group-id는 리스너마다 Consumer 이름으로 직접 지정한다 (이벤트 명세 3-2)
+      # 그룹이 처음 생길 때 이미 쌓인 인출 요청을 놓치지 않도록 처음부터 읽는다
+      auto-offset-reset: earliest
+      # 처리가 끝난 레코드만 커밋한다 (리스너 ack-mode: record)
+      enable-auto-commit: false
+    listener:
+      ack-mode: record
+      # 파티션 3개(.env의 KAFKA_TOPIC_PARTITIONS 기본값)와 같은 수. 초기값이며 부하 테스트 결과로 조정한다
+      concurrency: 3
 
 # Outbox 발행기 (서비스 3개가 같은 키)
 outbox:

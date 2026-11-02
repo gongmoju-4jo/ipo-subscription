@@ -32,8 +32,8 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class MarginReserveService {
 
-    static final String CONSUMER_NAME = "account-margin-reserve";
-    static final String TOPIC = "margin.reserve-requested";
+    public static final String CONSUMER_NAME = "account-margin-reserve";
+    public static final String TOPIC = "margin.reserve-requested";
 
     private final AccountRepository accountRepository;
     private final MarginRepository marginRepository;

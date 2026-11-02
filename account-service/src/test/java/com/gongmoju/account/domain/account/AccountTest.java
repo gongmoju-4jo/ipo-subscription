@@ -120,4 +120,17 @@ class AccountTest {
         assertThatThrownBy(() -> account.deposit(1)).isInstanceOf(ArithmeticException.class);
         assertThat(account.getCashBalance()).isEqualTo(Long.MAX_VALUE);
     }
+
+    @Test
+    void 인출로_청약증거금이_long_범위를_넘으면_예외이고_두_잔고_모두_그대로다() {
+        // 청약증거금 MAX - 1, 예수금 MAX (입금은 예수금만 검사해서 두 잔고 합은 long 범위를 넘을 수 있다)
+        Account account = new Account();
+        account.deposit(Long.MAX_VALUE);
+        account.reserveMargin(Long.MAX_VALUE - 1);
+        account.deposit(Long.MAX_VALUE - 1);
+
+        assertThatThrownBy(() -> account.reserveMargin(10)).isInstanceOf(ArithmeticException.class);
+        assertThat(account.getCashBalance()).isEqualTo(Long.MAX_VALUE);
+        assertThat(account.getMarginBalance()).isEqualTo(Long.MAX_VALUE - 1);
+    }
 }

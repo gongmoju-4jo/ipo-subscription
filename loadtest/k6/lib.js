@@ -63,12 +63,13 @@ export function makeOptions(scenarioName, scenarios, extraThresholds = {}) {
 }
 
 // 청약 신청 1건. 요청마다 requestId, subscriptionId, 상태 코드를 한 줄(JSON)로 남긴다 (--console-output 파일)
-export function subscribe({ scenario, idx, user, accountId, requestId, expected }) {
+export function subscribe({ scenario, idx, user, accountId, requestId, expected, tags = {} }) {
   if (!IPO_ID) throw new Error('IPO_ID 환경변수가 필요합니다');
   const body = JSON.stringify({ requestId, ipoId: IPO_ID, accountId, requestedQuantity: QUANTITY });
   const res = http.post(`${BASE_URL}/api/v1/subscriptions`, body, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${user.token}` },
     responseCallback: http.expectedStatuses(...expected),
+    tags,
   });
   let data = {};
   let code = '';

@@ -14,13 +14,22 @@ sub_id() { [ "$(echo "$1" | tail -1)" = "HTTP 202" ] || fail "청약 응답이 2
 wait_status() {
   local sub=$1 want=$2 reason=${3:-None} i R S RR
   for i in $(seq 1 30); do
-    R=$(curl -s $GW/api/v1/subscriptions/$sub -H "$AUTH")
+    R=$(curl -s -m 5 $GW/api/v1/subscriptions/$sub -H "$AUTH" || true)
     S=$(echo "$R" | j 'd.get("data",{}).get("status","-")' 2>/dev/null || echo -)
     [ "$S" = CONFIRMED ] || [ "$S" = REJECTED ] && break; sleep 1
   done
   echo "$R"; echo "→ ${i}초 후 status=$S"
   RR=$(echo "$R" | j 'd.get("data",{}).get("rejectReason")' 2>/dev/null || echo -)
   [ "$S" = "$want" ] && [ "$RR" = "$reason" ] || fail "기대 $want/$reason, 실제 $S/$RR"
+}
+# 계좌 잔고가 기대한 예수금, 청약증거금인지 확인한다
+check_balance() {
+  local R C M
+  R=$(curl -s -m 5 -w '\nHTTP %{http_code}' $GW/api/v1/accounts/$ACC -H "$AUTH")
+  echo "$R" | head -1
+  [ "$(echo "$R" | tail -1)" = "HTTP 200" ] || fail "계좌 조회 응답이 200이 아님"
+  C=$(echo "$R" | head -1 | j 'd["data"]["cashBalance"]'); M=$(echo "$R" | head -1 | j 'd["data"]["marginBalance"]')
+  [ "$C" = "$1" ] && [ "$M" = "$2" ] || fail "기대 잔고 $1/$2, 실제 $C/$M"
 }
 
 step "1. 회원가입"
@@ -52,7 +61,7 @@ step "6. 청약 상태 (CONFIRMED가 될 때까지 최대 30초)"
 wait_status $SUB CONFIRMED
 
 step "7. 계좌 잔고 (예수금 50,000 / 청약증거금 150,000 예상)"
-curl -s $GW/api/v1/accounts/$ACC -H "$AUTH"; echo
+check_balance 50000 150000
 
 step "8. 잔액 부족 청약 공모주 B ${Q2:-50000}주 (예수금 50,000보다 큼) → REJECTED 예상"
 IPO2=8b2d0000-0000-4000-8000-000000000002   # 공모주 B (같은 종목 이중청약을 피하려고 다른 종목)
@@ -70,6 +79,6 @@ SUB3=$(sub_id "$SUB3_RES")
 wait_status $SUB3 REJECTED ALREADY_SUBSCRIBED
 
 step "10. 계좌 잔고 (이중청약 거절 뒤에도 예수금 50,000 / 청약증거금 150,000 그대로 예상)"
-curl -s $GW/api/v1/accounts/$ACC -H "$AUTH"; echo
+check_balance 50000 150000
 
 echo; echo "ACC=$ACC SUB=$SUB SUB2=$SUB2 SUB3=$SUB3"

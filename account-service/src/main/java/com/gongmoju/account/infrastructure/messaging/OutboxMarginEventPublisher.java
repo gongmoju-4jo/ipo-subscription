@@ -22,8 +22,6 @@ import java.util.UUID;
  * 증거금 인출 성공 결과를 Outbox에 저장하는 구현체.
  * <p>
  * MarginReserved를 Kafka 이벤트 본문 형식으로 변환한다.
- * 호출한 서비스의 DB 트랜잭션에 참여한다.
- * {@link MarginReserveService#reserve(ReserveMarginCommand)}에서 호출된다.
  * 실제 Kafka 전송은 별도 OutboxPublisher가 담당한다.
  */
 @Slf4j

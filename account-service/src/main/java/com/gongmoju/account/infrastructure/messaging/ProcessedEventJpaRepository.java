@@ -9,15 +9,23 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Consumer가 처리한 이벤트를 기록하는 JPA Repository
- * 업무 처리와 동일한 트랜잭션에서 저장해 실패 시 함께 롤백한다.
+ * 이벤트 처리 기록을 저장하는 JPA Repository.
  * (event_id, consumer_name) UNIQUE 제약조건으로 중복 기록을 방지한다.
  */
 interface ProcessedEventJpaRepository extends JpaRepository<ProcessedEvent, UUID> {
 
-    // 중복이면 예외 없이 0행 (PostgreSQL은 UNIQUE 위반 뒤 같은 트랜잭션을 더 쓸 수 없어서 ON CONFLICT로 피한다)
-    // 같은 키를 동시에 넣으면 뒤의 INSERT가 앞 트랜잭션의 커밋을 기다린 뒤 0행이 된다 (앞이 롤백되면 1행)
-    // 네이티브 쿼리는 JPA Auditing을 거치지 않아 processed_at을 직접 채운다. 청약 서비스와 같은 방식
+    /**
+     * 이벤트 처리 기록을 중복 없이 저장한다.
+     * ON CONFLICT DO NOTHING으로 중복 시 예외 없이 삽입을 생략한다.
+     * 네이티브 쿼리는 JPA Auditing을 거치지 않아 처리 시각을 직접 전달한다.
+     *
+     * @param id           이벤트 처리 기록의 PK
+     * @param eventId      중복 여부를 판단할 이벤트 ID
+     * @param consumerName 이벤트를 처리하는 Consumer 식별자
+     * @param topic        원본 kafka 토픽명
+     * @param processedAt  이벤트 처리 기록 시각
+     * @return 삽입된 행 수 (신규 1, 중복 0)
+     */
     @Modifying
     @Query(value = """
             INSERT INTO processed_event (processed_event_id, event_id, consumer_name, topic, processed_at)

@@ -44,7 +44,7 @@ echo "$R"; echo "→ ${i}초 후 status=$S"
 step "7. 계좌 잔고 (예수금 50,000 / 청약증거금 150,000 예상)"
 curl -s $GW/api/v1/accounts/$ACC -H "$AUTH"; echo
 
-step "8. 잔액 부족 청약 10주 (예수금 50,000 < 150,000) → REJECTED 예상"
+step "8. 잔액 부족 청약 공모주 B ${Q2:-50000}주 (예수금 50,000보다 큼) → REJECTED 예상"
 IPO2=8b2d0000-0000-4000-8000-000000000002   # 공모주 B (같은 종목 이중청약을 피하려고 다른 종목)
 SUB2_RES=$(curl -s -w '\nHTTP %{http_code}' -X POST $GW/api/v1/subscriptions -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"requestId\":\"$(uuid)\",\"ipoId\":\"$IPO2\",\"accountId\":\"$ACC\",\"requestedQuantity\":${Q2:-50000}}")
@@ -57,4 +57,19 @@ for i in $(seq 1 30); do
 done
 echo "$R"; echo "→ ${i}초 후 status=$S"
 
-echo; echo "ACC=$ACC SUB=$SUB SUB2=$SUB2"
+step "9. 이중청약: 공모주 A에 requestId만 바꿔 다시 10주 → REJECTED(ALREADY_SUBSCRIBED) 예상"
+SUB3_RES=$(curl -s -w '\nHTTP %{http_code}' -X POST $GW/api/v1/subscriptions -H "$AUTH" -H 'Content-Type: application/json' \
+  -d "{\"requestId\":\"$(uuid)\",\"ipoId\":\"$IPO\",\"accountId\":\"$ACC\",\"requestedQuantity\":10}")
+echo "$SUB3_RES"
+SUB3=$(echo "$SUB3_RES" | head -1 | j 'd["data"]["subscriptionId"]')
+for i in $(seq 1 30); do
+  R=$(curl -s $GW/api/v1/subscriptions/$SUB3 -H "$AUTH")
+  S=$(echo "$R" | j 'd.get("data",{}).get("status","-")' 2>/dev/null || echo -)
+  [ "$S" = CONFIRMED ] || [ "$S" = REJECTED ] && break; sleep 1
+done
+echo "$R"; echo "→ ${i}초 후 status=$S"
+
+step "10. 계좌 잔고 (이중청약 거절 뒤에도 예수금 50,000 / 청약증거금 150,000 그대로 예상)"
+curl -s $GW/api/v1/accounts/$ACC -H "$AUTH"; echo
+
+echo; echo "ACC=$ACC SUB=$SUB SUB2=$SUB2 SUB3=$SUB3"

@@ -28,6 +28,7 @@
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
 | `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 10종 실행 |
 | `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
+| `loadtest/stage_table.py` | S1 단계별 표 생성 (목표 속도, 실제 처리량, 지연, 실패율) |
 | `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
 | `loadtest/sql/slow-queries.sql` | 슬로우 쿼리 확인 |
 
@@ -130,7 +131,7 @@ python loadtest/report.py --run-id $RUN                                         
 | 시나리오 | 요청 구성 | 공모주 | 회원 CSV | HTTP 기대 |
 | --- | --- | --- | --- | --- |
 | S0 | 회원 1,000명이 각 1건 (100명 × 10회, 1초에 걸쳐 시작) | 새 공모주 | `users.csv` | 전부 202 |
-| S1 | 일정 속도로 유지 (`RATE` 기본 200건/초, `DURATION` 기본 60초) | 새 공모주 | `users.csv` | 전부 202 |
+| S1 | 도착률 고정 단계 부하 (`STAGES` 기본 100,200,300,433,600,800건/초, 단계마다 전환 `RAMP` 10초 + 유지 `HOLD` 90초, 앞에 `WARMUP` 60초) | 새 공모주 | `users.csv` | 전부 202 |
 | S2 | S0과 같은 구성으로 마감된 공모주에 요청 | `new_ipo.sh --closed` | `users.csv` | 전부 422 `SUBSCRIPTION_CLOSED` |
 | S3 | 정상 800 + 같은 requestId 재전송 100 + 두 번째 계좌 100 | 새 공모주 | `users.csv` (두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음 |
 | S4 | S0과 같은 구성, 10% 회원이 잔액 부족 | 새 공모주 | `users-s4.csv` | 전부 202 (잔액 부족 판정은 Consumer) |
@@ -139,9 +140,17 @@ python loadtest/report.py --run-id $RUN                                         
 - S3의 비율은 가정한 값이라 `S3_RESEND`, `S3_SECOND`, `S3_SECOND_FROM`으로 바꿀 수 있습니다.
 - S0~S4 모두 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`).
 
-### S1 요청 속도 정하기
+### S1 단계 부하와 단계별 표
 
-S1의 속도는 한계를 찾은 뒤 그 **50~70%**로 고정합니다. 한계 탐색 스크립트가 속도를 올려 가며 단계마다 새 공모주로 짧게 실행합니다.
+S1은 도착률을 고정하는 `ramping-arrival-rate`라서 응답이 느려져도 요청 수가 줄지 않습니다. 요청마다 `stage` 태그(`warmup`, `ramp`, 단계 속도)가 붙고, 단계 값은 유지(`HOLD`) 구간의 요청만 셉니다. 단계는 경과 시간이 아니라 요청 순번 기준으로 나눕니다 (실제 실행이 설정보다 길어질 수 있어서).
+
+- 단계별 평균, p95, 실패율은 `summary.json`의 `http_req_duration{stage:N}` 등에 있고, 단계별 표(목표 속도, 실제 처리량, 지연, 실패율)는 `python loadtest/stage_table.py --run-id $RUN`으로 만듭니다 (`--stages`, `--hold`, `--ramp`, `--warmup`을 실행 때 쓴 값과 같게 줍니다).
+- 단계마다 임계값을 따로 걸어서 처음 넘는 단계가 한계 지점입니다. 밀린 반복(`dropped_iterations`)이 1건이라도 있으면 종료 코드 99이고 그 회차는 무효입니다.
+- `RATE`(+`DURATION`)를 주면 한 속도로만 일정하게 실행합니다 (`find-limit.sh`가 사용).
+
+### S1 요청 속도 찾기 (한 속도 고정)
+
+한계를 찾은 뒤 그 **50~70%**로 고정할 때 쓰는 방법입니다. 한계 탐색 스크립트가 속도를 올려 가며 단계마다 새 공모주로 짧게 실행합니다.
 
 ```bash
 loadtest/find-limit.sh                                  # 기본 50, 100, 200, 400, 800건/초를 단계당 20초씩
@@ -151,7 +160,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 - 한계 신호는 **평균 응답 500ms 초과, 실패율 1% 이상, 밀린 반복(`dropped_iterations`) 1건 이상** 중 하나입니다. 처음 한계에 닿으면 멈추고(`--all`이면 끝까지), 그 속도의 50~70%를 추천합니다.
 - 결과는 `results/limit-{시각}/limit.md`, 단계별 원본은 `results/limit-{시각}-r{속도}/`에 남습니다.
 - 서비스를 새로 띄운 직후 첫 단계는 워밍업(JVM, 커넥션 풀)의 영향으로 낮게 나올 수 있어서, 한계에 닿은 속도를 한 번 더 확인합니다.
-- 고른 속도는 `-e RATE=...`로 넘기거나 `loadtest/k6/s1.js`의 기본값으로 정하고, 측정 전에 확정합니다.
+- 고른 속도는 `-e STAGES=...`로 넘기거나 `loadtest/k6/s1.js`의 기본값으로 정하고, 측정 전에 확정합니다.
 
 ## 6. 결과 파일
 
@@ -170,7 +179,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 - 기준을 어기면 종료 코드 99입니다. **`summary.json`의 `thresholds`는 `true`가 위반, `false`가 통과**입니다.
 - 오류율은 시스템 오류(5xx, 타임아웃, 연결 실패)만 셉니다. 업무 거절(이중청약, 잔액 부족, 마감)은 오류율에서 제외하고 `check_requests.py`의 결과 분류로 봅니다.
 - 한계 탐색 결과는 `loadtest/results/limit-{시각}/`에 따로 남습니다.
-- 결과 폴더를 레포에 올릴지는 정해지지 않았습니다 (`.gitignore`에 넣지 않았습니다).
+- `loadtest/results/`는 회차마다 생기는 산출물이라 `.gitignore` 대상이고 커밋하지 않습니다. 보관할 결과는 팀 문서 쪽에 따로 저장합니다.
 
 ## 7. 환경변수
 

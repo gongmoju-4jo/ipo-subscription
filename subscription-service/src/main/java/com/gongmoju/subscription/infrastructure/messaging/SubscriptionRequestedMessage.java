@@ -1,11 +1,15 @@
 package com.gongmoju.subscription.infrastructure.messaging;
 
 import com.gongmoju.subscription.domain.subscription.SubscriptionRequested;
+import com.gongmoju.subscription.global.exception.InvalidEventException;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
+
+import static com.gongmoju.subscription.infrastructure.messaging.MessageSupport.parseTime;
+import static com.gongmoju.subscription.infrastructure.messaging.MessageSupport.require;
 
 /**
  * {@code subscription.requested} 메시지 본문 (이벤트 명세 1장 공통 필드 + 2-1). 공통 필드와 도메인 필드를 한 단계로 펼친다.
@@ -38,5 +42,32 @@ public record SubscriptionRequestedMessage(
         return new SubscriptionRequestedMessage(eventId, TOPIC, KST_MILLIS.format(occurredAt),
                 event.requestId(), event.subscriptionId(), event.userId(), event.accountId(), event.ipoId(),
                 event.requestedQuantity(), KST_MILLIS.format(event.receivedAt()));
+    }
+
+    /**
+     * 메시지를 접수 내용으로 변환함. 변환 과정이 이벤트 명세 2-1의 필수 필드와 형식 검증에 해당함.
+     * 필수 필드({@code eventId}, {@code eventType}, {@code occurredAt} 및 도메인 필드) 누락, {@code eventType}과 토픽 이름 불일치,
+     * 수량 1 미만, ISO-8601이 아닌 시각은 재처리해도 결과가 같으므로 재시도 없이 DLT로 전송함.
+     * UUID 형식 오류는 역직렬화 단계에서 걸러지며, 수량 필드가 누락되면 {@code 0}으로 읽혀 본 메서드에서 검증됨.
+     *
+     * @return 접수 내용
+     * @throws InvalidEventException 필수 필드와 형식 검증을 통과하지 못한 경우
+     */
+    public SubscriptionRequested toEvent() {
+        require(eventId, "eventId");
+        if (!TOPIC.equals(eventType)) {
+            throw new InvalidEventException("eventType이 " + TOPIC + "가 아닙니다: " + eventType);
+        }
+        parseTime(occurredAt, "occurredAt");
+        require(requestId, "requestId");
+        require(subscriptionId, "subscriptionId");
+        require(userId, "userId");
+        require(accountId, "accountId");
+        require(ipoId, "ipoId");
+        if (requestedQuantity < 1) {
+            throw new InvalidEventException("requestedQuantity는 1 이상이어야 합니다: " + requestedQuantity);
+        }
+        Instant received = parseTime(receivedAt, "receivedAt");
+        return new SubscriptionRequested(requestId, subscriptionId, userId, accountId, ipoId, requestedQuantity, received);
     }
 }

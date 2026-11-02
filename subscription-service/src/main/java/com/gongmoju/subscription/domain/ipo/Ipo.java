@@ -103,4 +103,34 @@ public class Ipo extends BaseEntity {
                             "청약 수량은 " + minQuantity + " 이상 " + maxQuantity + " 이하여야 합니다.")));
         }
     }
+
+    /**
+     * 접수 Consumer의 방어 검증용 (이벤트 명세 2-1의 종목 검증). API에서 이미 검증한 값이므로 현재 시각이 아닌 {@code receivedAt}만 기준으로 판단함.
+     *
+     * @param receivedAt Gateway가 기록한 최초 도착 시각
+     * @return 마감 시각보다 앞이면 {@code true}, 같거나 이후면 {@code false}
+     */
+    public boolean isBeforeSubscriptionEnd(Instant receivedAt) {
+        return receivedAt.isBefore(subscriptionEndAt);
+    }
+
+    /**
+     * 증거금률 100%만 허용함 (D-18). 다른 값은 증거금 계산 규칙(반올림)이 미정이므로 접수하지 않음. 스케일이 달라도({@code 1}, {@code 1.00}) 같은 값으로 판단함.
+     */
+    public boolean hasFullMarginRate() {
+        return marginRate.compareTo(BigDecimal.ONE) == 0;
+    }
+
+    /**
+     * 배정용 확정 청약 목록을 줄 수 있는지 검증한다 (API 명세 4.1). 마감(CLOSED) 이후에는 확정 청약이 더 생기거나 바뀌지 않는다.
+     *
+     * @throws BusinessException CLOSED가 아니면 INVALID_STATUS_TRANSITION(409)
+     */
+    public void validateClosed() {
+        if (status != IpoStatus.CLOSED) {
+            throw new BusinessException(SubscriptionErrorCode.INVALID_STATUS_TRANSITION,
+                    SubscriptionErrorCode.INVALID_STATUS_TRANSITION.getMessage(),
+                    List.of(new ApiErrorDetail("ipoId", "마감된 공모주가 아닙니다.")));
+        }
+    }
 }

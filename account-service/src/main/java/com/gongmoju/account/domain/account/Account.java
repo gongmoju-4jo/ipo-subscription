@@ -82,16 +82,6 @@ public class Account extends BaseEntity {
         cashBalance = Math.addExact(cashBalance, amount);
     }
 
-    /**
-     * 증거금을 인출한다.
-     * LedgerEntryType: MARGIN_PENDING
-     * <p>
-     * 예수금 감소 -> 청약증거금 증가
-     * 예수금이 부족하면 INSUFFICIENT_BALANCE 예외를 발생시켜 인출 차단
-     * 이동 전후의 계좌 전체 잔액은 동일
-     *
-     * @param amount 인출할 증거금 금액 (원)
-     */
     // 요청한 회원의 계좌인지 확인한다
     public boolean isOwnedBy(UUID userId) {
         return user.getId().equals(userId);
@@ -102,7 +92,16 @@ public class Account extends BaseEntity {
         return cashBalance >= amount;
     }
 
-    // todo: 테스트: marignbalance가 long.max_value에 가까울때 오버플로가 발생히도 두 잔액이 변경되지 않는지 확인
+    /**
+     * 증거금을 인출한다.
+     * LedgerEntryType: MARGIN_PENDING
+     * <p>
+     * 예수금 감소 -> 청약증거금 증가
+     * 예수금이 부족하면 INSUFFICIENT_BALANCE 예외를 발생시켜 인출 차단
+     * 이동 전후의 계좌 전체 잔액은 동일
+     *
+     * @param amount 인출할 증거금 금액 (원)
+     */
     public void reserveMargin(long amount) {
         requirePositive(amount);
         if (cashBalance < amount) {

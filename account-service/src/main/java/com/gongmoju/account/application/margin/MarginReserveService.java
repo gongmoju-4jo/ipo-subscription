@@ -142,7 +142,8 @@ public class MarginReserveService {
         // 10. outbox 저장: 증거금 인출 성공 결과 객체를 생성하고 outbox 저장을 요청한다.
         marginEventPublisher.publishReserved(MarginReserved.from(margin));
 
-        log.info("[증거금 인출] 완료. eventId={}, subscriptionId={}, accountId={}, marginId={}, amount={}",
+        // 트랜잭션 커밋 전 로그. 커밋이 실패하면 롤백 후 재시도되고 에러 로그가 따로 남는다
+        log.info("[증거금 인출] 인출 저장 (커밋 전). eventId={}, subscriptionId={}, accountId={}, marginId={}, amount={}",
                 command.eventId(), command.subscriptionId(), command.accountId(), margin.getId(), command.amount());
     }
 

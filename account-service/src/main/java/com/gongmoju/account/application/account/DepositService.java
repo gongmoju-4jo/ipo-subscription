@@ -60,8 +60,9 @@ public class DepositService {
         // 같은 요청 ID로 이미 처리한 입금이 있다면 기존 결과를 반환한다.
         Optional<LedgerEntry> existing = ledgerEntryRepository.findByRequestId(requestId);
         if (existing.isPresent()) { // 처리한 적 있는 경우
+            DepositResult replayed = replay(existing.get(), accountId, amount);
             log.info("[입금] 재요청, 기존 결과 반환. accountId={}, requestId={}", accountId, requestId);
-            return replay(existing.get(), accountId, amount);
+            return replayed;
         }
 
         // 입금: 예수금 잔고 증가. 입금 후 예수금이 long 범위(약 922경 원)를 넘으면 500이 아니라 400으로 거절한다
@@ -77,7 +78,8 @@ public class DepositService {
         }
         // 변경된 잔고 기준으로 입금 원장 생성 후 저장
         LedgerEntry entry = ledgerEntryRepository.save(LedgerEntry.deposit(account, amount, requestId));
-        log.info("[입금] 완료. accountId={}, amount={}, cashBalanceAfter={}, requestId={}",
+        // 트랜잭션 커밋 전 로그. 커밋이 실패하면 예외 응답과 에러 로그가 따로 남는다
+        log.info("[입금] 원장 저장 (커밋 전). accountId={}, amount={}, cashBalanceAfter={}, requestId={}",
                 accountId, amount, entry.getCashBalanceAfter(), requestId);
         // 신규 입금 처리 결과 반환
         return DepositResult.of(entry, true);

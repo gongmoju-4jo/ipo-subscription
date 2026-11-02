@@ -1,0 +1,11 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # Prometheus 수집 간격과 같게 맞춘다 ($__rate_interval 계산에 쓰인다)
+      timeInterval: 5s

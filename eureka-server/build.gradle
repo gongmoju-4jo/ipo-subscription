@@ -1,5 +1,6 @@
 dependencies {
-	// 헬스체크(컨테이너)
+	// 헬스체크(컨테이너), Prometheus 수집용 지표
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'io.micrometer:micrometer-registry-prometheus'
 	implementation 'org.springframework.cloud:spring-cloud-starter-netflix-eureka-server'
 }

@@ -2,13 +2,18 @@ server:
   port: 8080
 
 management:
-  # 헬스체크 전용 포트. 외부(호스트)에 열지 않는다. 8080은 JWT가 필요해서 토큰 없는 헬스체크를 못 한다
+  # 헬스체크, Prometheus 수집 전용 포트. 외부(호스트)에 열지 않는다. 8080은 JWT가 필요해서 토큰 없이는 못 쓴다
   server:
     port: 18090
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,prometheus
+  metrics:
+    distribution:
+      # Gateway와 서비스의 응답 시간 p95, p99를 Prometheus에서 따로 볼 수 있도록 구간(histogram)을 함께 내보낸다
+      percentiles-histogram:
+        http.server.requests: true
 
 spring:
   application:

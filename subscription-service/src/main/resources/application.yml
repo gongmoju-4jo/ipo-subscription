@@ -1,5 +1,20 @@
 server:
   port: 8082
+  tomcat:
+    # Tomcat 스레드 지표(tomcat_threads_busy 등)를 내보내려면 필요하다
+    mbeanregistry:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  metrics:
+    distribution:
+      # 서비스별 응답 시간의 p95, p99를 Prometheus에서 계산할 수 있도록 구간(histogram)을 함께 내보낸다
+      percentiles-histogram:
+        http.server.requests: true
 
 spring:
   application:

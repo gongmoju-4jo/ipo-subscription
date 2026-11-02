@@ -1,4 +1,4 @@
-# 인프라(PostgreSQL, Kafka)와 서비스 컨테이너 5개. 모니터링은 이어서 추가한다
+# 인프라(PostgreSQL, Kafka), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
 # 개발할 때: 인프라만 띄우고 서비스는 IntelliJ로 실행한다 (docker-compose up -d postgres kafka kafka-init kafka-ui)
 # 전체 확인할 때: jar를 먼저 빌드하고 전부 띄운다 (./gradlew build -x test && docker-compose up -d --build)
 # 같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다 (포트 충돌, Eureka 중복 등록)
@@ -228,6 +228,53 @@ services:
       retries: 30
       start_period: 20s
 
+  # ===== 모니터링 =====
+  # 시스템 전체에 하나씩. Prometheus가 서비스 5개의 /actuator/prometheus를 5초마다 가져가고(docker/prometheus/prometheus.yml),
+  # Grafana가 그 Prometheus 하나를 데이터 소스로 쓴다 (docker/grafana/provisioning). 둘 다 127.0.0.1에만 연다
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: ipo-prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 대시보드: http://localhost:3000 (GRAFANA_PORT로 변경 가능). 관리자 계정은 admin, 비밀번호는 .env의 GRAFANA_ADMIN_PASSWORD
+  grafana:
+    image: grafana/grafana:12.1.0
+    container_name: ipo-grafana
+    # 기본 진입점을 감싸서 관리자 비밀번호가 비어 있으면 시작 전에 막는다 (docker/grafana/entrypoint.sh)
+    entrypoint: ["/bin/sh", "/docker-entrypoint-wrapper.sh"]
+    environment:
+      # 기본값 없음: .env에 직접 정한 값을 넣는다. 비어 있으면 시작하지 않는다
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      TZ: Asia/Seoul
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./docker/grafana/entrypoint.sh:/docker-entrypoint-wrapper.sh:ro
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
 volumes:
   postgres-data:
   kafka-data:
+  prometheus-data:
+  grafana-data:

@@ -1,6 +1,8 @@
 // S1: 도착률 고정(ramping-arrival-rate)으로 처리량 한계를 찾는다 (팀 문서 8-2). 초당 요청 수를 고정하므로 응답이 느려져도 요청이 줄지 않는다.
 // 구성: 워밍업(첫 단계 속도로 WARMUP) → 단계마다 RAMP(속도 전환) + HOLD(유지). 요청마다 stage 태그를 달아서 단계별 지표가 summary.json에 나온다
 //   (태그 값: warmup, ramp, 단계 속도, 예: http_req_duration{stage:300}). 단계 값은 HOLD 구간의 요청만 센다.
+//   단계 구분은 시간이 아니라 요청 순번(iterationInTest) 기준이다. k6가 단계마다 보낼 요청 수는 속도의 적분(속도 x 시간)으로 정해지는데,
+//   실제 실행 시간은 단계 설정보다 길어질 수 있어서(첫 실행에서 660초 설정이 694초 걸림) 경과 시간으로 나누면 단계가 어긋난다.
 // 환경변수 (기본값은 값이 확정되기 전의 추천이고, 첫 측정 전에 확정한 뒤 측정 후에는 바꾸지 않는다):
 //   STAGES   단계 속도(건/초), 기본 100,200,300,433,600,800
 //   HOLD     단계 유지 시간, 기본 90s      RAMP  단계 사이 전환 시간, 기본 10s
@@ -21,7 +23,7 @@ function toSec(s) {
 }
 
 const SINGLE = __ENV.RATE ? Number(__ENV.RATE) : null;
-const bounds = []; // 경과 시간(초)이 end보다 작으면 tag 구간
+const bounds = []; // 요청 순번(0부터)이 end보다 작으면 tag 구간. 순번은 단계별 요청 수(속도의 적분)를 누적한 값
 let scenario;
 let extra = {};
 
@@ -37,8 +39,14 @@ if (SINGLE !== null) {
   const ramp = toSec(__ENV.RAMP || '10s');
   const warm = toSec(__ENV.WARMUP || '60s');
   const stages = [];
-  let t = 0;
-  const add = (target, sec, tag) => { stages.push({ target, duration: `${sec}s` }); t += sec; bounds.push({ end: t, tag }); };
+  let n = 0; // 누적 요청 수
+  let rate = steps[0]; // 현재 속도
+  const add = (target, sec, tag) => {
+    stages.push({ target, duration: `${sec}s` });
+    n += Math.round(((rate + target) / 2) * sec); // 속도가 직선으로 바뀌므로 평균 속도 x 시간
+    rate = target;
+    bounds.push({ end: n, tag });
+  };
   if (warm > 0) add(steps[0], warm, 'warmup');
   steps.forEach((s) => { if (ramp > 0) add(s, ramp, 'ramp'); add(s, hold, String(s)); });
   scenario = {
@@ -57,16 +65,15 @@ if (SINGLE !== null) {
 
 export const options = makeOptions('S1', { S1: scenario }, extra);
 
-function stageTag() {
+function stageTag(idx) {
   if (bounds.length === 0) return 'single';
-  const e = exec.instance.currentTestRunDuration / 1000;
-  for (const b of bounds) if (e < b.end) return b.tag;
+  for (const b of bounds) if (idx < b.end) return b.tag;
   return 'end';
 }
 
 export default function () {
   const idx = exec.scenario.iterationInTest;
   const u = users[idx % users.length];
-  const { res, data } = subscribe({ scenario: 'S1', idx, user: u, accountId: u.accountId, requestId: uuid4(), expected: [202], tags: { stage: stageTag() } });
+  const { res, data } = subscribe({ scenario: 'S1', idx, user: u, accountId: u.accountId, requestId: uuid4(), expected: [202], tags: { stage: stageTag(idx) } });
   check202(res, data);
 }

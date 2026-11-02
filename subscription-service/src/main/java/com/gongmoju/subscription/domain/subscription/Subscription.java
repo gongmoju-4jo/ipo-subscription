@@ -174,6 +174,29 @@ public class Subscription extends BaseEntity {
         this.attempts = 0;
     }
 
+    /**
+     * 증거금은 인출됐는데 청약을 확정하지 못했을 때 {@code PENDING}을 {@code COMPENSATING}으로 전환함 (보상 착수). 해제 사유를 저장함.
+     * 같은 트랜잭션에서 증거금 해제 요청({@code margin.void-requested})을 기록하므로, 상태가 바뀌었어도 해제를 요청했으니 요청 횟수({@code attempts})는 1,
+     * 마지막 요청 시각({@code lastRequestedAt})은 현재 시각으로 설정함 ({@link #accept}와 같은 방식, ERD).
+     * 투자자 취소({@code USER_CANCEL})는 {@code CANCEL_REQUESTED}로 가는 별도 전이라서 이 전환의 사유가 될 수 없음.
+     *
+     * @param cancelReason 해제 사유 ({@code CONFIRM_FAILED}, {@code TIMEOUT})
+     * @throws IllegalStateException    {@code PENDING}이 아닌 상태에서 호출한 경우
+     * @throws IllegalArgumentException 해제 사유가 없거나 {@code USER_CANCEL}인 경우
+     */
+    public void startCompensation(CancelReason cancelReason) {
+        if (status != SubscriptionStatus.PENDING) {
+            throw new IllegalStateException("PENDING 상태에서만 보상을 시작할 수 있습니다: " + status);
+        }
+        if (cancelReason == null || cancelReason == CancelReason.USER_CANCEL) {
+            throw new IllegalArgumentException("보상 착수의 해제 사유가 올바르지 않습니다: " + cancelReason);
+        }
+        this.status = SubscriptionStatus.COMPENSATING;
+        this.cancelReason = cancelReason;
+        this.attempts = 1;
+        this.lastRequestedAt = Instant.now();
+    }
+
     private static Subscription create(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                        long requestedQuantity, long marginAmount, Instant receivedAt) {
         if (requestedQuantity < 1) {

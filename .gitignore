@@ -277,5 +277,7 @@ CLAUDE.local.md
 # 회원 CSV에는 로그인 토큰이 들어 있어서 커밋하지 않는다
 loadtest/data/*
 !loadtest/data/.gitkeep
+# 부하 테스트 실행 결과(k6 요약, 요청 로그, 보고서)는 회차마다 생기는 산출물이라 커밋하지 않는다
+loadtest/results/
 # 파이썬 스크립트 실행 때 생기는 캐시
 loadtest/**/__pycache__/

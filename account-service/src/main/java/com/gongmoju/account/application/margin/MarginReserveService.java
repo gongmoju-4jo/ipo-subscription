@@ -75,7 +75,7 @@ public class MarginReserveService {
             return;
         }
 
-        if (!account.getUser().getId().equals(command.userId())) {
+        if (!account.isOwnedBy(command.userId())) {
             log.warn("[증거금 인출] 거절 ACCOUNT_NOT_FOUND(소유자 다름). eventId={}, subscriptionId={}, accountId={}, userId={}",
                     command.eventId(), command.subscriptionId(), command.accountId(), command.userId());
             reject(command, MarginReserveFailReason.ACCOUNT_NOT_FOUND);
@@ -145,10 +145,8 @@ public class MarginReserveService {
 
     // 같은 청약의 margin이 이미 있을 때 (재요청). 돈은 움직이지 않는다
     private void handleExistingMargin(ReserveMarginCommand command, Margin margin) {
-        // 4-1. 요청과 비교: accountId, amount, ipoId가 같은지 검사 (long 타입만 != 사용)
-        if (!command.accountId().equals(margin.getAccount().getId())
-                || command.amount() != margin.getAmount()
-                || !command.ipoId().equals(margin.getIpoId())) {
+        // 4-1. 요청과 비교: accountId, amount, ipoId가 같은지 검사
+        if (!margin.matches(command.accountId(), command.amount(), command.ipoId())) {
 
             // 4-2. 다르면 DLT: 예외로 롤백해서 processed_event도 남기지 않는다
             //   - DLT 전송은 4단계 Consumer 설정

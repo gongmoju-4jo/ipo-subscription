@@ -92,6 +92,11 @@ public class Account extends BaseEntity {
      *
      * @param amount 인출할 증거금 금액 (원)
      */
+    // 요청한 회원의 계좌인지 확인한다
+    public boolean isOwnedBy(UUID userId) {
+        return user.getId().equals(userId);
+    }
+
     // 인출 전에 예수금이 충분한지 확인한다. 부족하면 서비스가 예외 대신 거절 응답(INSUFFICIENT_BALANCE)을 저장한다
     public boolean hasCashBalance(long amount) {
         return cashBalance >= amount;

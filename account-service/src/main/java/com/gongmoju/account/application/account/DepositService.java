@@ -51,7 +51,7 @@ public class DepositService {
         // 이미 조회한 엔티티는 JPA 캐시에 남아 있을 수 있으므로 잠금 조회를 먼저 수행
         Account account = accountRepository.findByIdForUpdate(accountId)
                 .filter(
-                        found -> found.getUser().getId().equals(userId)
+                        found -> found.isOwnedBy(userId)
                 ) // 요청자 계좌가 아니면 404
                 .orElseThrow(() -> new BusinessException(
                         CommonErrorCode.RESOURCE_NOT_FOUND, "계좌를 찾을 수 없습니다.", "accountId"

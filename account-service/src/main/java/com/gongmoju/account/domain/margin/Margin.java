@@ -70,6 +70,13 @@ public class Margin extends BaseEntity {
     // 정산 완료 시각
     private Instant settledAt;
 
+    // 같은 청약의 재요청이 처음 인출과 같은 계좌, 금액, 종목인지 확인한다
+    public boolean matches(UUID accountId, long amount, UUID ipoId) {
+        return account.getId().equals(accountId)
+                && this.amount == amount
+                && this.ipoId.equals(ipoId);
+    }
+
     /**
      * 청약증거금 인출 기록을 생성한다.
      * 실제 잔고 이동 (account.reserveMargin())과 원장 저장은 호출하는 서비스에서 처리한다.

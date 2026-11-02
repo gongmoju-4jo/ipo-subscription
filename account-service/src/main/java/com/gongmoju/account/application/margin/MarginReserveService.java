@@ -9,8 +9,12 @@ import com.gongmoju.account.domain.ledger.LedgerEntryType;
 import com.gongmoju.account.domain.margin.Margin;
 import com.gongmoju.account.domain.margin.MarginEventPublisher;
 import com.gongmoju.account.domain.margin.MarginRepository;
+import com.gongmoju.account.domain.margin.MarginReserveFailReason;
+import com.gongmoju.account.domain.margin.MarginReserveFailed;
 import com.gongmoju.account.domain.margin.MarginReserved;
+import com.gongmoju.account.domain.margin.MarginVoidIntentRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>
  * 계좌 락 → 소유권 → 기존 margin → 선행 반환 기록 → 잔액 → 인출 → margin → 원장 → 응답 Outbox → 처리 기록을 한 트랜잭션에서 처리한다
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class MarginReserveService {
@@ -28,6 +33,7 @@ public class MarginReserveService {
 
     private final AccountRepository accountRepository;
     private final MarginRepository marginRepository;
+    private final MarginVoidIntentRepository marginVoidIntentRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final MarginEventPublisher marginEventPublisher;
     private final ProcessedEventRecorder processedEventRecorder;
@@ -44,18 +50,42 @@ public class MarginReserveService {
 
         // 계좌 락: 기존 margin 조회보다 먼저 건다.
         // 같은 청약 요청이 동시에 와도 한줄씩 처리되어 두 번째 요청이 첫번째 요청으로 만들어진 margin을 조회하게 된다.
-        Account account = accountRepository.findByIdForUpdate(command.accountId())
-                .filter(found -> found.getUser().getId().equals(command.userId()))
-                // TODO(2단계): 계좌 없음, 소유자 다름 둘 다 margin.reserve-failed(ACCOUNT_NOT_FOUND)를 저장하고 커밋 (예외로 끝내지 않음)
-                .orElseThrow(() -> new IllegalStateException("미구현(2단계): 계좌 없음 또는 소유자 불일치. subscriptionId=" + command.subscriptionId()));
+        // 계좌가 없으면 잠글 행이 없어서 바로 거절한다
+        Account account = accountRepository.findByIdForUpdate(command.accountId()).orElse(null);
+
+        // 소유권: 계좌 없음, 소유자 다름 둘 다 ACCOUNT_NOT_FOUND로 응답한다 (타인 계좌의 존재 여부를 숨김). 실제 원인은 로그로 구분
+        if (account == null) {
+            log.warn("증거금 인출 거절: 계좌 없음. subscriptionId={}, accountId={}", command.subscriptionId(), command.accountId());
+            reject(command, MarginReserveFailReason.ACCOUNT_NOT_FOUND);
+            return;
+        }
+        if (!account.getUser().getId().equals(command.userId())) {
+            log.warn("증거금 인출 거절: 계좌 소유자 다름. subscriptionId={}, accountId={}, userId={}",
+                    command.subscriptionId(), command.accountId(), command.userId());
+            reject(command, MarginReserveFailReason.ACCOUNT_NOT_FOUND);
+            return;
+        }
 
         // TODO(3단계): 기존 margin 확인. PENDING이면 margin.reserved 재발행, POSTED/VOIDED면 로그만, amount나 accountId가 다르면 DLT
 
-        // TODO 4단계 (margin_void_intent): 선행 반환 기록이 있으면 자금을 움직이지 않고 로그만 남긴다 (E-16~E-19)
-        //   미지원 위험: 반환 요청(TIMEOUT)이 인출 요청보다 먼저 처리되면, 청약은 CANCELLED인데 뒤늦게 온 인출이 성공해
-        //   청약증거금이 묶인 채 남는다 (반환해 줄 이벤트가 다시 오지 않음)
+        // 선행 반환 기록: 반환 요청(TIMEOUT 등)이 인출 요청보다 먼저 처리됐으면 청약은 이미 CANCELLED라서
+        //   자금을 움직이지 않고 응답 이벤트 없이 로그만 남긴다 (E-17). 옮긴 돈이 없으니 예외 없이 처리 기록만 커밋한다
+        //   잔액보다 먼저 봐야 이미 취소된 청약에 reserve-failed가 나가지 않는다 (E-19)
+        // TODO(반환 Consumer 이슈): margin_void_intent 삽입. 그 전까지는 기록이 생기지 않아 이 분기를 타지 않는다
+        if (marginVoidIntentRepository.existsBySubscriptionId(command.subscriptionId())) {
+            log.warn("증거금 인출 안 함: 선행 반환 기록 있음. subscriptionId={}, accountId={}",
+                    command.subscriptionId(), command.accountId());
+            processedEventRecorder.record(command.eventId(), CONSUMER_NAME, TOPIC);
+            return;
+        }
 
-        // TODO(2단계): 잔액 부족이면 margin.reserve-failed(INSUFFICIENT_BALANCE)를 저장하고 커밋. 지금은 예외가 나서 롤백된다
+        // 잔액: 돈을 옮기기 전에 먼저 검사해서 거절을 커밋한다. reserveMargin()의 검사는 안전장치로 남겨 둔다
+        if (!account.hasCashBalance(command.amount())) {
+            log.info("증거금 인출 거절: 예수금 부족. subscriptionId={}, accountId={}, amount={}",
+                    command.subscriptionId(), command.accountId(), command.amount());
+            reject(command, MarginReserveFailReason.INSUFFICIENT_BALANCE);
+            return;
+        }
 
         // 인출
         account.reserveMargin(command.amount());
@@ -78,6 +108,14 @@ public class MarginReserveService {
         marginEventPublisher.publishReserved(MarginReserved.from(margin));
 
         // processed_event 테이블에 처리 완료한 이벤트 식별 정보를 기록해 중복 처리를 방지한다.
+        processedEventRecorder.record(command.eventId(), CONSUMER_NAME, TOPIC);
+    }
+
+    // 업무 거절: 돈을 옮기기 전이라 되돌릴 것이 없다. 예외로 끝내면 롤백, 재시도 후 DLT로 가므로
+    //   거절 응답(Outbox)과 처리 기록을 저장하고 정상 커밋한다
+    private void reject(ReserveMarginCommand command, MarginReserveFailReason reason) {
+        marginEventPublisher.publishReserveFailed(
+                new MarginReserveFailed(command.subscriptionId(), command.accountId(), reason));
         processedEventRecorder.record(command.eventId(), CONSUMER_NAME, TOPIC);
     }
 }

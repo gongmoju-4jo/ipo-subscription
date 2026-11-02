@@ -27,7 +27,7 @@ import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-// 실제 PostgreSQL(Testcontainers)에서 증거금 인출 정상 경로를 확인한다 (1단계). Docker가 필요하다
+// 실제 PostgreSQL(Testcontainers)에서 증거금 인출의 정상 경로(1단계)와 거절, 선행 반환 기록(2단계)을 확인한다. Docker가 필요하다
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
 class MarginReserveServiceTest {
@@ -67,6 +67,7 @@ class MarginReserveServiceTest {
         jdbcTemplate.update("DELETE FROM outbox");
         jdbcTemplate.update("DELETE FROM ledger_entry");
         jdbcTemplate.update("DELETE FROM margin");
+        jdbcTemplate.update("DELETE FROM margin_void_intent");
         jdbcTemplate.update("DELETE FROM account");
         jdbcTemplate.update("DELETE FROM users");
     }
@@ -166,6 +167,93 @@ class MarginReserveServiceTest {
                 "SELECT margin_balance_after FROM ledger_entry ORDER BY margin_balance_after", Long.class))
                 .containsExactlyElementsOf(LongStream.rangeClosed(1, threads).map(n -> n * 1_000).boxed().toList());
         assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM outbox", Long.class)).isEqualTo(threads);
+    }
+
+    @Test
+    void 계좌가_없으면_ACCOUNT_NOT_FOUND_거절을_커밋한다() {
+        UUID subscriptionId = UUID.randomUUID();
+        UUID unknownAccountId = UUID.randomUUID();
+
+        marginReserveService.reserve(new ReserveMarginCommand(
+                UUID.randomUUID(), subscriptionId, userId, unknownAccountId, UUID.randomUUID(), 15_000));
+
+        assertRejected(subscriptionId, unknownAccountId, "ACCOUNT_NOT_FOUND");
+    }
+
+    @Test
+    void 계좌_소유자가_다르면_ACCOUNT_NOT_FOUND_거절을_커밋한다() {
+        UUID subscriptionId = UUID.randomUUID();
+
+        marginReserveService.reserve(new ReserveMarginCommand(
+                UUID.randomUUID(), subscriptionId, UUID.randomUUID(), accountId, UUID.randomUUID(), 15_000));
+
+        assertRejected(subscriptionId, accountId, "ACCOUNT_NOT_FOUND");
+    }
+
+    @Test
+    void 예수금이_부족하면_INSUFFICIENT_BALANCE_거절을_커밋한다() {
+        UUID subscriptionId = UUID.randomUUID();
+
+        marginReserveService.reserve(command(subscriptionId, 20_001)); // 예수금 20,000원
+
+        assertRejected(subscriptionId, accountId, "INSUFFICIENT_BALANCE");
+    }
+
+    @Test
+    void 선행_반환_기록이_있으면_돈을_옮기지_않고_응답도_보내지_않는다() {
+        UUID subscriptionId = UUID.randomUUID();
+        insertVoidIntent(subscriptionId);
+
+        marginReserveService.reserve(command(subscriptionId, 15_000));
+
+        assertNothingMoved();
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM outbox", Long.class)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event", Long.class)).isEqualTo(1L);
+    }
+
+    @Test
+    void 선행_반환_기록이_잔액_부족보다_먼저다() {
+        UUID subscriptionId = UUID.randomUUID();
+        insertVoidIntent(subscriptionId);
+
+        marginReserveService.reserve(command(subscriptionId, 20_001));
+
+        // 이미 취소된 청약에 reserve-failed가 나가면 안 된다
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM outbox", Long.class)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event", Long.class)).isEqualTo(1L);
+    }
+
+    // 거절: 예외 없이 커밋되고, 돈은 그대로, reserve-failed 1건과 처리 기록 1건이 남는다
+    private void assertRejected(UUID subscriptionId, UUID messageKeyAccountId, String reason) {
+        assertNothingMoved();
+        Map<String, Object> outbox = jdbcTemplate.queryForMap("""
+                SELECT aggregate_type, aggregate_id, event_type, topic, message_key,
+                       payload->>'subscriptionId' AS subscription_id, payload->>'reason' AS reason
+                FROM outbox""");
+        assertThat(outbox.get("aggregate_type")).isEqualTo("MARGIN");
+        assertThat(outbox.get("aggregate_id")).isEqualTo(subscriptionId); // margin이 없어서 청약 ID
+        assertThat(outbox.get("event_type")).isEqualTo("margin.reserve-failed");
+        assertThat(outbox.get("topic")).isEqualTo("margin.reserve-failed");
+        assertThat(outbox.get("message_key")).isEqualTo(messageKeyAccountId.toString());
+        assertThat(outbox.get("subscription_id")).isEqualTo(subscriptionId.toString());
+        assertThat(outbox.get("reason")).isEqualTo(reason);
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event", Long.class)).isEqualTo(1L);
+    }
+
+    private void assertNothingMoved() {
+        Map<String, Object> account = jdbcTemplate.queryForMap(
+                "SELECT cash_balance, margin_balance FROM account WHERE account_id = ?", accountId);
+        assertThat(account.get("cash_balance")).isEqualTo(20_000L);
+        assertThat(account.get("margin_balance")).isEqualTo(0L);
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM margin", Long.class)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM ledger_entry", Long.class)).isZero();
+    }
+
+    // 삽입은 반환 Consumer 이슈에서 만들므로 SQL로 넣는다
+    private void insertVoidIntent(UUID subscriptionId) {
+        jdbcTemplate.update("""
+                INSERT INTO margin_void_intent (subscription_id, account_id, reason, created_at, created_by)
+                VALUES (?, ?, 'TIMEOUT', now(), 'test')""", subscriptionId, accountId);
     }
 
     private ReserveMarginCommand command(UUID subscriptionId, long amount) {

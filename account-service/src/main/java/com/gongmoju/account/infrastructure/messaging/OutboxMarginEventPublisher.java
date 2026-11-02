@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gongmoju.account.application.margin.MarginReserveService;
 import com.gongmoju.account.application.margin.ReserveMarginCommand;
 import com.gongmoju.account.domain.margin.MarginEventPublisher;
+import com.gongmoju.account.domain.margin.MarginReserveFailed;
 import com.gongmoju.account.domain.margin.MarginReserved;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -30,6 +31,7 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
     // TODO: aggregateType은 공통 Outbox 규격이 정해지면 enum으로 바꿀지 결정 (서비스별 enum 제안 중)
     static final String AGGREGATE_TYPE = "MARGIN";
     static final String MARGIN_RESERVED = "margin.reserved";
+    static final String MARGIN_RESERVE_FAILED = "margin.reserve-failed";
 
     // 이벤트 명세 시각 규칙: ISO-8601, +09:00, 밀리초 (OutboxMessageFactory의 occurredAt과 같은 형식)
     private static final DateTimeFormatter EVENT_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx");
@@ -51,6 +53,16 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
 
         outboxRepository.save(Outbox.of(
                 AGGREGATE_TYPE, event.marginId(), MARGIN_RESERVED,
+                event.accountId().toString(), toJson(payload)));
+    }
+
+    // 거절은 margin이 없어서 aggregateId에 청약 ID를 쓴다
+    @Override
+    public void publishReserveFailed(MarginReserveFailed event) {
+        MarginReserveFailedPayload payload = new MarginReserveFailedPayload(event.subscriptionId(), event.reason().name());
+
+        outboxRepository.save(Outbox.of(
+                AGGREGATE_TYPE, event.subscriptionId(), MARGIN_RESERVE_FAILED,
                 event.accountId().toString(), toJson(payload)));
     }
 

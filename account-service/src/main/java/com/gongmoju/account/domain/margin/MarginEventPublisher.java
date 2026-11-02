@@ -5,4 +5,6 @@ package com.gongmoju.account.domain.margin;
 public interface MarginEventPublisher {
 
     void publishReserved(MarginReserved event);
+
+    void publishReserveFailed(MarginReserveFailed event);
 }

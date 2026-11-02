@@ -92,6 +92,11 @@ public class Account extends BaseEntity {
      *
      * @param amount 인출할 증거금 금액 (원)
      */
+    // 인출 전에 예수금이 충분한지 확인한다. 부족하면 서비스가 예외 대신 거절 응답(INSUFFICIENT_BALANCE)을 저장한다
+    public boolean hasCashBalance(long amount) {
+        return cashBalance >= amount;
+    }
+
     // todo: 테스트: marignbalance가 long.max_value에 가까울때 오버플로가 발생히도 두 잔액이 변경되지 않는지 확인
     public void reserveMargin(long amount) {
         requirePositive(amount);

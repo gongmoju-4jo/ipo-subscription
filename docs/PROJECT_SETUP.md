@@ -33,7 +33,7 @@ docker-compose up -d postgres kafka kafka-init kafka-ui
 
 필요: **JDK 21**, Docker + Compose v2 이상, IntelliJ
 
-> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI와 서비스 컨테이너 5개가 있습니다. 모니터링이 추가되면 갱신합니다.
+> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)이 있습니다.
 
 ### 📌 Claude Code
 
@@ -53,7 +53,9 @@ ipo-subscription/
 ├── build.gradle            공통 버전, 의존성 (Boot 3.5.16, Cloud 2025.0.3, Java 21)
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
-├── docker-compose.yml      로컬 인프라(PostgreSQL, Kafka, Kafka-UI)와 서비스 컨테이너 5개
+├── docker-compose.yml      로컬 인프라(PostgreSQL, Kafka, Kafka-UI), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
+├── compose.perf.yml        부하 테스트용 자원 고정 ([부하 테스트 가이드](./LOADTEST.md))
+├── loadtest/               부하 테스트 스크립트 (시드, k6 시나리오, 검증)
 ├── docker/postgres/        서비스별 스키마, DB 계정 생성 스크립트
 ├── common/                 공통 라이브러리 (실행 X)
 ├── eureka-server/
@@ -71,7 +73,8 @@ ipo-subscription/
 | account / subscription / allocation | 8081 / 8082 / 8083 |
 | PostgreSQL | 5432 |
 | Kafka / Kafka-UI | 29092 / 8989 |
-| gateway 관리 포트 | 18090 (헬스체크 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
+| Prometheus / Grafana | 9090 / 3000 |
+| gateway 관리 포트 | 18090 (헬스체크, 지표 수집 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
 
 ### 게이트웨이 라우팅
 
@@ -97,7 +100,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
   - `X-User-Id` = 토큰의 `sub`, `X-User-Role` = 토큰의 `role` (토큰이 없는 공개 경로에는 붙지 않음)
   - `X-Request-Received-At` = Gateway 도착 시각 (UTC ISO-8601, 밀리초, 모든 요청). 청약 마감 판단 기준
 - Gateway는 `common`을 쓰지 않아 401·403 오류 응답을 직접 공통 형식으로 만든다 (`details`는 없으면 생략)
-- 컨테이너 헬스체크용으로 **관리 포트(18090)의 `/actuator/health`만** 토큰 없이 열려 있다 (`SecurityConfig`의 헬스 체인). 8080의 `/actuator/**`와 관리 포트의 다른 엔드포인트는 계속 토큰이 필요하다 (`HealthEndpointSecurityTest`가 확인)
+- 컨테이너 헬스체크와 Prometheus 수집용으로 **관리 포트(18090)의 `/actuator/health`, `/actuator/prometheus`만** 토큰 없이 열려 있다 (`SecurityConfig`의 관리 체인). 8080의 `/actuator/**`와 관리 포트의 다른 엔드포인트는 계속 토큰이 필요하다 (`ManagementEndpointSecurityTest`가 확인)
 - 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
 - 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
@@ -128,16 +131,16 @@ docker-compose down                                        # 종료
 docker-compose down -v                                     # 종료 + DB, Kafka 데이터 초기화
 ```
 
-- 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키, DB 비밀번호(관리자 1개, 서비스별 3개). compose가 `.env`를 읽어 컨테이너에 환경변수로 전달한다 (컨테이너 안에는 `.env` 파일이 없다)
+- 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키, DB 비밀번호(관리자 1개, 서비스별 3개), `GRAFANA_ADMIN_PASSWORD`(직접 정한 값, 기본값 없음). compose가 `.env`를 읽어 컨테이너에 환경변수로 전달한다 (컨테이너 안에는 `.env` 파일이 없다)
 - ⚠️ 코드 수정 후엔 위 `실행` 명령 그대로 (`./gradlew build` 빠지면 예전 코드로 뜸). 한 서비스만 고쳤다면 `./gradlew build -x test && docker-compose up -d --build {서비스 이름}`
 - 📌 서비스 컨테이너 중 내 PC에 열리는 포트는 `http://localhost:8080`(게이트웨이)과 `http://localhost:8761`(Eureka 대시보드) 둘뿐이다 (둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩. PostgreSQL, Kafka, Kafka-UI는 별도로 열린다). 서비스 포트(8081~8083)는 열지 않는다 → 서비스 포트 직접 접속 ❌
   - 서비스는 토큰 없이 `X-User-Id` 헤더만으로 호출되므로 외부에 열면 안 된다. 서비스별 Swagger도 쓸 수 없고 통합 Swagger(`http://localhost:8080/swagger-ui/index.html`)를 쓴다
   - Eureka 등록 확인은 IntelliJ 때와 같이 `http://localhost:8761` 화면에서 한다
   - Eureka 포트가 이미 사용 중이거나 Windows 예약 포트라 기동되지 않으면 `.env`에서 `EUREKA_PORT`(기본 8761)를 바꾼다
 - 기동 순서는 compose가 제어한다: postgres, kafka 준비 → 토픽 생성(`kafka-init`) → eureka-server → 서비스. 서비스가 모두 `healthy`여도 Gateway가 서비스를 찾는 데 최대 30초 걸려 처음 요청이 503일 수 있다
-- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너까지 전부 올라온다.** jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui`)
+- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너와 모니터링(Prometheus, Grafana)까지 전부 올라온다.** `GRAFANA_ADMIN_PASSWORD`가 비어 있으면 Grafana만 시작되지 않는다. jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui`)
 - ⚠️ **같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다** (포트 충돌, Eureka 중복 등록). 특히 IntelliJ의 Eureka를 켠 채 Docker 전체를 띄우면 8761이 충돌한다. 일부 서비스만 IntelliJ로 띄워 컨테이너 Eureka에 붙이는 구성은 확인하지 않았고 지원하지 않는다
-- 📌 **Docker 메모리 4GB 이상 권장** (Kafka 포함 시 2GB 부족)
+- 📌 **Docker 메모리 6GB 이상 권장** (Kafka 포함 시 2GB 부족. 모니터링 포함 전체 실행 시 컨테이너 사용량 합계가 부하 중 약 3.4GB였다)
   - Colima: `colima stop && colima start --cpus 4 --memory 6` / Docker Desktop: Settings → Resources → Memory
 
 #### 필요한 서비스만 띄우기
@@ -155,9 +158,18 @@ docker-compose restart {서비스 이름}                                       
 | `eureka-server` | 없음 |
 | `api-gateway` | `eureka-server` |
 | `account-service`, `subscription-service`, `allocation-service` | `postgres`, `kafka`, `kafka-init`(토픽을 만들고 종료), `eureka-server` |
+| `prometheus` | 없음 (수집 대상이 떠 있지 않아도 올라온다) |
+| `grafana` | `prometheus` |
 
 - 서비스를 Gateway(`http://localhost:8080`)로 호출하려면 `api-gateway`와 호출할 서비스를 함께 적는다
 - `kafka-ui`는 의존 대상이 아니라 따로 적어야 올라온다
+
+#### 모니터링
+
+- Prometheus: http://localhost:9090 (서비스 5개의 `/actuator/prometheus`를 5초마다 수집)
+- Grafana: http://localhost:3000, 계정 `admin` / 비밀번호는 `.env`의 `GRAFANA_ADMIN_PASSWORD`. "측정 대시보드"가 자동으로 등록된다 (응답 시간, 처리량, Hikari, Tomcat 스레드, Kafka Producer 지연, CPU, 힙, GC)
+- 둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩한다. 포트가 겹치거나 Windows 예약 포트면 `.env`에서 `PROMETHEUS_PORT`, `GRAFANA_PORT`를 바꾼다
+- 부하 테스트 절차는 [부하 테스트 가이드](./LOADTEST.md)
 
 #### IntelliJ 실행과 Docker 실행의 차이
 
@@ -562,7 +574,7 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
   - 해당 포트 사용 중인 앱 종료
 
 - **Windows에서 `bind: An attempt was made to access a socket in a way forbidden by its access permissions`**
-  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`(없으면 `cp .env.example .env`로 만든다)에서 `KAFKA_PORT`, `KAFKA_UI_PORT`를 다른 값으로 변경
+  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`(없으면 `cp .env.example .env`로 만든다)에서 `KAFKA_PORT`, `KAFKA_UI_PORT`, `EUREKA_PORT`, `PROMETHEUS_PORT`, `GRAFANA_PORT`를 다른 값으로 변경
 
 - **로그인은 되는데 다른 요청이 전부 401 `UNAUTHORIZED`**
   - account-service와 gateway의 JWT 키가 같은지 확인
@@ -584,6 +596,9 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
 
 - **Docker 앱이 종료됨**
   - 메모리 부족 확인 → Colima: `colima start --memory 6 --cpus 4`
+
+- **Grafana가 바로 종료됨 (`GRAFANA_ADMIN_PASSWORD가 비어 있습니다`)**
+  - `.env`의 `GRAFANA_ADMIN_PASSWORD`에 직접 정한 값을 넣고 다시 `docker-compose up -d grafana`
 
 - **Docker에서 서비스가 `unhealthy`이거나 `starting`에서 안 넘어감**
   - `docker-compose logs {서비스 이름}`에서 `APPLICATION FAILED`나 `ERROR`를 확인한다

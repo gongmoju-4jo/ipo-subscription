@@ -1,0 +1,32 @@
+# 서비스 5개의 /actuator/prometheus를 수집한다. 대상은 compose 내부 네트워크의 컨테이너 이름이다.
+# 수집 간격은 5초: 부하 테스트(S0)가 수 초 만에 끝나서 기본 15초로는 그래프에 샘플이 1~2개뿐이다.
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+
+scrape_configs:
+  - job_name: eureka-server
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["eureka-server:8761"]
+
+  # Gateway는 관리 포트(18090)에서만 지표를 연다. 8080은 JWT가 필요하다
+  - job_name: api-gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["api-gateway:18090"]
+
+  - job_name: account-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["account-service:8081"]
+
+  - job_name: subscription-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["subscription-service:8082"]
+
+  - job_name: allocation-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["allocation-service:8083"]

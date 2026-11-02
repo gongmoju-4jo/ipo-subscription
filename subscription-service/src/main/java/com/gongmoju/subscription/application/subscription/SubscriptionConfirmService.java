@@ -62,8 +62,9 @@ public class SubscriptionConfirmService {
 
     private ConfirmResult confirmPending(Subscription subscription, MarginReserved event) {
         if (event.amount() != subscription.getMarginAmount()) {
-            log.warn("확보 금액이 청약의 증거금과 다름. subscriptionId={}, marginAmount={}, reservedAmount={}",
-                    subscription.getId(), subscription.getMarginAmount(), event.amount());
+            // 정상 흐름에서는 생길 수 없음 (청약, 계좌 서비스 중 한쪽 문제). 확정은 진행하되 확인 대상으로 에러 로그를 남김
+            log.error("확보 금액이 청약의 증거금과 다름. 확정은 진행함. subscriptionId={}, marginId={}, expectedAmount={}, reservedAmount={}",
+                    subscription.getId(), event.marginId(), subscription.getMarginAmount(), event.amount());
         }
         subscription.confirm(event.marginId(), event.reservedAt());
         log.info("청약을 확정함. subscriptionId={}, marginId={}", subscription.getId(), event.marginId());

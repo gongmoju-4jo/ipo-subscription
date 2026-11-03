@@ -109,7 +109,7 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한)를 마친 상태에서 실행합니다.
 
 ```bash
-bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 75~80분, 추정)
+bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 40분, 추정)
 ```
 
 하는 일 (순서대로, 중간에 사람이 끼어들지 않습니다)
@@ -250,7 +250,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | --- | --- | --- |
 | `WCAP`, `STABLE_PCT` | `20`, `20` | `official.sh` (S0 워밍업 상한 회차, 안정 판정 ±%) |
 | `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |
-| `STAGES`, `DUR` | `100,200,300,433`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초) |
+| `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
 | `S1_REPEAT` | `3` | `official.sh` (S1 단계마다 반복 측정 횟수. 팀 규칙은 최소 3회, 3 미만이면 판정이 참고값) |
 | `S0_PRICE`, `S1_PRICE`, `QUANTITY` | `15000`, `1000`, `10` | `official.sh` (공모가, 청약 수량) |
 | `PRE_VUS`, `MAX_VUS` | `500`, `2000` | `official.sh` (S1 k6 가상 사용자) |

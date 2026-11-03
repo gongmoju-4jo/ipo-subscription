@@ -11,7 +11,7 @@
 # | subscription-service | 2.0 | 1g | 512m |
 # | allocation-service | 0.5 | 1g | 512m |
 # | eureka-server | 0.5 | 512m | 192m |
-# | postgres | 1.0 | 1g | - |
+# | postgres | 2.0 | 1g | - |
 # | kafka | 1.0 | 1g | 512m |
 # | prometheus, grafana | 0.5 | 512m | - |
 #
@@ -21,7 +21,7 @@
 # 이 파일 없이 먼저 띄운 kafka-ui는 전환 후에도 계속 떠 있으니 `docker-compose stop kafka-ui`로 멈춘다.
 services:
   postgres:
-    cpus: 1.0
+    cpus: 2.0
     mem_limit: 1g
     command:
       - postgres

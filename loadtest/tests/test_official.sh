@@ -61,14 +61,7 @@ expect_out "parse_offsets 다른 토픽 → 실패" 1 "" parse_offsets margin.vo
 expect_out "parse_offsets 빈 출력 → 실패" 1 "" parse_offsets subscription.requested.DLT < "$T.3"
 topics_n="$(kafka_topics | wc -l | tr -d ' ')"
 [ "$topics_n" = 10 ] && ok "kafka_topics: create-topics.sh에서 토픽 10개" || bad "kafka_topics" "$topics_n개"
-topic_arg() { local a="$*"; a="${a##*--topic }"; printf '%s' "${a%% *}"; }
-docker() { local t; t="$(topic_arg "$@")"; printf '%s:0:1\r\n%s:1:0\r\n' "$t" "$t"; }
-expect_out "kafka_dlt_total: 10개 토픽 x 1 = 10" 0 10 kafka_dlt_total
-docker() { local t; t="$(topic_arg "$@")"; if [ "$t" = margin.voided.DLT ]; then echo "Error: topic not found"; return 1; fi; printf '%s:0:1\n' "$t"; }
-expect_out "kafka_dlt_total: 10개 중 margin.voided.DLT만 조회 실패 → 실패" 1 "" kafka_dlt_total
-docker() { local t; t="$(topic_arg "$@")"; [ "$t" = margin.voided.DLT ] && t=wrong.topic; printf '%s:0:1\n' "$t"; }
-expect_out "kafka_dlt_total: 명령은 성공했는데 그 토픽 행이 없음 → 실패" 1 "" kafka_dlt_total
-unset -f docker
+# kafka_dlt_total은 아래 "DLT 토픽을 한 번에 조회"에서 확인한다
 
 # ---- sql_in, is_uuid, ceil_div ----
 U1=6f1c3b0e-1111-4a2b-8c3d-000000000001; U2=6f1c3b0e-1111-4a2b-8c3d-000000000002
@@ -163,7 +156,8 @@ bash() { echo "bash $*" >> "$CALLS"; return 0; }
 unset -f py bash
 [ "$rc" = 0 ] && ok "post_process: 가짜 명령으로 끝까지 돈다" || bad "post_process rc" "$rc"
 grep -q -- "judge.py.*--container custom-pg" "$CALLS" && ok "post_process: judge.py에 --container를 넘긴다" || bad "post_process --container" "$(grep judge "$CALLS")"
-[ "$(grep -c "verify.sh --ipo" "$CALLS")" = 3 ] && ok "post_process: 공모주마다 정합성 SQL (1 + 2 = 3번)" || bad "post_process verify" "$(grep -c verify.sh "$CALLS")"
+[ "$(grep -c "verify.sh --ipo" "$CALLS")" = 2 ] && ok "post_process: 실행마다 정합성 SQL을 한 번 (실행 2개 = 2번)" || bad "post_process verify" "$(grep -c verify.sh "$CALLS")"
+grep "verify.sh" "$CALLS" | grep -q -- "--ipo $U1 --ipo $U2 --run-id b-S1-100 --each-dir" && ok "post_process: 공모주 여러 개를 한 번에 넘기고 --each-dir" || bad "post_process verify 인자" "$(grep verify.sh "$CALLS")"
 grep "check_requests.py" "$CALLS" | grep "b-S0-r1" | grep -q -- "--expect-requests 1000" && ok "post_process: S0 요청 분류에 예상 요청 수를 넘긴다" || bad "post_process S0 expect" "$(grep check_requests "$CALLS")"
 grep "check_requests.py" "$CALLS" | grep "b-S1-100" | grep -q -- "--expect-requests" && bad "post_process S1 expect" "S1에도 넘김" || ok "post_process: S1 요청 분류에는 예상 요청 수를 넘기지 않는다"
 grep "docker_stats.py" "$CALLS" | grep -q -- "--manifest" && ok "post_process: STATS_INTERVAL>0이면 docker_stats.py로 자원 표를 만든다" || bad "post_process docker_stats" "$(grep docker_stats "$CALLS")"
@@ -242,6 +236,72 @@ docker() { cat > /dev/null; echo 'ERROR:  relation "pg_stat_statements" does not
 slowq_run b-S0-r1 2>/dev/null; rc=$?
 [ "$rc" = 0 ] && [ "$SLOWQ_FAILS" = 1 ] && ok "slowq_run: 실패하면 측정은 이어 가고(rc 0) 실패 수를 센다" || bad "slowq_run 실패" "rc=$rc fails=$SLOWQ_FAILS"
 unset -f docker
+# ---- kafka_dlt_total: DLT 토픽을 한 번에 조회 ----
+TOPS="$(kafka_topics)"; NT="$(printf '%s\n' "$TOPS" | grep -c .)"
+docker() { echo "$*" > "$ST/dlt-args"; printf '%s\n' "$TOPS" | awk '{ print $1 ".DLT:0:1"; print $1 ".DLT:1:2\r" }'; }
+expect_out "kafka_dlt_total: 토픽 ${NT}개 x (1+2) = $((NT * 3))" 0 "$((NT * 3))" kafka_dlt_total
+[ "$(grep -o 'kafka-get-offsets' "$ST/dlt-args" | wc -l | tr -d ' ')" = 1 ] && grep -q 'subscription\\\.requested' "$ST/dlt-args" && ok "kafka_dlt_total: 한 번 호출, 점은 정규식에서 이스케이프" || bad "kafka_dlt_total 인자" "$(cat "$ST/dlt-args")"
+docker() { printf '%s\n' "$TOPS" | sed 1d | awk '{ print $1 ".DLT:0:1" }'; }
+expect_out "kafka_dlt_total: 한 토픽의 행이 없으면 실패 (0으로 넘기지 않음)" 1 "" kafka_dlt_total
+docker() { echo "Error: timeout" >&2; return 1; }
+expect_out "kafka_dlt_total: 조회 실패 → 실패" 1 "" kafka_dlt_total
+unset -f docker
+
+# ---- new_ipos: 공모주 여러 개를 한 번에 ----
+DIR_SAVE="$DIR"; DIR="$ST"
+bash() { echo "$*" > "$ST/ipo-args"; printf '%s\r\n%s\r\n' "$U1" "$U2"; }
+expect_out "new_ipos: UUID 2개 → 쉼표로 이음" 0 "$U1,$U2" new_ipos b-S1-100-r1 2 1000
+grep -q -- "--name b-S1-100-r1 --count 2 --price 1000" "$ST/ipo-args" && ok "new_ipos: 이름 접두사, 개수, 공모가를 넘긴다" || bad "new_ipos 인자" "$(cat "$ST/ipo-args")"
+expect_out "new_ipos: 개수가 다르면 실패" 1 "" new_ipos b 3 1000
+bash() { printf '%s\nINSERT 0 1\n' "$U1"; }
+expect_out "new_ipos: UUID가 아닌 줄이 있으면 실패" 1 "" new_ipos b 2 1000
+bash() { return 1; }
+expect_out "new_ipos: 스크립트 실패 → 실패" 1 "" new_ipos b 1 1000
+unset -f bash
+DIR="$DIR_SAVE"
+
+# ---- verify.sh --each-dir: psql 출력을 공모주별 파일로 나눈다 (가짜 docker 실행 파일) ----
+VB="$(mktemp -d)"; mkdir -p "$VB/bin" "$VB/lt/sql" "$VB/lt/results"
+cp "$HERE/../verify.sh" "$VB/lt/"; cp "$HERE/../sql/verify.sql" "$VB/lt/sql/"
+cat > "$VB/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+# 표준입력의 "\echo @@VERIFY ..." 줄과 skip_global 설정을 그대로 흉내 낸다
+skip=0
+while IFS= read -r l; do
+  case "$l" in
+    '\echo @@VERIFY '*) echo "${l#\\echo }" ;;
+    '\set skip_global 1') skip=1 ;;
+    '\unset skip_global') skip=0 ;;
+    "\\echo '== 2."*) echo "== 2. 전체"; [ "$skip" = 1 ] && echo "(건너뜀)" || echo "(0 rows)" ;;
+  esac
+done
+[ -n "${FAKE_DROP:-}" ] && exit 0
+exit "${FAKE_RC:-0}"
+EOF
+chmod +x "$VB/bin/docker"
+PATH="$VB/bin:$PATH" "$BASH" "$VB/lt/verify.sh" --ipo "$U1" --ipo "$U2" --run-id r1 --each-dir > /dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && [ -f "$VB/lt/results/r1/verify-1/sql_result.txt" ] && [ -f "$VB/lt/results/r1/verify-2/sql_result.txt" ] && ok "verify.sh --each-dir: 공모주마다 verify-<번호>/sql_result.txt" || bad "verify.sh each" "rc=$rc $(ls -R "$VB/lt/results" 2>&1 | tr '\n' ' ')"
+head -1 "$VB/lt/results/r1/verify-2/sql_result.txt" | grep -q "^# run_id=r1/verify-2 ipo=$U2 " && ok "verify.sh --each-dir: 머리줄에 run_id, 공모주 ID" || bad "verify.sh 머리줄" "$(head -1 "$VB/lt/results/r1/verify-2/sql_result.txt")"
+grep -q '(0 rows)' "$VB/lt/results/r1/verify-1/sql_result.txt" && grep -q '(건너뜀)' "$VB/lt/results/r1/verify-2/sql_result.txt" && ok "verify.sh --each-dir: 전체 계좌 검사는 첫 공모주만, 나머지는 건너뜀" || bad "verify.sh skip" "$(cat "$VB/lt/results/r1/verify-2/sql_result.txt")"
+PATH="$VB/bin:$PATH" FAKE_RC=3 "$BASH" "$VB/lt/verify.sh" --ipo "$U1" --ipo "$U2" --run-id r2 --each-dir > /dev/null 2>&1; rc=$?
+[ "$rc" = 1 ] && ok "verify.sh --each-dir: psql 실패 → 종료 코드 1" || bad "verify.sh psql 실패" "rc=$rc"
+[ -f "$VB/lt/results/r2/verify-1/sql_result.txt" ] && [ -f "$VB/lt/results/r2/.verify-all.out" ] && ok "verify.sh --each-dir: psql이 실패해도 그때까지의 결과는 나눠 남기고 전체 출력도 남긴다" || bad "verify.sh 부분 결과" "$(ls -a "$VB/lt/results/r2" 2>&1 | tr '\n' ' ')"
+# ---- new_ipo.sh 인자 검사 (docker를 부르기 전에 거부) ----
+printf '#!/usr/bin/env bash\necho called >> "%s/docker-called"\n' "$VB" > "$VB/bin/docker"
+for bad_count in 0 abc -1; do
+  PATH="$VB/bin:$PATH" "$BASH" "$HERE/../seed/new_ipo.sh" --name x --count "$bad_count" > /dev/null 2>&1; rc=$?
+  [ "$rc" = 1 ] && ok "new_ipo.sh: --count $bad_count 거부" || bad "new_ipo.sh --count $bad_count" "rc=$rc"
+done
+[ ! -e "$VB/docker-called" ] && ok "new_ipo.sh: 잘못된 --count면 DB를 건드리지 않는다" || bad "new_ipo.sh docker 호출" "불렸음"
+PATH="$VB/bin:$PATH" "$BASH" "$VB/lt/verify.sh" --ipo "$U1" --ipo "$U2" --run-id r3 > /dev/null 2>&1; rc=$?
+[ "$rc" = 1 ] && ok "verify.sh: 공모주 여러 개인데 --each-dir 없으면 거부" || bad "verify.sh 여러 개" "rc=$rc"
+cat > "$VB/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+while IFS= read -r l; do case "$l" in '\echo @@VERIFY 1 '*) echo "${l#\\echo }" ;; esac; done
+EOF
+PATH="$VB/bin:$PATH" "$BASH" "$VB/lt/verify.sh" --ipo "$U1" --ipo "$U2" --run-id r4 --each-dir > /dev/null 2>&1; rc=$?
+[ "$rc" = 1 ] && ok "verify.sh --each-dir: 나눠진 결과 수가 공모주 수와 다르면 실패" || bad "verify.sh 개수" "rc=$rc"
+
 DIR="$PP"; OUT="$PP/batch"; MANIFEST="$OUT/manifest.csv"; SLOWQ_FAILS=2
 py()   { return 0; }
 bash() { return 0; }

@@ -27,12 +27,12 @@
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
 | `loadtest/tests/` | `official.sh`, `judge.py`, `docker_stats.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 |
-| `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주) |
+| `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js` |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
-| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 10종 실행 |
+| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 10종 실행 (`--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
 | `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
 | `loadtest/stage_table.py` | S1 단계별 표 생성 (목표 속도, 실제 처리량, 지연, 실패율) |
 | `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
@@ -51,7 +51,7 @@
 | k6 | k6를 설치하고 실행 (`K6_MODE=local`) | `grafana/k6` 이미지로 실행 (`K6_MODE=container`) |
 | Gateway 주소 | `http://localhost:8080` | `http://api-gateway:8080` (호스트 포트를 거치지 않음) |
 | 회원 시드, 보고서 (Python) | Python 3이 설치돼 있으면 그대로 실행 | `python:3.12-slim` 컨테이너로 실행 |
-| Prometheus 주소 (보고서) | `http://localhost:9090` | `PROMETHEUS_URL=http://prometheus:9090` |
+| Prometheus 주소 (보고서) | `http://127.0.0.1:9090` | `PROMETHEUS_URL=http://prometheus:9090` |
 | 자원 상한 | 없음 (내 PC 자원을 그대로 씀) | `K6_CPUS`, `K6_MEMORY`로 k6 컨테이너 상한 설정 |
 
 - `K6_MODE`를 주지 않으면(`auto`) k6가 설치돼 있을 때 설치형, 없으면 컨테이너로 실행합니다.
@@ -110,7 +110,7 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한)를 마친 상태에서 실행합니다.
 
 ```bash
-bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 40분, 추정)
+bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 5분, 추정. 2026-11-03 측정은 87분이었고 그 뒤 후처리, 공모주 생성, DLT 조회를 줄였다)
 ```
 
 하는 일 (순서대로, 중간에 사람이 끼어들지 않습니다)
@@ -239,7 +239,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `summary.json` | k6 요약 (처리량, 평균, p90, p95, p99, 오류율, 임계값 판정) |
 | `requests.log` | 요청마다 requestId, subscriptionId, 상태 코드, stage |
 | `precheck.txt` | 사전 점검 결과 (DLT 메시지 수 포함) |
-| `sql_result.txt` | 정합성 SQL 결과 (정식 측정은 공모주마다 `verify-{번호}/sql_result.txt`) |
+| `sql_result.txt` | 정합성 SQL 결과 (정식 측정은 공모주마다 `verify-{번호}/sql_result.txt`. 전체 계좌 기준인 2, 3번은 `verify-1`에만 결과가 있고 나머지는 "건너뜀"으로 남는다. 실행 결과 메시지는 `verify.out`) |
 | `check_requests.txt` | 요청 분류 결과 (정식 측정) |
 | `report.md` | 회차 보고서 (k6 요약, 결과 분류, 서비스별 서버 지표) |
 | `prometheus.json` | 보고서의 서버 지표 질의와 응답 원본 |
@@ -278,7 +278,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `K6_NAME` | 없음 | `run-k6.sh` (컨테이너 실행 시 컨테이너 이름. `official.sh`는 `k6-<run_id>`로 줘서 docker stats에서 실행별 k6를 구분한다) |
 | `BASE_URL` | 로컬 `http://localhost:8080`, 컨테이너 `http://api-gateway:8080` | `run-k6.sh`, `seed_users.py` |
 | `LOADTEST_PASSWORD` | `loadtest1234` | `seed_users.py` (시드 회원의 비밀번호) |
-| `PROMETHEUS_URL` | `http://localhost:9090` | `report.py` (`--prometheus`로도 지정) |
+| `PROMETHEUS_URL` | `http://127.0.0.1:9090` | `report.py` (`--prometheus`로도 지정. Windows에서 `localhost`는 IPv6를 먼저 시도해 연결마다 약 2초가 더 걸려서 `127.0.0.1`을 쓴다) |
 
 ## 9. 스크립트 테스트
 

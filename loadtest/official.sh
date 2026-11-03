@@ -181,12 +181,15 @@ kafka_lag() {
 parse_offsets() {
   awk -F: -v t="$1" '$1 == t && $3 ~ /^[0-9]+$/ { s += $3; c++ } END { if (c == 0) exit 1; print s }'
 }
+# DLT 토픽 전체를 한 번에 조회한다 (토픽 이름 정규식). 토픽마다 행이 있어야 하고, 하나라도 없으면 실패
 kafka_dlt_total() {
-  local topics t out n total=0
+  local topics t out n total=0 re
   topics="$(kafka_topics)" || return 1
+  re="($(printf '%s\n' "$topics" | sed 's/\./\\./g' | paste -sd '|' -))\\.DLT"
+  out="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --topic "$re" 2>&1)" || return 1
+  out="$(printf '%s\n' "$out" | tr -d '\r')"
   for t in $topics; do
-    out="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --topic "$t.DLT" 2>&1)" || return 1
-    n="$(printf '%s\n' "$out" | tr -d '\r' | parse_offsets "$t.DLT")" || return 1
+    n="$(printf '%s\n' "$out" | parse_offsets "$t.DLT")" || return 1
     total=$((total + n))
   done
   echo "$total"
@@ -266,11 +269,14 @@ ensure_token() {
   fi
 }
 
-new_ipo() { # 인자: 이름, 공모가. 공모주 ID 출력
-  local id
-  id="$(cd "$DIR" && bash seed/new_ipo.sh --name "$1" --price "$2" 2>>"$LOG" | tr -d '\r\n ')" || return 1
-  is_uuid "$id" || return 1
-  printf '%s' "$id"
+# 공모주 여러 개를 SQL 한 번으로 만든다 (이름은 <접두사>-1 ~ <접두사>-N). 정확히 N개의 UUID가 아니면 실패
+new_ipos() { # 인자: 이름 접두사, 개수, 공모가. 공모주 ID를 쉼표로 이어 출력
+  local out n id
+  out="$(cd "$DIR" && bash seed/new_ipo.sh --name "$1" --count "$2" --price "$3" 2>>"$LOG" | tr -d '\r ')" || return 1
+  n=0
+  while IFS= read -r id; do [ -z "$id" ] && continue; is_uuid "$id" || return 1; n=$((n + 1)); done <<< "$out"
+  [ "$n" -eq "$2" ] || return 1
+  printf '%s\n' "$out" | awk 'NF' | paste -sd ',' -
 }
 
 # k6 실행. 종료 코드 0(통과), 99(임계값 위반)만 정상으로 보고, summary.json에 요청이 있어야 한다
@@ -454,7 +460,7 @@ manifest_runs() {
 
 # 부하가 모두 끝난 뒤: 보고서(report.py), 요청 분류(check_requests.py), 정합성 SQL(verify.sh), 판정(judge.py)
 post_process() {
-  local fails=0 run scen ipos expected i k expect runs
+  local fails=0 run scen ipos expected i k expect runs vargs
   runs="$(manifest_runs "$MANIFEST")" || { say "후처리: manifest.csv 형식 오류"; return 1; }
   while read -r run scen ipos expected; do
     [ -n "$run" ] && [ "$run" != - ] || continue
@@ -465,12 +471,15 @@ post_process() {
     # shellcheck disable=SC2086  # expect는 비어 있거나 옵션 2개
     py "$(pypath "$DIR/verify/check_requests.py")" "$(pypath "$DIR/results/$run/requests.log")" $expect > "$DIR/results/$run/check_requests.txt" 2>&1 \
       || { say "후처리: $run 요청 분류 이상 (check_requests.txt)"; fails=$((fails + 1)); }
-    k=0
-    for i in ${ipos//;/ }; do
-      k=$((k + 1))
-      (cd "$DIR" && bash verify.sh --ipo "$i" --run-id "$run/verify-$k") > /dev/null 2>&1 || { say "후처리: $run 정합성 SQL 실패 (공모주 $k)"; fails=$((fails + 1)); }
-    done
-    [ "$k" -gt 0 ] || { say "후처리: $run 공모주 ID 없음"; fails=$((fails + 1)); }
+    # 실행 하나의 공모주를 psql 한 번으로 검사한다 (results/<run>/verify-<번호>/sql_result.txt)
+    k=0; vargs=()
+    for i in ${ipos//;/ }; do k=$((k + 1)); vargs+=(--ipo "$i"); done
+    if [ "$k" -gt 0 ]; then
+      (cd "$DIR" && bash verify.sh "${vargs[@]}" --run-id "$run" --each-dir) > "$DIR/results/$run/verify.out" 2>&1 \
+        || { say "후처리: $run 정합성 SQL 실패 (verify.out)"; fails=$((fails + 1)); }
+    else
+      say "후처리: $run 공모주 ID 없음"; fails=$((fails + 1))
+    fi
   done <<< "$runs"
   py "$(pypath "$DIR/verify/judge.py")" "$(pypath "$MANIFEST")" --p95-limit "$P95_LIMIT" --drain-limit "$DRAIN_LIMIT" --container "$PG_CONTAINER" \
     > "$OUT/판정.md" 2> "$OUT/판정.err" \
@@ -562,17 +571,14 @@ main() {
   slowq "$OUT/slow-queries-before.txt" || die 9 "쿼리 통계(pg_stat_statements) 조회 실패. compose.perf.yml로 띄웠는지 확인 (slow-queries-before.txt)"
 
   # 3. 공모주 미리 생성 (부하 중에는 만들지 않는다)
-  for i in $(seq 1 $((WCAP + 3))); do
-    k="$(new_ipo "$BATCH-S0-$i" "$S0_PRICE")" || die 11 "S0 공모주 생성 실패"
-    S0_IPOS+=("$k")
-  done
+  l="$(new_ipos "$BATCH-S0" $((WCAP + 3)) "$S0_PRICE")" || die 11 "S0 공모주 생성 실패"
+  IFS=',' read -ra S0_IPOS <<< "$l"
   : > "$PLAN"
   for r in "${ST[@]}"; do
     n=$(( $(ceil_div $((r * DUR)) "$USERS") + 1 ))
     for rep in $(seq 1 "$S1_REPEAT"); do   # 반복마다 새 공모주 (회원은 앞 반복의 공모주에 이미 청약했다)
-      l=""
-      for i in $(seq 1 "$n"); do k="$(new_ipo "$BATCH-S1-$r-r$rep-$i" "$S1_PRICE")" || die 11 "S1 공모주 생성 실패"; l="$l,$k"; done
-      echo "$r $rep ${l#,}" >> "$PLAN"
+      l="$(new_ipos "$BATCH-S1-$r-r$rep" "$n" "$S1_PRICE")" || die 11 "S1 공모주 생성 실패"
+      echo "$r $rep $l" >> "$PLAN"
     done
   done
   say "공모주 생성: S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 $(wc -l < "$PLAN" | tr -d ' ')묶음(단계 ${#ST[@]}개 x ${S1_REPEAT}회, 묶음당 $(awk 'NR == 1 {print gsub(/,/, ",") + 1}' "$PLAN")~$(awk 'END {print gsub(/,/, ",") + 1}' "$PLAN")개, 공모가 $S1_PRICE)"

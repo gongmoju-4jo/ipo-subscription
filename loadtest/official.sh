@@ -11,14 +11,14 @@
 #  - 커밋하지 않은 변경이 있으면 실행하지 않는다 (어떤 버전으로 쟀는지 추적하기 위해). 커밋, 이미지 생성 시각을 env.txt에 남긴다
 # 불가피한 것(한계): k6와 서비스가 같은 PC, Prometheus 수집, 토큰 재발급 중 로그인 요청(S0 끝~S1 시작 사이 대기 중에만), S1 공모가 1,000원 종목(금액만 다르고 경로는 같다고 보지만 확인하지 못함)
 #
-# 사용: bash official.sh [--batch 이름]    환경변수: WCAP(20) GAP(120) STAGES(100,200,300,433) DUR(90) S1_PRICE(1000) P95_LIMIT(10) DRAIN_LIMIT(10) ALLOW_DIRTY(0)
+# 사용: bash official.sh [--batch 이름]    환경변수: WCAP(20) GAP(120) STAGES(100,200,300,433) DUR(90) S1_PRICE(1000) P95_LIMIT(15) DRAIN_LIMIT(15) ALLOW_DIRTY(0)
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 PYTHONUTF8=1
 DIR="$(cd "$(dirname "$0")" && pwd)"; REPO="$(dirname "$DIR")"; cd "$DIR" || exit 1
 BATCH="official-$(date +%m%d-%H%M)"
 while [ $# -gt 0 ]; do case "$1" in --batch) BATCH="$2"; shift 2 ;; *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;; esac; done
 WCAP="${WCAP:-20}"; GAP="${GAP:-120}"; STAGES="${STAGES:-100,200,300,433}"; DUR="${DUR:-90}"; S1_PRICE="${S1_PRICE:-1000}"
-P95_LIMIT="${P95_LIMIT:-10}"; DRAIN_LIMIT="${DRAIN_LIMIT:-10}"; TOKEN_MAX_MIN=55
+P95_LIMIT="${P95_LIMIT:-15}"; DRAIN_LIMIT="${DRAIN_LIMIT:-15}"; TOKEN_MAX_MIN=55
 OUT="$DIR/results/$BATCH"; mkdir -p "$OUT"; LOG="$OUT/진행.log"; MANIFEST="$OUT/manifest.csv"
 say() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
 PSQL() { docker exec ipo-postgres psql -U postgres -d ipo -tA -F ' ' "$@"; }

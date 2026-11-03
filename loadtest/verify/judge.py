@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """official.sh가 남긴 manifest.csv로 S0, S1의 G1, G2를 판정한다 (표준 라이브러리만 사용, 부하가 끝난 뒤 실행).
 
-사용: python judge.py results/<batch>/manifest.csv --p95-limit 10 --drain-limit 10 [--container ipo-postgres]
+사용: python judge.py results/<batch>/manifest.csv --p95-limit 15 --drain-limit 15 [--container ipo-postgres]
 
 G1 (1장): 합격 = 처리량 200건/초 이상, 평균 500ms 이하, 오류율 1% 미만 / 목표 = 처리량 400건/초 이상, 평균 250ms 이하, p95 500ms 이하, 오류 0
           처리량 기준은 목표 속도가 그 기준 이상인 S1 단계에만 건다 (100건/초 단계는 200건/초를 낼 수 없다). dropped_iterations가 있으면 무효.

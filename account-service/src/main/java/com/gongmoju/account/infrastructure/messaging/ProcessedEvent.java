@@ -17,7 +17,11 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.time.Instant;
 import java.util.UUID;
 
-// 처리한 이벤트 (중복 수신 방지). 업무 변경과 같은 트랜잭션에서 INSERT, 같은 이벤트가 다시 오면 UNIQUE 위반으로 무시
+/**
+ * Kafka 이벤트의 중복 처리를 방지하기 위해 처리 이력을 기록한다.
+ * eventId와 consumerName의 조합을 UNIQUE 제약조건으로 관리한다.
+ */
+// todo: outbox common으로 이동하기
 @Getter
 @Entity
 @Table(name = "processed_event",
@@ -31,15 +35,19 @@ public class ProcessedEvent {
     @Column(name = "processed_event_id")
     private UUID id;
 
+    // Kafka 이벤트의 고유 ID (발행 측 outbox.id 와 동일)
     @Column(nullable = false)
     private UUID eventId;
 
+    // 이벤트를 처리할 Consumer의 식별 이름
     @Column(nullable = false, length = 100)
     private String consumerName;
 
+    // 발행된 Kafka 이벤트의 토픽 이름
     @Column(nullable = false, length = 100)
     private String topic;
 
+    // 저장된 시각
     @CreatedDate
     @Column(nullable = false, updatable = false)
     private Instant processedAt;

@@ -29,7 +29,7 @@ import java.util.UUID;
 
 /**
  * 계좌의 모든 잔고 변경 내역을 기록하는 원장 엔티티.
- *
+ * <p>
  * 원장 기록은 생성 후 수정하거나 삭제하지 않으며,
  * 거래 정정이 필요한 경우 반대 거래를 추가하여 처리한다.
  * 거래 금액과 거래 후 잔고는 DB의 CHECK 제약조건으로 검증한다.
@@ -98,8 +98,8 @@ public class LedgerEntry {
         this.account = account;
         this.type = type;
         this.amount = amount;
-        this.cashBalanceAfter = account.getCashBalance();
-        this.marginBalanceAfter = account.getMarginBalance();
+        this.cashBalanceAfter = account.getCashBalance(); // 예수금 잔액
+        this.marginBalanceAfter = account.getMarginBalance(); // 정산전인 증거금 잔액
         this.margin = margin;
         this.subscriptionId = subscriptionId;
         this.requestId = requestId;
@@ -114,15 +114,17 @@ public class LedgerEntry {
         return new LedgerEntry(account, LedgerEntryType.DEPOSIT, amount, null, null, requestId);
     }
 
-    // 증거금 확보, 정산, 환불, 해제 거래의 원장 기록 생성
+    // 증거금 인출, 정산, 환불, 반환 거래의 원장 기록 생성
     // Margin 객체를 연결하고, 해당 Margin의 subscriptionId를 원장에 기록
-    public static LedgerEntry ofMargin(Account account, LedgerEntryType type, long amount, Margin margin) {
+    public static LedgerEntry ofMargin(
+            Account account, LedgerEntryType type, long amount, Margin margin) {
         if (type == LedgerEntryType.DEPOSIT) {
             throw new IllegalArgumentException("입금은 deposit()으로 기록합니다.");
         }
         if (margin == null) {
             throw new IllegalArgumentException("증거금 거래는 margin이 필요합니다. type=" + type);
         }
+        // 생성자 호출
         return new LedgerEntry(account, type, amount, margin, margin.getSubscriptionId(), null);
     }
 }

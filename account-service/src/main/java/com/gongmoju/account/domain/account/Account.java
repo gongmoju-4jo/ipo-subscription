@@ -21,7 +21,7 @@ import java.util.UUID;
 
 /**
  * 투자자의 예수금과 청약증거금 잔액을 관리하는 계좌 엔티티.
- *
+ * <p>
  * 잔고 변경과 원장(LedgerEntry) 기록은 호출하는 서비스의 동일한 DB 트랜잭션에서 처리한다.
  * DB에서도 음수 잔고를 방지하도록 schema.sql에 CHECK 제약조건을 정의한다.
  */
@@ -82,20 +82,38 @@ public class Account extends BaseEntity {
         cashBalance = Math.addExact(cashBalance, amount);
     }
 
-    // MARGIN_PENDING: 증거금 인출; 예수금 감소 → 청약증거금 증가.
-    //   예수금이 부족하면 INSUFFICIENT_BALANCE 예외를 발생시켜 인출 차단
-    //   이동 전후의 계좌 전체 잔액(예수금 + 청약증거금)은 동일
+    // 요청한 회원의 계좌인지 확인한다
+    public boolean isOwnedBy(UUID userId) {
+        return user.getId().equals(userId);
+    }
+
+    // 인출 전에 예수금이 충분한지 확인한다. 부족하면 서비스가 예외 대신 거절 응답(INSUFFICIENT_BALANCE)을 저장한다
+    public boolean hasCashBalance(long amount) {
+        return cashBalance >= amount;
+    }
+
+    /**
+     * 증거금을 인출한다.
+     * LedgerEntryType: MARGIN_PENDING
+     * <p>
+     * 예수금 감소 -> 청약증거금 증가
+     * 예수금이 부족하면 INSUFFICIENT_BALANCE 예외를 발생시켜 인출 차단
+     * 이동 전후의 계좌 전체 잔액은 동일
+     *
+     * @param amount 인출할 증거금 금액 (원)
+     */
     public void reserveMargin(long amount) {
         requirePositive(amount);
         if (cashBalance < amount) {
             throw new BusinessException(AccountErrorCode.INSUFFICIENT_BALANCE);
         }
+        long newMarginBalance = Math.addExact(marginBalance, amount); // 계산, 필드 반영 분리
         cashBalance -= amount;
-        marginBalance = Math.addExact(marginBalance, amount);
+        marginBalance = newMarginBalance;
     }
 
     // MARGIN_VOID: 증거금 인출 무효화; 청약증거금 전액 → 예수금 (확정 실패, 취소, 0주 배정)
-    //   정산 완료된 증거금의 해제는 호출 전에 Margin 상태로 검증
+    //   정산 완료된 증거금의 반환은 호출 전에 Margin 상태로 검증
     public void voidMargin(long amount) {
         withdrawMargin(amount);
         cashBalance = Math.addExact(cashBalance, amount);

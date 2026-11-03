@@ -73,9 +73,4 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     public Page<Subscription> findByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status, Pageable pageable) {
         return jpaRepository.findByIpoIdAndStatus(ipoId, status, pageable);
     }
-
-    @Override
-    public long countByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status) {
-        return jpaRepository.countByIpoIdAndStatus(ipoId, status);
-    }
 }

@@ -60,8 +60,4 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
             countQuery = "select count(s) from Subscription s where s.ipo.id = :ipoId and s.status = :status")
     Page<Subscription> findByIpoIdAndStatus(@Param("ipoId") UUID ipoId, @Param("status") SubscriptionStatus status,
                                             Pageable pageable);
-
-    // 위와 같은 이유로 s.ipo.id에 직접 건다
-    @Query("select count(s) from Subscription s where s.ipo.id = :ipoId and s.status = :status")
-    long countByIpoIdAndStatus(@Param("ipoId") UUID ipoId, @Param("status") SubscriptionStatus status);
 }

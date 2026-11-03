@@ -53,7 +53,7 @@ public class MarginVoidService {
         log.debug("[증거금 반환] 시작. eventId={}, subscriptionId={}, accountId={}, reason={}",
                 command.eventId(), command.subscriptionId(), command.accountId(), command.reason());
 
-        // 2. 계좌 락: margin 조회보다 먼저 걸어서, 같은 계좌의 인출과 반환이 한 줄로 처리된다
+        // 2. 계좌 락: margin 조회보다 먼저 걸어서, 같은 계좌의 인출, 반환이 순서대로 처리된다.
         //   - 계좌가 없으면 옮긴 돈도 없어서 amount 0으로 응답한다 (E-20). FK 때문에 반환 기록도 남길 수 없다
         Account account = accountRepository.findByIdForUpdate(command.accountId()).orElse(null);
         if (account == null) {
@@ -119,7 +119,7 @@ public class MarginVoidService {
         account.voidMargin(margin.getAmount());
         margin.voidPending();
 
-        // 원장은 거래 후 잔고를 계좌에서 읽으므로 잔고 이동 뒤에 만든다
+        // 원장은 거래 후 잔액를 계좌에서 읽으므로 잔고 이동 뒤에 만든다
         ledgerEntryRepository.save(
                 LedgerEntry.ofMargin(account, LedgerEntryType.MARGIN_VOID, margin.getAmount(), margin));
 

@@ -109,7 +109,7 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한)를 마친 상태에서 실행합니다.
 
 ```bash
-bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간)
+bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 40분, 추정)
 ```
 
 하는 일 (순서대로, 중간에 사람이 끼어들지 않습니다)
@@ -122,7 +122,7 @@ bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results
 6. S1: 속도 단계(`STAGES`)마다 `DUR`초씩 독립 k6 실행을 합니다. 단계마다 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
 7. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다.
 
-- **모든 부하 실행(S0 회차, S1 단계) 뒤에 이번 공모주의 `PENDING`/`COMPENSATING` 0, 필수 Consumer 그룹 lag 0, outbox 미발행 0을 확인하고 `GAP`초 쉰 뒤 다음 실행을 합니다.** 앞 실행의 처리 대기가 다음 실행의 G2에 섞이지 않게 하려는 것입니다.
+- **모든 부하 실행(S0 회차, S1 단계) 뒤에 이번 공모주의 `PENDING`/`COMPENSATING` 0, 필수 Consumer 그룹 lag 0, outbox 미발행 0을 확인하고 `GAP`초 쉰 뒤 다음 실행을 합니다.** 앞 실행의 처리 대기가 다음 실행의 G2에 섞이지 않게 하는 것은 소진 확인이 맡습니다. `GAP`(기본 30초)은 보고서의 서버 지표 구간(요청 구간 앞뒤 10초, Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도입니다. JVM GC(G1은 쉬는 동안 스스로 돌지 않음)와 DB 체크포인트는 대기로 피할 수 없습니다. 개선 전후를 비교할 때는 같은 `GAP`을 씁니다.
 - psql, Kafka, git, 토큰 재발급, k6 조회가 실패하면 0으로 보지 않고 중단합니다. Consumer lag은 `LOG-END-OFFSET - CURRENT-OFFSET`으로 계산하고(커밋 오프셋이 `-`인데 메시지가 있으면 대기로 셉니다), 필수 그룹(`REQUIRED_GROUPS`)이 없으면 실패입니다.
 - 토큰이 다음 실행 중에 만료될 것 같으면 실행 사이(요청 없는 구간)에 재발급하고 `GAP`초 쉽니다. 재발급 시점은 `진행.log`에 남습니다.
 - 같은 이름의 결과 폴더가 있으면 거부합니다(이전 결과를 덮어쓰지 않음). 두 개를 동시에 실행할 수 없습니다(`loadtest/results/.official.lock`). 중단(Ctrl+C)하면 이번 실행이 띄운 k6 컨테이너만 멈춥니다.
@@ -250,7 +250,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | 변수 | 기본값 | 쓰는 곳 |
 | --- | --- | --- |
 | `WCAP`, `STABLE_PCT` | `20`, `20` | `official.sh` (S0 워밍업 상한 회차, 안정 판정 ±%) |
-| `GAP` | `120` | `official.sh` (실행 사이 대기 초) |
+| `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |
 | `STAGES`, `DUR` | `100,200,300,433`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초) |
 | `S0_PRICE`, `S1_PRICE`, `QUANTITY` | `15000`, `1000`, `10` | `official.sh` (공모가, 청약 수량) |
 | `PRE_VUS`, `MAX_VUS` | `500`, `2000` | `official.sh` (S1 k6 가상 사용자) |

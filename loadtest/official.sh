@@ -19,7 +19,9 @@
 # 환경변수 (모두 env.txt에 기록된다)
 #   WCAP=20         S0 워밍업 상한 회차 (넘으면 중단)
 #   STABLE_PCT=20   S0 안정 판정: 회차 평균 응답이 연속 3회차 각각 그 3회차 평균의 +-STABLE_PCT% 이내
-#   GAP=120         실행 사이 대기(초)
+#   GAP=30          실행 사이 대기(초). 앞 실행의 처리 대기는 소진 확인으로 없애고, 이 대기는 보고서의 서버 지표 구간
+#                   (요청 구간 앞뒤 10초 + Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도다. GC, DB 체크포인트는 대기로 피할 수 없다
+#                   개선 전후를 비교할 때는 같은 값을 쓴다
 #   STAGES=100,200,300,433  S1 속도 단계(건/초)       DUR=90  S1 단계 유지(초)
 #   S0_PRICE=15000  S1_PRICE=1000  QUANTITY=10     공모가(원), 청약 수량(주)
 #   PRE_VUS=500 MAX_VUS=2000   S1 k6 가상 사용자
@@ -49,7 +51,7 @@ COLD_CONTAINERS="ipo-api-gateway ipo-subscription-service ipo-account-service"
 JAR_TARGETS="ipo-api-gateway:api-gateway ipo-account-service:account-service ipo-subscription-service:subscription-service ipo-allocation-service:allocation-service ipo-eureka-server:eureka-server"
 ALL_CONTAINERS="ipo-postgres ipo-kafka ipo-eureka-server ipo-api-gateway ipo-account-service ipo-subscription-service ipo-allocation-service"
 
-WCAP="${WCAP:-20}"; STABLE_PCT="${STABLE_PCT:-20}"; GAP="${GAP:-120}"
+WCAP="${WCAP:-20}"; STABLE_PCT="${STABLE_PCT:-20}"; GAP="${GAP:-30}"
 STAGES="${STAGES:-100,200,300,433}"; DUR="${DUR:-90}"
 S0_PRICE="${S0_PRICE:-15000}"; S1_PRICE="${S1_PRICE:-1000}"; QUANTITY="${QUANTITY:-10}"
 PRE_VUS="${PRE_VUS:-500}"; MAX_VUS="${MAX_VUS:-2000}"

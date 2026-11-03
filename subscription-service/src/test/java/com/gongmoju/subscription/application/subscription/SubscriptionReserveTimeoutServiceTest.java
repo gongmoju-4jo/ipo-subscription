@@ -1,6 +1,7 @@
 package com.gongmoju.subscription.application.subscription;
 
 import com.gongmoju.subscription.domain.subscription.MarginReserveRequestRecorder;
+import com.gongmoju.subscription.domain.subscription.MarginVoidRequestRecorder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -56,6 +57,9 @@ class SubscriptionReserveTimeoutServiceTest {
 
     @MockitoSpyBean
     private MarginReserveRequestRecorder reserveRequestRecorder;
+
+    @MockitoSpyBean
+    private MarginVoidRequestRecorder voidRequestRecorder;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -246,6 +250,44 @@ class SubscriptionReserveTimeoutServiceTest {
         assertThat(subscription().get("attempts")).isEqualTo(1);
         assertThat(subscription().get("version")).isEqualTo(0L);
         assertThat(outbox("margin.reserve-requested")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("반환 요청 기록이 실패하면 COMPENSATING(TIMEOUT) 전환, 요청 횟수, 요청 시각 변경도 함께 롤백되어 PENDING으로 남고 Outbox는 비어 있다")
+    void handle_rollsBackTimeoutCompensation_whenVoidRequestRecordFails() {
+        // given
+        jdbcTemplate.update("UPDATE subscription SET attempts = ? WHERE subscription_id = ?", MAX_ATTEMPTS, subscriptionId);
+        Object lastRequestedAtBefore = subscription().get("last_requested_at");
+        doThrow(new IllegalStateException("반환 요청 Outbox 실패")).when(voidRequestRecorder).record(any());
+
+        // when, then
+        assertThatThrownBy(() -> timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS))
+                .isInstanceOf(IllegalStateException.class);
+        Map<String, Object> row = subscription();
+        assertThat(row.get("status")).isEqualTo("PENDING");
+        assertThat(row.get("cancel_reason")).isNull();
+        assertThat(row.get("attempts")).isEqualTo(MAX_ATTEMPTS);
+        assertThat(row.get("last_requested_at")).isEqualTo(lastRequestedAtBefore);
+        assertThat(row.get("version")).isEqualTo(0L);
+        assertThat(outbox("margin.void-requested")).isEmpty();
+        assertThat(outbox("margin.reserve-requested")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("TIMEOUT 보상 뒤에 같은 청약을 다시 처리해도 인출 요청이나 반환 요청이 더 기록되지 않는다")
+    void handle_recordsNothingMore_afterTimeoutCompensation() {
+        // given
+        jdbcTemplate.update("UPDATE subscription SET attempts = ? WHERE subscription_id = ?", MAX_ATTEMPTS, subscriptionId);
+        timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+
+        // when
+        ReserveTimeoutResult again = timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+
+        // then
+        assertThat(again).isEqualTo(ReserveTimeoutResult.NOT_PENDING_IGNORED);
+        assertThat(outbox("margin.reserve-requested")).isEmpty();
+        assertThat(outbox("margin.void-requested")).hasSize(1);
+        assertThat(subscription().get("status")).isEqualTo("COMPENSATING");
     }
 
     @Test

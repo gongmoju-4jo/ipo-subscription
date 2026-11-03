@@ -154,7 +154,7 @@ class PendingTimeoutKafkaTest {
         assertThat(status()).isEqualTo("PENDING");
 
         // when
-        kafkaTemplate.send(RESERVED, accountId.toString(), reservedJson()).get(10, TimeUnit.SECONDS);
+        kafkaTemplate.send(RESERVED, accountId.toString(), reservedJson(UUID.randomUUID())).get(10, TimeUnit.SECONDS);
 
         // then
         await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> assertThat(status()).isEqualTo("CONFIRMED"));
@@ -183,6 +183,15 @@ class PendingTimeoutKafkaTest {
                 .isEqualTo("TIMEOUT");
         assertThat(readTopic(RESERVE_REQUESTED, accountId.toString(), Duration.ofSeconds(3), 1)).isEmpty();
 
+        // 보상이 시작된 뒤 늦게 도착한 인출 성공 응답은 무시되어야 함 (정상적으로는 오지 않는 응답). Consumer가 처리한 것(처리 기록)을 확인한 뒤 상태를 봄
+        UUID lateEventId = UUID.randomUUID();
+        kafkaTemplate.send(RESERVED, accountId.toString(), reservedJson(lateEventId)).get(10, TimeUnit.SECONDS);
+        await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> assertThat(processedCount(lateEventId)).isEqualTo(1));
+        assertThat(status()).isEqualTo("COMPENSATING");
+        assertThat(jdbcTemplate.queryForObject("SELECT margin_id FROM subscription WHERE subscription_id = ?", UUID.class, subscriptionId)).isNull();
+        assertThat(outboxCount(VOID_REQUESTED)).isEqualTo(1);
+        assertThat(outboxCount(RESERVE_REQUESTED)).isZero();
+
         // when
         kafkaTemplate.send(VOIDED, accountId.toString(), voidedJson()).get(10, TimeUnit.SECONDS);
 
@@ -202,11 +211,19 @@ class PendingTimeoutKafkaTest {
                 Timestamp.from(Instant.now().minusSeconds(60)));
     }
 
-    private String reservedJson() {
+    private String reservedJson(UUID eventId) {
         return """
                 {"eventId":"%s","eventType":"margin.reserved","occurredAt":"2026-11-04T10:00:00.000+09:00",
                  "subscriptionId":"%s","marginId":"%s","amount":%d,"reservedAt":"2026-11-04T10:00:00.000+09:00"}"""
-                .formatted(UUID.randomUUID(), subscriptionId, UUID.randomUUID(), MARGIN_AMOUNT);
+                .formatted(eventId, subscriptionId, UUID.randomUUID(), MARGIN_AMOUNT);
+    }
+
+    private int processedCount(UUID eventId) {
+        return jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId);
+    }
+
+    private long outboxCount(String topic) {
+        return jdbcTemplate.queryForObject("SELECT count(*) FROM outbox WHERE aggregate_id = ? AND topic = ?", Long.class, subscriptionId, topic);
     }
 
     // 확보한 증거금이 없던 시간 초과 반환은 amount 0이 정상이다 (이벤트 명세 margin.void-requested 절)

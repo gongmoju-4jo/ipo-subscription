@@ -54,6 +54,15 @@ spring:
         # Producer가 포기하는 시간(delivery.timeout.ms)을 발행기의 send-timeout 이하로 맞춘다. 발행기가 실패로 처리한 뒤에도 Producer가 재시도해서 중복이 쌓이지 않게 한다
         request.timeout.ms: 3000
         delivery.timeout.ms: 5000
+    consumer:
+      # 그룹이 처음 생길 때 이미 발행된 ipo.closed를 놓치지 않도록 처음부터 읽는다
+      auto-offset-reset: earliest
+      # 처리가 끝난 레코드만 커밋한다 (리스너 ack-mode: record)
+      enable-auto-commit: false
+    listener:
+      ack-mode: record
+      # 파티션 3개(.env의 KAFKA_TOPIC_PARTITIONS 기본값)와 같은 수
+      concurrency: 3
   cloud:
     openfeign:
       client:

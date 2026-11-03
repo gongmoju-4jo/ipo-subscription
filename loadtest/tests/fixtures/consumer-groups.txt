@@ -1,0 +1,20 @@
+
+GROUP                  TOPIC                    PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                            HOST            CLIENT-ID
+account-margin-reserve margin.reserve-requested 2          19198           19198           0               consumer-account-margin-reserve-3-ddedd63b-8fb1-40a9-8d98-0c841764d793 /172.21.0.9     consumer-account-margin-reserve-3
+account-margin-reserve margin.reserve-requested 1          18098           18098           0               consumer-account-margin-reserve-2-053ab0d5-5213-414b-8af8-1c006b58473c /172.21.0.9     consumer-account-margin-reserve-2
+account-margin-reserve margin.reserve-requested 0          20705           20705           0               consumer-account-margin-reserve-1-e238e566-1f29-40ea-85ec-573d1ed41ea4 /172.21.0.9     consumer-account-margin-reserve-1
+
+GROUP                              TOPIC                 PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                                        HOST            CLIENT-ID
+subscription-margin-reserve-failed margin.reserve-failed 0          -               0               -               consumer-subscription-margin-reserve-failed-4-01328612-f205-4f32-9d58-e05a32c8cc7c /172.21.0.8     consumer-subscription-margin-reserve-failed-4
+subscription-margin-reserve-failed margin.reserve-failed 1          -               0               -               consumer-subscription-margin-reserve-failed-5-b799aff7-71a8-4ee2-88a4-cb0892fce798 /172.21.0.8     consumer-subscription-margin-reserve-failed-5
+subscription-margin-reserve-failed margin.reserve-failed 2          -               0               -               consumer-subscription-margin-reserve-failed-6-6cbde38d-9385-451e-ad31-5cc27478e14b /172.21.0.8     consumer-subscription-margin-reserve-failed-6
+
+GROUP                        TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                                  HOST            CLIENT-ID
+subscription-margin-reserved margin.reserved 1          17786           17786           0               consumer-subscription-margin-reserved-8-3153fd75-1de3-42b8-b270-e4e05e57d746 /172.21.0.8     consumer-subscription-margin-reserved-8
+subscription-margin-reserved margin.reserved 2          18867           18867           0               consumer-subscription-margin-reserved-9-3a3d574d-3979-4e27-9277-5758a9687498 /172.21.0.8     consumer-subscription-margin-reserved-9
+subscription-margin-reserved margin.reserved 0          20348           20348           0               consumer-subscription-margin-reserved-7-ec683b03-9fdf-42d0-92be-fc2f900c8398 /172.21.0.8     consumer-subscription-margin-reserved-7
+
+GROUP                  TOPIC                  PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                                            HOST            CLIENT-ID
+subscription-requested subscription.requested 1          775956          775956          0               consumer-subscription-requested-2-8a4fe6a4-d600-40e4-b24d-41a364c091ef /172.21.0.8     consumer-subscription-requested-2
+subscription-requested subscription.requested 0          839306          839306          0               consumer-subscription-requested-1-ca0f89b9-c524-4389-883b-01cff9a6bc1e /172.21.0.8     consumer-subscription-requested-1
+subscription-requested subscription.requested 2          824738          824738          0               consumer-subscription-requested-3-82b4367b-269b-4dbf-abfd-74e8ac05c01f /172.21.0.8     consumer-subscription-requested-3

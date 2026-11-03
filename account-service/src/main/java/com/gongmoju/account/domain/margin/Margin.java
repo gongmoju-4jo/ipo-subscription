@@ -67,7 +67,7 @@ public class Margin extends BaseEntity {
     @Column(nullable = false, length = 20)
     private MarginStatus status = MarginStatus.PENDING;
 
-    // 정산 완료 시각
+    // 정산 완료 또는 반환된 시각
     private Instant settledAt;
 
     /**
@@ -104,5 +104,27 @@ public class Margin extends BaseEntity {
         margin.ipoId = ipoId;
         margin.amount = amount;
         return margin;
+    }
+
+    /**
+     * 증거금 상태를 PENDING → VOIDED 으로 변경. (청약 취소, 실패 경우)
+     */
+    public void voidPending() {
+        if (status != MarginStatus.PENDING) {
+            throw new IllegalStateException("PENDING만 반환할 수 있습니다. marginId=" + id + ", status=" + status);
+        }
+        this.status = MarginStatus.VOIDED;
+        this.settledAt = Instant.now();
+    }
+
+    /**
+     * 증거금 상태를 PENDING → POSTED 으로 변경. (정상 배정, 정산 완료 처리 경우)
+     */
+    public void postPending() {
+        if (status != MarginStatus.PENDING) {
+            throw new IllegalStateException("PENDING만 정산할 수 있습니다. marginId=" + id + ", status=" + status);
+        }
+        this.status = MarginStatus.POSTED;
+        this.settledAt = Instant.now();
     }
 }

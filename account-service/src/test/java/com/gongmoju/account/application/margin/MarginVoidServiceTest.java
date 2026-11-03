@@ -182,6 +182,19 @@ class MarginVoidServiceTest {
                 "SELECT status FROM margin WHERE subscription_id = ?", String.class, subscriptionId)).isEqualTo("PENDING");
     }
 
+    @Test
+    void 요청_계좌가_없는데_margin이_다른_계좌에_있으면_예외로_롤백한다() {
+        UUID subscriptionId = reserve(15_000);
+        UUID unknownAccountId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> marginVoidService.voidMargin(command(subscriptionId, unknownAccountId)))
+                .isInstanceOf(InvalidEventException.class);
+
+        assertRolledBack();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM margin WHERE subscription_id = ?", String.class, subscriptionId)).isEqualTo("PENDING");
+    }
+
     // 인출 처리 기록 1건만 남고 반환 쪽 기록, 잔고 변화, 응답이 없어야 한다
     private void assertRolledBack() {
         assertBalance(5_000, 15_000);

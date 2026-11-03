@@ -57,10 +57,25 @@ public class MarginVoidService {
         //   - 계좌가 없으면 옮긴 돈도 없어서 amount 0으로 응답한다 (E-20). FK 때문에 반환 기록도 남길 수 없다
         Account account = accountRepository.findByIdForUpdate(command.accountId()).orElse(null);
         if (account == null) {
+
+            // 요청 계좌는 없는데 margin이 있으면, margin의 계좌와 다른 것이므로 계좌 불일치가 우선, DLT로 전송 (E-20)
+            //   - 락을 걸 계좌가 없어서, 처리 중인 다른 계좌의 인출과 충돌 가능
+            if (marginRepository.findBySubscriptionId(command.subscriptionId()).isPresent()) {
+
+                log.error("[증거금 반환] 요청 계좌는 없는데 margin이 있어 DLT 대상. eventId={}, subscriptionId={}, accountId={}",
+                        command.eventId(), command.subscriptionId(), command.accountId());
+
+                throw new InvalidEventException(
+                        "증거금 계좌와 요청 계좌가 다릅니다. subscriptionId=" + command.subscriptionId()
+                );
+            }
             log.warn("[증거금 반환] 계좌 없음, amount 0으로 응답. eventId={}, subscriptionId={}, accountId={}",
                     command.eventId(), command.subscriptionId(), command.accountId());
-            marginEventPublisher.publishVoided(
-                    new MarginVoided(command.subscriptionId(), null, command.accountId(), 0));
+
+            marginEventPublisher.publishVoided( // 0원으로 이벤트 발행
+                    new MarginVoided(
+                            command.subscriptionId(), null, command.accountId(), 0
+                    ));
             return;
         }
 

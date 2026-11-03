@@ -7,4 +7,8 @@ import java.util.UUID;
 public interface AllocationRoundRepository {
 
     Optional<AllocationRound> findById(UUID allocationRoundId);
+
+    Optional<AllocationRound> findByIpoId(UUID ipoId);
+
+    AllocationRound save(AllocationRound round);
 }

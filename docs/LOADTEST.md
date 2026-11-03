@@ -122,6 +122,7 @@ python loadtest/seed/seed_users.py --run-id baseline --amount 100000000 --base-u
 bash loadtest/baseline.sh save      # → loadtest/data/baseline/ipo-baseline.dump, ipo-baseline.meta
 # 4. 자원 상한 적용 (3-3절). 정식 측정과 baseline.sh restore는 이 구성에서 돈다
 docker-compose -f docker-compose.yml -f compose.perf.yml up -d
+docker-compose stop kafka-ui        # 1단계에서 상한 없이 뜬 kafka-ui는 위 명령으로 꺼지지 않는다. 측정 중 Kafka를 조회하며 CPU를 쓰므로 끈다
 ```
 
 - `.env`에 `DB_PASSWORD`가 있어야 빈 볼륨에서 PostgreSQL이 만들어집니다.

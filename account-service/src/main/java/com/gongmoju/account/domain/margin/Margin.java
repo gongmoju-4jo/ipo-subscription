@@ -119,11 +119,19 @@ public class Margin extends BaseEntity {
 
     /**
      * 증거금 상태를 PENDING → POSTED 으로 변경. (정상 배정, 정산 완료 처리 경우)
+     *
+     * @param postedAmount 배정 대금
      */
-    public void postPending() {
+    public void postPending(long postedAmount) {
         if (status != MarginStatus.PENDING) {
             throw new IllegalStateException("PENDING만 정산할 수 있습니다. marginId=" + id + ", status=" + status);
         }
+        // 0주는 정산이 아니라 반환(voidPending)이라 1 이상만 받는다. 증거금률 100%라 증거금을 넘을 수 없다
+        if (postedAmount <= 0 || postedAmount > amount) {
+            throw new IllegalArgumentException(
+                    "배정 대금은 1 이상, 증거금 이하여야 합니다. marginId=" + id + ", postedAmount=" + postedAmount + ", amount=" + amount);
+        }
+        this.postedAmount = postedAmount;
         this.status = MarginStatus.POSTED;
         this.settledAt = Instant.now();
     }

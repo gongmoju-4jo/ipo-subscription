@@ -4,13 +4,19 @@ import com.gongmoju.allocation.domain.allocation.AllocationEventPublisher;
 import com.gongmoju.allocation.domain.allocation.ConfirmedSubscription;
 import com.gongmoju.allocation.domain.allocation.ConfirmedSubscriptionReader;
 import com.gongmoju.allocation.domain.allocation.IpoClosed;
+import com.gongmoju.allocation.domain.event.ProcessedEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Instant;
 import java.util.List;
@@ -27,22 +33,28 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-// ipo.closed 처리: 회차 시작, 확정 청약 목록 조회, 배정 실행, 실패 기록 (H2 메모리 DB)
+// ipo.closed 처리: 회차 시작, 확정 청약 목록 조회, 배정 실행, 실패 기록
+// 처리 기록의 ON CONFLICT (event_id, consumer_name)를 H2가 지원하지 않아 실제 PostgreSQL(Testcontainers)로 확인한다. Docker 필요
 // 확정 청약 목록은 청약 서비스를 띄우지 않고 가짜 Reader로 넘긴다
-@SpringBootTest(properties = {
-        "eureka.client.enabled=false",
-        "spring.datasource.url=jdbc:h2:mem:ipo-closed;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.username=sa",
-        "spring.datasource.password=",
-        "spring.sql.init.mode=never",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
-})
+@Testcontainers
+@SpringBootTest(properties = "eureka.client.enabled=false")
 class IpoClosedServiceTest {
 
     private static final UUID IPO_ID = UUID.fromString("8b2d0000-0000-4000-8000-000000000002");
 
+    @Container
+    @ServiceConnection
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16")
+            .withUrlParam("currentSchema", "allocation");
+
     @Autowired
     private IpoClosedService ipoClosedService;
+
+    @Autowired
+    private ProcessedEventRepository processedEventRepository;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
 
     @Autowired
     private AllocationRoundService allocationRoundService;
@@ -135,6 +147,20 @@ class IpoClosedServiceTest {
         assertThat(count("allocation.allocation")).isZero();
         assertThat(count("allocation.outbox")).isZero();
         assertThat(count("allocation.processed_event")).isEqualTo(1);
+    }
+
+    // 같은 (eventId, consumerName)은 예외 없이 false를 반환하고 같은 트랜잭션을 계속 쓸 수 있다. Consumer 이름이 다르면 따로 저장한다
+    @Test
+    void insertsProcessedEventOnlyOnce() {
+        UUID eventId = UUID.randomUUID();
+
+        transactionTemplate.executeWithoutResult(status -> {
+            assertThat(processedEventRepository.insertIfAbsent(eventId, "allocation-ipo-closed", "ipo.closed")).isTrue();
+            assertThat(processedEventRepository.insertIfAbsent(eventId, "allocation-ipo-closed", "ipo.closed")).isFalse();
+            assertThat(processedEventRepository.insertIfAbsent(eventId, "other-consumer", "ipo.closed")).isTrue();
+        });
+
+        assertThat(count("allocation.processed_event")).isEqualTo(2);
     }
 
     // 목록 조회가 실패하면 회차를 FAILED로 기록하고 예외를 그대로 던진다. 배정 결과, Outbox, 처리 기록은 남지 않는다

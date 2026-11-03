@@ -115,11 +115,13 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 # 1. 빈 DB, 빈 Kafka에서 띄운다 (PostgreSQL, Kafka 볼륨을 지우면 그 안의 데이터는 사라진다. 필요하면 먼저 baseline.sh dump로 백업)
 docker-compose -f docker-compose.yml -f compose.perf.yml down
 docker volume rm ipo-subscription_postgres-data ipo-subscription_kafka-data   # 이름은 docker volume ls로 확인
-docker-compose -f docker-compose.yml -f compose.perf.yml up -d
+docker-compose up -d                # 시드는 자원 상한 없이 (3-1절: BCrypt가 CPU를 많이 써서 상한을 걸면 느림)
 # 2. 회원 1,000명 (가입, 계좌 개설, 입금 모두 API). 예수금은 측정 여러 번에 충분하게
 python loadtest/seed/seed_users.py --run-id baseline --amount 100000000 --base-url http://127.0.0.1:8080
 # 3. 저장 (청약, 증거금이 있으면 거부)
 bash loadtest/baseline.sh save      # → loadtest/data/baseline/ipo-baseline.dump, ipo-baseline.meta
+# 4. 자원 상한 적용 (3-3절). 정식 측정과 baseline.sh restore는 이 구성에서 돈다
+docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 ```
 
 - `.env`에 `DB_PASSWORD`가 있어야 빈 볼륨에서 PostgreSQL이 만들어집니다.
@@ -258,7 +260,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `db-after.dump` | 측정이 끝난 DB 덤프 (`pg_dump -Fc --create`. `pg_restore --create -d postgres`로 되살린다) |
 | `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |
 | `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점) |
-| `docker-stats.raw` | docker stats 원본 (`<epoch초>	<JSON>` 한 줄씩, 조회 실패는 `ERROR` 줄) |
+| `docker-stats.raw` | docker stats 원본 (`<epoch초>\t<JSON>` 한 줄씩, 조회 실패는 `ERROR` 줄) |
 | `docker-stats.csv` | 위 원본을 숫자로 바꾼 표 (컨테이너별 CPU %(100% = 1코어), 메모리 사용·상한 바이트, PIDs, 네트워크, 디스크) |
 | `slow-queries-before.txt` | 측정 시작 전 `pg_stat_statements` 누적 (비우기 전, 기록용) |
 | `자원.md`, `자원.err` | 실행마다 k6 구간의 컨테이너별 CPU 최대·평균, CPU 상한 대비, 메모리 최대. k6는 `k6-<run_id>` 컨테이너 |

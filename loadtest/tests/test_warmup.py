@@ -115,6 +115,22 @@ class Run(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(sum(1 for r in rows if r["result"].startswith("조회 실패")), 1)
 
+    def test_failure_between_passes_is_not_consecutive(self):
+        # 평평한 값이 이어지다가 구간 하나가 조회 실패 → 창과 연속 통과 수를 비우고 8개 연속 구간을 다시 모은다
+        # (실패를 사이에 둔 두 통과가 연속 2번으로 세어져 일찍 끝나면 안 된다)
+        # 최소 시간을 길게 둬서 실패 뒤의 판정까지 간다 (최소 3분이면 실패 전에 끝남)
+        fail_at = 12
+        rc, rows, _, _ = run_with(lambda i: RuntimeError("일시") if i == fail_at else 100.0, min=400)
+        self.assertEqual(rc, 0)
+        before = [r for r in rows if int(r["elapsed_s"]) <= fail_at * 15]
+        self.assertGreaterEqual(int(before[-1]["streak"]), 2)   # 실패 전에는 연속 통과가 쌓여 있었다
+        after = [r for r in rows if int(r["elapsed_s"]) > (fail_at + 1) * 15]
+        first_judged = next(r for r in after if r["slope_pct_per_min"] != "")
+        # 실패 다음 구간부터 8개가 다시 차야 판정하고, 연속 통과 수는 1부터 다시 센다
+        self.assertEqual(int(first_judged["elapsed_s"]), (fail_at + 1 + 8) * 15)
+        self.assertEqual(first_judged["streak"], "1")
+        self.assertEqual(int(rows[-1]["elapsed_s"]), 405)
+
     def test_reads_after_bucket_end_plus_scrape(self):
         _, _, calls, _ = run_with(lambda i: 100.0)
         self.assertEqual(calls[0], 1015)  # 첫 구간 끝 = since + 15

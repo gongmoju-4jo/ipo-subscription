@@ -9,7 +9,8 @@
 - 구간마다 warmup.csv에 한 줄씩 남긴다 (끝 시각, 요청 수, 평균 ms, 분당 기울기 %, 판정)
 
 종료 코드: 0 정상 상태 도달 / 2 max초 안에 도달하지 못함 / 3 Prometheus 조회가 연속 3번 실패 / 1 인자
-요청이 0건인 구간은 조회 실패로 센다 (부하가 끊겼는데 평평하다고 판정하지 않게)
+요청이 0건인 구간은 조회 실패로 센다 (부하가 끊겼는데 평평하다고 판정하지 않게).
+조회가 실패하면 창과 연속 통과 수를 비우고 다시 연속 window개 구간을 모은 뒤 판정한다
 """
 import argparse
 import csv
@@ -83,6 +84,9 @@ def run(args, now=time.time, sleep=time.sleep, read=bucket_avg_ms):
                 fails = 0
             except (OSError, ValueError, RuntimeError, KeyError) as e:
                 fails += 1
+                # 빠진 구간을 건너뛰고 이어 붙이면 창의 시간 축이 어긋나고, 실패를 사이에 둔 두 통과가 연속으로 세어진다.
+                # 그래서 창과 연속 통과 수를 비우고 다시 연속 구간을 모은다 (판정이 최대 창 길이만큼 늦어질 수 있다)
+                values, streak = [], 0
                 w.writerow([end, elapsed, "", "", "", streak, f"조회 실패: {e}"]); f.flush()
                 if fails >= 3:
                     print(f"warmup.py: Prometheus 조회가 연속 {fails}번 실패", file=sys.stderr)

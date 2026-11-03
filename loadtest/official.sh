@@ -429,6 +429,7 @@ run_warmup() {
   case "$wrc" in
     0) ;;
     2) die 2 "워밍업 ${WARM_MAX}초 안에 정상 상태에 닿지 않음 (warmup.csv)" ;;
+    1) die 1 "warmup.py 인자 오류 (진행.log)" ;;
     *) die 2 "워밍업 판정 실패 (warmup.py 종료 코드 $wrc, 진행.log, warmup.csv)" ;;
   esac
   # 멈춘 k6는 종료 코드 105(terminated)로 끝나고 summary.json은 남는다. 그 밖의 종료 코드는 실패
@@ -540,7 +541,11 @@ main() {
     is_uint "${!v}" || { echo "$v가 0 이상의 정수가 아님: ${!v}" >&2; exit 1; }
   done
   [ "$S1_REPEAT" -ge 1 ] || { echo "S1_REPEAT는 1 이상 (팀 규칙은 3)" >&2; exit 1; }
+  # 워밍업 인자는 warmup.py와 같은 범위로 여기서 먼저 막는다 (빌드, 복원, 토큰 발급 뒤에야 드러나지 않게)
   case "$WARM_SLOPE_PCT" in ""|*[!0-9.]*|*.*.*) echo "WARM_SLOPE_PCT는 0보다 큰 숫자: $WARM_SLOPE_PCT" >&2; exit 1 ;; esac
+  awk -v s="$WARM_SLOPE_PCT" 'BEGIN { exit !(s + 0 > 0) }' || { echo "WARM_SLOPE_PCT는 0보다 큰 숫자: $WARM_SLOPE_PCT" >&2; exit 1; }
+  [ "$WARM_BUCKET" -ge 5 ] && [ "$WARM_WINDOW" -ge 3 ] && [ "$WARM_CONSEC" -ge 1 ] && [ "$WARM_MAX" -ge "$WARM_MIN" ] \
+    || { echo "워밍업 인자 범위: WARM_BUCKET>=5, WARM_WINDOW>=3, WARM_CONSEC>=1, WARM_MAX>=WARM_MIN (지금 $WARM_BUCKET, $WARM_WINDOW, $WARM_CONSEC, $WARM_MIN~$WARM_MAX)" >&2; exit 1; }
   case "$RESTORE$DB_DUMP" in 00|01|10|11) ;; *) echo "RESTORE, DB_DUMP는 0 또는 1: RESTORE=$RESTORE DB_DUMP=$DB_DUMP" >&2; exit 1 ;; esac
   IFS=',' read -ra ST <<< "$STAGES"
   for r in "${ST[@]}"; do is_uint "$r" && [ "$r" -gt 0 ] || { echo "STAGES 값이 올바르지 않음: $STAGES" >&2; exit 1; }; done

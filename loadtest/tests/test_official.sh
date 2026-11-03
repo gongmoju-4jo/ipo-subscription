@@ -88,6 +88,16 @@ out="$(drain "$U1" 60)"; rc=$?
 [ "$rc" = 0 ] && ok "drain: 실패 4번 뒤 회복하면 계속 진행" || bad "drain 회복" "rc=$rc"
 unset -f sleep pg_int kafka_lag outbox_unpublished
 
+# ---- main: 워밍업 인자 범위를 시작하자마자 막는다 (빌드, 복원 전에. 결과 폴더도 만들지 않음) ----
+for bad_env in "WARM_SLOPE_PCT=0" "WARM_SLOPE_PCT=." "WARM_SLOPE_PCT=-1" "WARM_BUCKET=1" "WARM_WINDOW=2" "WARM_CONSEC=0" "WARM_MIN=500 WARM_MAX=100"; do
+  out="$( ( WARM_SLOPE_PCT=5 WARM_BUCKET=15 WARM_WINDOW=8 WARM_CONSEC=2 WARM_MIN=180 WARM_MAX=900
+            for kv in $bad_env; do eval "$kv"; done
+            DIR="$(mktemp -d)"; main --batch zz-args ) 2>&1 )"; rc=$?
+  [ "$rc" = 1 ] && [ -n "$out" ] && ok "main: $bad_env → 시작 전에 종료 코드 1" || bad "main 인자 $bad_env" "rc=$rc out=$out"
+done
+out="$( ( WARM_SLOPE_PCT=2.5; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: WARM_SLOPE_PCT=2.5는 통과해 결과 폴더 만들기까지 간다" || bad "main 2.5" "rc=$rc out=$out"
+
 # ---- pick_python, pypath (워밍업 판정은 verify/warmup.py, test_warmup.py) ----
 pick_python && ok "pick_python: $PY" || bad "pick_python" "없음"
 p="$(pypath "$REAL_CG")"; [ -n "$p" ] && "$PY" -c "import os,sys; sys.exit(0 if os.path.exists(sys.argv[1]) else 1)" "$p" && ok "pypath: Python이 읽을 수 있는 경로 ($p)" || bad "pypath" "$p"

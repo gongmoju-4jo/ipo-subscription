@@ -121,6 +121,14 @@ class Summary(unittest.TestCase):
         self.assertIn("b-r3: k6 구간(200~203, 3초)에 샘플 없음", md)
         self.assertNotIn("## 문제", md)
 
+    def test_interval_is_read_from_env(self):
+        # 기록 간격 10초면 k6 구간 15초 실행(2배인 20초보다 짧음)은 참고로 남긴다. 기본값 5초로 읽으면 실패가 된다
+        f = Files(line(100, "ipo-kafka"), [row("b-r1", 100, 115)], env="설정 STATS_INTERVAL=10 K6_CPUS=2\n")
+        self.assertEqual(ds.read_interval(f.env), 10)
+        rc, md = f.run()
+        self.assertEqual(rc, 0, md)
+        self.assertIn("기록 간격(10초)", md)
+
     def test_long_run_missing_samples_still_fails(self):
         f = Files(line(100, "ipo-kafka"), [row("b-r1", 100, 110)], env="설정 STATS_INTERVAL=5\n")
         rc, md = f.run()

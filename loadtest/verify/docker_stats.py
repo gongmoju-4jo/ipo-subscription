@@ -92,7 +92,7 @@ def read_interval(path, default=5):
     if path:
         with open(path, encoding="utf-8") as f:
             for line in f:
-                m = re.search(r"STATS_INTERVAL=([0-9]+)", line)
+                m = re.search(r"\bSTATS_INTERVAL=([0-9]+)", line)
                 if m and int(m.group(1)) > 0:
                     return int(m.group(1))
     return default

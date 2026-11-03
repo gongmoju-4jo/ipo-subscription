@@ -5,6 +5,7 @@ import com.gongmoju.allocation.domain.allocation.AllocationRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -13,6 +14,11 @@ import java.util.UUID;
 class AllocationRepositoryAdapter implements AllocationRepository {
 
     private final AllocationJpaRepository jpaRepository;
+
+    @Override
+    public List<Allocation> saveAll(List<Allocation> allocations) {
+        return jpaRepository.saveAll(allocations);
+    }
 
     @Override
     public Optional<Allocation> findBySubscriptionIdAndUserId(UUID subscriptionId, UUID userId) {

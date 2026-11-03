@@ -53,4 +53,21 @@ public class AllocationRound extends BaseEntity {
     private Instant startedAt;
 
     private Instant finishedAt;
+
+    // 배정 결과를 저장하기 전에 확인한다. RUNNING이 아니면 이미 끝났거나 실패한 회차라 다시 배정하지 않는다
+    public void checkRunning() {
+        if (status != AllocationRoundStatus.RUNNING) {
+            throw new IllegalStateException("배정 실행 중인 회차가 아닙니다. allocationRoundId=" + id + ", status=" + status);
+        }
+        if (lotterySeed == null) {
+            throw new IllegalStateException("추첨 시드가 없습니다. allocationRoundId=" + id);
+        }
+    }
+
+    // 배정 결과 저장과 같은 트랜잭션에서 DONE으로 바꾼다
+    public void finish(Instant finishedAt) {
+        checkRunning();
+        this.status = AllocationRoundStatus.DONE;
+        this.finishedAt = finishedAt;
+    }
 }

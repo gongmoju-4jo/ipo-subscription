@@ -70,6 +70,11 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     }
 
     @Override
+    public List<UUID> findStalePendingIds(Instant lastRequestedBefore, int limit) {
+        return jpaRepository.findStalePendingIds(lastRequestedBefore, limit);
+    }
+
+    @Override
     public Page<Subscription> findByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status, Pageable pageable) {
         return jpaRepository.findByIpoIdAndStatus(ipoId, status, pageable);
     }

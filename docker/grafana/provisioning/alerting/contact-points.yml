@@ -1,0 +1,18 @@
+# Slack 장애 알림 연락처. URL과 환경 이름은 Grafana 기동 시 환경변수로 채운다 (docker-compose.yml의 grafana environment)
+# - SLACK_WEBHOOK_URL: 비어 있으면 알림이 나가지 않는다. 실제 장애대응 채널 URL은 배포 환경에만 넣는다
+# - ALERT_ENV: 메시지 제목 앞에 붙는 환경 이름 (local, prod)
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: slack-incident
+    receivers:
+      - uid: slack-incident
+        type: slack
+        settings:
+          url: ${SLACK_WEBHOOK_URL}
+          title: '[${ALERT_ENV}] {{ if eq .Status "firing" }}🚨 장애 발생{{ else }}✅ 복구{{ end }} {{ .CommonLabels.alertname }}'
+          text: |-
+            {{ range .Alerts }}• 서비스: {{ .Labels.job }}
+            • 내용: {{ .Annotations.summary }}
+            • 시작: {{ .StartsAt.Local.Format "2006-01-02 15:04:05" }} (KST)
+            {{ end }}

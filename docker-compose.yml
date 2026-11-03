@@ -256,6 +256,11 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
       GF_USERS_ALLOW_SIGN_UP: "false"
       TZ: Asia/Seoul
+      # Slack 장애 알림 (docker/grafana/provisioning/alerting). URL이 비어 있으면 알림이 나가지 않는다
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      ALERT_ENV: ${ALERT_ENV:-local}
+      # Slack 메시지 안 Grafana 링크의 주소
+      GF_SERVER_ROOT_URL: ${GF_SERVER_ROOT_URL:-http://localhost:${GRAFANA_PORT:-3000}}
     ports:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     volumes:

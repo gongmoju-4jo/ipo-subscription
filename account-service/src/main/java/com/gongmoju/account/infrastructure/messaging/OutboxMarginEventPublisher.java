@@ -7,6 +7,7 @@ import com.gongmoju.account.application.margin.ReserveMarginCommand;
 import com.gongmoju.account.domain.margin.MarginEventPublisher;
 import com.gongmoju.account.domain.margin.MarginReserveFailed;
 import com.gongmoju.account.domain.margin.MarginReserved;
+import com.gongmoju.account.domain.margin.MarginSettled;
 import com.gongmoju.account.domain.margin.MarginVoided;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,7 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
     static final String MARGIN_RESERVED = "margin.reserved";
     static final String MARGIN_RESERVE_FAILED = "margin.reserve-failed";
     static final String MARGIN_VOIDED = "margin.voided";
+    static final String MARGIN_SETTLED = "margin.settled";
 
     // 이벤트 명세: ISO-8601, +09:00, 밀리초 (OutboxMessageFactory의 occurredAt과 같은 형식)
     private static final DateTimeFormatter EVENT_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx");
@@ -88,6 +90,19 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
 
         save(MARGIN_VOIDED, aggregateId, event.accountId(),
                 new MarginVoidedPayload(event.subscriptionId(), event.amount()));
+    }
+
+    /**
+     * 증거금 정산 이벤트를 Outbox에 저장한다.
+     * <p>
+     * - aggregateId: marginId (정산은 margin이 있어야 하기 때문)
+     *
+     * @param event 증거금 정산 결과
+     */
+    @Override
+    public void publishSettled(MarginSettled event) {
+        save(MARGIN_SETTLED, event.marginId(), event.accountId(),
+                new MarginSettledPayload(event.subscriptionId(), event.postedAmount(), event.refundAmount()));
     }
 
     /**

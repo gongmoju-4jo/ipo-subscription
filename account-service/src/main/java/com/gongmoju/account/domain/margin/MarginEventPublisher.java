@@ -10,4 +10,6 @@ public interface MarginEventPublisher {
     void publishReserveFailed(MarginReserveFailed event);
 
     void publishVoided(MarginVoided event);
+
+    void publishSettled(MarginSettled event);
 }

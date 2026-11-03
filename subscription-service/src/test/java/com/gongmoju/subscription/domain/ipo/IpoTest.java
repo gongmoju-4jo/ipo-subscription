@@ -1,17 +1,21 @@
 package com.gongmoju.subscription.domain.ipo;
 
+import com.gongmoju.common.exception.BusinessException;
+import com.gongmoju.subscription.global.exception.SubscriptionErrorCode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@DisplayName("공모주 (접수 Consumer 방어 검증)")
+@DisplayName("공모주 (접수 Consumer 방어 검증, 마감)")
 class IpoTest {
 
     private static final Instant END_AT = Instant.parse("2026-10-27T07:00:00Z");
@@ -60,6 +64,35 @@ class IpoTest {
 
         // then
         assertThat(full).isTrue();
+    }
+
+    @Test
+    @DisplayName("OPEN 공모주를 마감하면 CLOSED가 된다")
+    void close_changesOpenToClosed() {
+        // given
+        Ipo ipo = ipoEndingAt(END_AT);
+
+        // when
+        ipo.close();
+
+        // then
+        assertThat(ipo.getStatus()).isEqualTo(IpoStatus.CLOSED);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(value = IpoStatus.class, names = {"CLOSED", "ALLOCATED"})
+    @DisplayName("OPEN이 아닌 공모주를 마감하면 INVALID_STATUS_TRANSITION이고 상태는 그대로다")
+    void close_throws_whenNotOpen(IpoStatus status) {
+        // given
+        Ipo ipo = ipoEndingAt(END_AT);
+        ReflectionTestUtils.setField(ipo, "status", status);
+
+        // when, then
+        assertThatThrownBy(ipo::close)
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(SubscriptionErrorCode.INVALID_STATUS_TRANSITION);
+        assertThat(ipo.getStatus()).isEqualTo(status);
     }
 
     /**

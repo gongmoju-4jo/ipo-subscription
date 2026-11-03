@@ -7,6 +7,7 @@ import com.gongmoju.account.application.margin.ReserveMarginCommand;
 import com.gongmoju.account.domain.margin.MarginEventPublisher;
 import com.gongmoju.account.domain.margin.MarginReserveFailed;
 import com.gongmoju.account.domain.margin.MarginReserved;
+import com.gongmoju.account.domain.margin.MarginVoided;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -32,6 +33,7 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
     static final String AGGREGATE_TYPE = "MARGIN";
     static final String MARGIN_RESERVED = "margin.reserved";
     static final String MARGIN_RESERVE_FAILED = "margin.reserve-failed";
+    static final String MARGIN_VOIDED = "margin.voided";
 
     // 이벤트 명세: ISO-8601, +09:00, 밀리초 (OutboxMessageFactory의 occurredAt과 같은 형식)
     private static final DateTimeFormatter EVENT_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSxxx");
@@ -68,6 +70,24 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
                 );
 
         save(MARGIN_RESERVE_FAILED, event.subscriptionId(), event.accountId(), payload);
+    }
+
+    /**
+     * 증거금 반환 이벤트를 Outbox에 저장한다.
+     * <p>
+     * - aggregateId:
+     * Margin이 있으면 marginId, 없으면(amount 0) subscriptionId를 사용한다.
+     *
+     * @param event 증거금 반환 결과
+     */
+    @Override
+    public void publishVoided(MarginVoided event) {
+        UUID aggregateId =
+                event.marginId() != null ?
+                        event.marginId() : event.subscriptionId();
+
+        save(MARGIN_VOIDED, aggregateId, event.accountId(),
+                new MarginVoidedPayload(event.subscriptionId(), event.amount()));
     }
 
     /**

@@ -29,14 +29,16 @@ public class SubscriptionVoidedService {
      * <p>
      * 받은 때의 청약 상태에 따라 처리가 다름.
      * <ul>
-     *   <li>{@code COMPENSATING}, {@code CANCEL_REQUESTED}: {@code CANCELLED}로 전환함</li>
+     *   <li>{@code COMPENSATING}, {@code CANCEL_REQUESTED}: 해제 금액이 청약의 증거금과 같으면 {@code CANCELLED}로 전환함. 다르면 전환하지 않고 예외를 던짐</li>
      *   <li>{@code CANCELLED}: 중복 응답이므로 로그만 남기고 정상 종료함</li>
      *   <li>그 외: 정상적으로는 오지 않는 응답이므로 에러 로그를 남기고 상태는 바꾸지 않음</li>
      * </ul>
+     * 해제 금액이 다르면 계좌에 돈이 덜 풀렸을 수 있는데 청약만 종료 상태({@code CANCELLED}, 재청약 가능)가 되면 두 서비스 기록이 어긋나므로,
+     * 전환하지 않고 재시도 없이 DLT로 보냄. 청약은 진행 중 SAGA로 남아 마감을 막고, 원인을 고친 뒤 DLT를 원 토픽으로 재발행하면 다시 처리됨 (처리 기록도 롤백됨).
      *
      * @param event 해제 완료 응답 (필수 필드와 형식 검증을 통과한 값)
      * @return 처리 결과
-     * @throws InvalidEventException 존재하지 않는 {@code subscriptionId}
+     * @throws InvalidEventException 존재하지 않는 {@code subscriptionId}, 또는 해제 금액이 청약의 증거금과 다른 경우
      */
     @Transactional
     public VoidedResult complete(MarginVoided event) {
@@ -63,9 +65,11 @@ public class SubscriptionVoidedService {
 
     private VoidedResult completeCancellation(Subscription subscription, MarginVoided event) {
         if (isUnexpectedAmount(subscription, event.amount())) {
-            // 정상 흐름에서는 생길 수 없음 (청약, 계좌 서비스 중 한쪽 문제). 취소 완료는 진행하되 확인 대상으로 에러 로그를 남김
-            log.error("해제 금액이 청약의 증거금과 다름. 취소 완료는 진행함. subscriptionId={}, cancelReason={}, expectedAmount={}, voidedAmount={}",
-                    subscription.getId(), subscription.getCancelReason(), subscription.getMarginAmount(), event.amount());
+            // 정상 흐름에서는 생길 수 없음 (청약, 계좌 서비스 중 한쪽 문제). 종료 상태로 바꾸지 않고 재시도 없이 DLT로 보내 사람이 확인하게 함
+            log.error("해제 금액이 청약의 증거금과 다름. 취소를 완료하지 않고 DLT로 보냄. subscriptionId={}, status={}, cancelReason={}, expectedAmount={}, voidedAmount={}",
+                    subscription.getId(), subscription.getStatus(), subscription.getCancelReason(), subscription.getMarginAmount(), event.amount());
+            throw new InvalidEventException("해제 금액이 청약의 증거금과 다릅니다: subscriptionId=" + subscription.getId()
+                    + ", expectedAmount=" + subscription.getMarginAmount() + ", voidedAmount=" + event.amount());
         }
         subscription.completeCancellation();
         log.info("청약을 취소 완료함. subscriptionId={}, cancelReason={}, voidedAmount={}",

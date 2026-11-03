@@ -111,17 +111,60 @@ class SubscriptionVoidedServiceTest {
         assertThat(outboxCount()).isZero();
     }
 
-    @Test
-    @DisplayName("해제 금액이 청약의 증거금과 달라도 에러 로그만 남기고 CANCELLED로 전환한다")
-    void complete_changesToCancelled_whenAmountDiffers() {
+    @ParameterizedTest(name = "{0} ({1}), 해제 금액 {2}")
+    @CsvSource({
+            "COMPENSATING, CONFIRM_FAILED, 1500001",
+            "COMPENSATING, CONFIRM_FAILED, 1499999",
+            "COMPENSATING, CONFIRM_FAILED, 0",
+            "COMPENSATING, TIMEOUT, 1",
+            "CANCEL_REQUESTED, USER_CANCEL, 0"
+    })
+    @DisplayName("해제 금액이 청약의 증거금과 다르면(TIMEOUT의 0 제외) InvalidEventException이 나고 상태, 요청 횟수, 처리 기록이 바뀌지 않는다 (재시도 없이 DLT 대상)")
+    void complete_throwsAndKeepsState_whenAmountDiffers(String status, String cancelReason, long amount) {
         // given
-        MarginVoided event = event(UUID.randomUUID(), MARGIN_AMOUNT + 1);
+        jdbcTemplate.update("UPDATE subscription SET status = ?, cancel_reason = ?, attempts = 2 WHERE subscription_id = ?",
+                status, cancelReason, subscriptionId);
+        MarginVoided event = event(UUID.randomUUID(), amount);
+
+        // when, then
+        assertThatThrownBy(() -> voidedService.complete(event)).isInstanceOf(InvalidEventException.class);
+        Map<String, Object> row = subscription();
+        assertThat(row.get("status")).isEqualTo(status);
+        assertThat(row.get("attempts")).isEqualTo(2);
+        assertThat(row.get("version")).isEqualTo(0L);
+        assertThat(processedCount(event.eventId())).isZero();
+        assertThat(outboxCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("금액 불일치로 DLT에 갔던 메시지를 같은 eventId로 다시 처리해도 처리 기록이 남지 않았으므로 금액이 맞으면 CANCELLED가 된다")
+    void complete_cancels_whenSameEventIsRedeliveredWithCorrectedState() {
+        // given
+        UUID eventId = UUID.randomUUID();
+        MarginVoided mismatched = event(eventId, MARGIN_AMOUNT + 1);
+        assertThatThrownBy(() -> voidedService.complete(mismatched)).isInstanceOf(InvalidEventException.class);
+        jdbcTemplate.update("UPDATE subscription SET margin_amount = ? WHERE subscription_id = ?", MARGIN_AMOUNT + 1, subscriptionId);
 
         // when
-        VoidedResult result = voidedService.complete(event);
+        VoidedResult result = voidedService.complete(mismatched);
 
         // then
         assertThat(result).isEqualTo(VoidedResult.CANCELLED);
+        assertThat(subscription().get("status")).isEqualTo("CANCELLED");
+        assertThat(processedCount(eventId)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("이미 CANCELLED인 청약에 금액이 다른 응답이 와도 중복 응답으로 무시하고 예외를 내지 않는다")
+    void complete_ignores_whenAlreadyCancelledAndAmountDiffers() {
+        // given
+        voidedService.complete(event(UUID.randomUUID(), MARGIN_AMOUNT));
+
+        // when
+        VoidedResult result = voidedService.complete(event(UUID.randomUUID(), MARGIN_AMOUNT + 1));
+
+        // then
+        assertThat(result).isEqualTo(VoidedResult.ALREADY_CANCELLED_IGNORED);
         assertThat(subscription().get("status")).isEqualTo("CANCELLED");
     }
 

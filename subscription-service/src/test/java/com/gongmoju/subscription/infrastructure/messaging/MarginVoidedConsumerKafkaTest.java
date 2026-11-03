@@ -208,6 +208,24 @@ class MarginVoidedConsumerKafkaTest {
     }
 
     @Test
+    @DisplayName("해제 금액이 청약의 증거금과 다르면 재시도 없이 바로 DLT로 가고 청약은 COMPENSATING으로 남으며 처리 기록도 남지 않는다")
+    void consume_sendsToDltWithoutRetry_whenAmountDiffersFromMargin() {
+        // given
+        UUID eventId = UUID.randomUUID();
+        String payload = validJson(eventId, 1_499_999);
+
+        // when
+        long startedAt = System.nanoTime();
+        send(payload);
+
+        // then
+        assertArrivesInDltQuickly(subscriptionId, payload, startedAt);
+        assertThat(status()).isEqualTo("COMPENSATING");
+        assertThat(jdbcTemplate.queryForObject("SELECT version FROM subscription WHERE subscription_id = ?", Long.class, subscriptionId)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isZero();
+    }
+
+    @Test
     @DisplayName("일시 오류가 계속되면 4회 시도 후 원본 그대로 margin.voided.DLT로 가고, 보상 착수나 Outbox 기록 없이 COMPENSATING으로 남는다")
     void consume_sendsToDltAfterRetries_withoutCompensation_whenProcessingKeepsFailing() {
         // given

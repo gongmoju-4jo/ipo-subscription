@@ -1,0 +1,123 @@
+# 장애 알림 규칙. 30초마다 평가하고, 조건이 "for" 동안 계속 참이면 Slack으로 보낸다 (policies.yml)
+# 기준값 근거: 정식 부하 측정(S1 600건/초까지)에서
+# - HikariCP 대기는 최대 17개였지만 1개 이상 대기가 이어진 최장 시간은 약 25초 → 1분 지속이면 부하 측정으로는 울리지 않는다
+# - 힙 사용률 최대는 76% (subscription-service), 90% 초과는 없었다
+# 템플릿의 $labels, $values는 Grafana 알림 템플릿 변수다 (이 파일은 환경변수 치환을 하지 않아 $를 그대로 적는다)
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: ipo-incident
+    folder: 장애 알림
+    interval: 30s
+    rules:
+      # 서비스 다운: Prometheus가 서비스의 /actuator/prometheus 수집에 실패하면 up이 0이 된다
+      - uid: ipo-service-down
+        title: ServiceDown
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: '{{ $labels.job }} 지표 수집 1분 넘게 실패 (컨테이너 종료 또는 응답 없음)'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: up
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      # 5xx 비율: 서비스별 전체 요청(헬스체크, 지표 수집 제외) 중 5xx 비율. 5xx가 없으면 결과가 없어 정상으로 본다
+      - uid: ipo-http-5xx-rate
+        title: HttpServerErrorRateHigh
+        condition: C
+        for: 2m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: '{{ $labels.job }} 5xx 응답 비율 2분 넘게 5% 초과 (현재 {{ humanizePercentage $values.A.Value }})'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                sum by (job) (rate(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[1m]))
+                / sum by (job) (rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[1m]))
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }
+
+      # DB 커넥션 대기: 풀(기본 10개)이 모두 사용 중이라 커넥션을 기다리는 요청 수
+      - uid: ipo-hikari-pending
+        title: HikariConnectionPending
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: '{{ $labels.job }} DB 커넥션 대기 1분 넘게 지속 (현재 {{ $values.A.Value }}개 대기)'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: max by (job) (hikaricp_connections_pending)
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # 힙 사용률: G1의 Eden, Survivor는 최대값이 -1이라 0보다 큰 최대값만 더한다 (= 최대 힙)
+      - uid: ipo-jvm-heap-high
+        title: JvmHeapUsageHigh
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: '{{ $labels.job }} 힙 사용률 5분 넘게 90% 초과 (현재 {{ humanizePercentage $values.A.Value }})'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                sum by (job) (jvm_memory_used_bytes{area="heap"})
+                / sum by (job) (jvm_memory_max_bytes{area="heap"} > 0)
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.9] }

@@ -88,12 +88,18 @@ out="$(drain "$U1" 60)"; rc=$?
 [ "$rc" = 0 ] && ok "drain: 실패 4번 뒤 회복하면 계속 진행" || bad "drain 회복" "rc=$rc"
 unset -f sleep pg_int kafka_lag outbox_unpublished
 
-# ---- stable_check, pick_python, pypath ----
+# ---- main: 워밍업 인자 범위를 시작하자마자 막는다 (빌드, 복원 전에. 결과 폴더도 만들지 않음) ----
+for bad_env in "WARM_SLOPE_PCT=0" "WARM_SLOPE_PCT=." "WARM_SLOPE_PCT=-1" "WARM_BUCKET=1" "WARM_WINDOW=2" "WARM_CONSEC=0" "WARM_MIN=500 WARM_MAX=100"; do
+  out="$( ( WARM_SLOPE_PCT=5 WARM_BUCKET=15 WARM_WINDOW=8 WARM_CONSEC=2 WARM_MIN=180 WARM_MAX=900
+            for kv in $bad_env; do eval "$kv"; done
+            DIR="$(mktemp -d)"; main --batch zz-args ) 2>&1 )"; rc=$?
+  [ "$rc" = 1 ] && [ -n "$out" ] && ok "main: $bad_env → 시작 전에 종료 코드 1" || bad "main 인자 $bad_env" "rc=$rc out=$out"
+done
+out="$( ( WARM_SLOPE_PCT=2.5; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: WARM_SLOPE_PCT=2.5는 통과해 결과 폴더 만들기까지 간다" || bad "main 2.5" "rc=$rc out=$out"
+
+# ---- pick_python, pypath (워밍업 판정은 verify/warmup.py, test_warmup.py) ----
 pick_python && ok "pick_python: $PY" || bad "pick_python" "없음"
-stable_check 20 100 100 100 && ok "stable_check 같은 값 → 안정" || bad "stable_check 1" ""
-stable_check 20 400 100 200 100 && bad "stable_check 2" "안정으로 판정" || ok "stable_check 흔들림 → 불안정"
-stable_check 20 100 100 && bad "stable_check 3" "2개로 판정" || ok "stable_check 2회차 → 불안정"
-stable_check 20 300 101 100 99 && ok "stable_check 마지막 3개만 본다" || bad "stable_check 4" ""
 p="$(pypath "$REAL_CG")"; [ -n "$p" ] && "$PY" -c "import os,sys; sys.exit(0 if os.path.exists(sys.argv[1]) else 1)" "$p" && ok "pypath: Python이 읽을 수 있는 경로 ($p)" || bad "pypath" "$p"
 
 # ---- ensure_token ----
@@ -222,6 +228,13 @@ DIR_SAVE="$DIR"; DIR="$ST"; mkdir -p "$ST/results/b-S1-100-r1"
   k6_run s1 x b-S1-100-r1
 ) 2>/dev/null
 grep -q '^K6_NAME=k6-b-S1-100-r1 K6_CPUS=2 K6_MEMORY=1g$' "$ST/k6env" && ok "k6_run: K6_NAME=k6-<run_id>, 상한 CPU 2, 메모리 1g를 넘긴다" || bad "k6_run 환경" "$(cat "$ST/k6env" 2>/dev/null)"
+# ---- run_warmup: run-k6.sh에 --ipo로 첫 공모주를 넘기고, k6가 바로 죽으면 기다리지 않고 멈춘다 ----
+OUT="$ST/wbatch"; mkdir -p "$OUT"; BATCH=b; WARM_IPOS="$U1,$U2"; MANIFEST="$OUT/manifest.csv"
+( bash() { echo "$*" > "$ST/warm-args"; return 1; }
+  sleep() { command sleep 1; }; ensure_token() { :; }; py() { return 3; }   # 1초 뒤 확인할 때 가짜 k6는 이미 끝나 있다
+  run_warmup ) > /dev/null 2>&1; rc=$?
+grep -q -- "run-k6.sh s1 --ipo $U1 --run-id b-W -e IPO_IDS=$U1,$U2 -e RATE=" "$ST/warm-args" && ok "run_warmup: run-k6.sh에 --ipo 첫 공모주, IPO_IDS 전체를 넘긴다" || bad "run_warmup 인자" "$(cat "$ST/warm-args" 2>/dev/null)"
+[ "$rc" = 8 ] && ok "run_warmup: k6가 시작하자마자 끝나면 종료 코드 8 (판정을 기다리지 않음)" || bad "run_warmup k6 즉시 종료" "rc=$rc"
 DIR="$DIR_SAVE"; OUT="$OUT_SAVE"
 
 # ---- slowq_run: 실행마다 쿼리 통계를 남기고 비운다. 실패는 숨기지 않고 센다 ----

@@ -24,8 +24,10 @@
 | `compose.perf.yml` | 컨테이너별 CPU, 메모리 상한과 JVM 힙 고정, 슬로우 쿼리 설정 |
 | `loadtest/official.sh` | 정식 측정 전체 실행 (빌드, 배포, 버전 기록, S0, S1, 후처리, 판정). 4장 |
 | `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정 (`판정.md`) |
+| `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). 3-4절 |
+| `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
-| `loadtest/tests/` | `official.sh`, `judge.py`, `docker_stats.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 |
 | `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
@@ -105,30 +107,58 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 - 상한과 JVM 힙(G1 명시)은 `compose.perf.yml` 맨 위 표를 봅니다. 머신에 맞게 고치고, 쓴 값은 측정 환경 기록에 적습니다.
 - `kafka-ui`는 이 구성에서 기본 실행에서 빠집니다 (필요하면 `docker-compose -f docker-compose.yml -f compose.perf.yml up -d kafka-ui`).
 
-## 4. 정식 측정 (official.sh)
+### 3-4. 기준 상태 스냅샷 만들기 (한 번)
 
-S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한)를 마친 상태에서 실행합니다.
+정식 측정은 매번 같은 DB 상태(회원, 계좌, 예수금만 있고 청약이 없음)와 빈 Kafka에서 시작합니다. 측정할 때마다 청약, 원장, outbox가 쌓이면 DB가 커지고 정리 작업(autovacuum) 시점이 달라져서, 설정을 바꾸지 않아도 결과가 달라지기 때문입니다.
 
 ```bash
-bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 5분, 추정. 2026-11-03 측정은 87분이었고 그 뒤 후처리, 공모주 생성, DLT 조회를 줄였다)
+# 1. 빈 DB, 빈 Kafka에서 띄운다 (PostgreSQL, Kafka 볼륨을 지우면 그 안의 데이터는 사라진다. 필요하면 먼저 baseline.sh dump로 백업)
+docker-compose -f docker-compose.yml -f compose.perf.yml down
+docker volume rm ipo-subscription_postgres-data ipo-subscription_kafka-data   # 이름은 docker volume ls로 확인
+docker-compose up -d                # 시드는 자원 상한 없이 (3-1절: BCrypt가 CPU를 많이 써서 상한을 걸면 느림)
+# 2. 회원 1,000명 (가입, 계좌 개설, 입금 모두 API). 예수금은 측정 여러 번에 충분하게
+python loadtest/seed/seed_users.py --run-id baseline --amount 100000000 --base-url http://127.0.0.1:8080
+# 3. 저장 (청약, 증거금이 있으면 거부)
+bash loadtest/baseline.sh save      # → loadtest/data/baseline/ipo-baseline.dump, ipo-baseline.meta
+# 4. 자원 상한 적용 (3-3절). 정식 측정과 baseline.sh restore는 이 구성에서 돈다
+docker-compose -f docker-compose.yml -f compose.perf.yml up -d
+docker-compose stop kafka-ui        # 1단계에서 상한 없이 뜬 kafka-ui는 위 명령으로 꺼지지 않는다. 측정 중 Kafka를 조회하며 CPU를 쓰므로 끈다
+```
+
+- `.env`에 `DB_PASSWORD`가 있어야 빈 볼륨에서 PostgreSQL이 만들어집니다.
+- 스냅샷은 `loadtest/data/`(커밋하지 않음)에 있습니다. meta에 상태(회원 수, 계좌 수, 예수금 합계, 원장 수, 청약 0)와 sha256이 남고, 복원할 때 둘 다 확인합니다.
+- `baseline.sh restore`는 계좌, 청약, 배정 서비스를 멈추고 데이터베이스 `ipo`를 지운 뒤 스냅샷으로 다시 만들고(`ANALYZE`, `CHECKPOINT` 포함), Kafka 볼륨을 비워 토픽을 다시 만든 다음 서비스를 띄웁니다. 복원 뒤 상태가 meta와 다르면 실패합니다. 정식 측정(`official.sh`)이 시작할 때 자동으로 실행합니다.
+- 회원 CSV(`loadtest/data/users.csv`)는 스냅샷을 만들 때의 시드 결과라 계좌 ID가 스냅샷과 같습니다. 회원을 다시 시드했으면 스냅샷도 다시 만듭니다.
+
+## 4. 정식 측정 (official.sh)
+
+S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한, 기준 스냅샷)를 마친 상태에서 실행합니다.
+
+```bash
+bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 10분~1시간 20분, 추정. 워밍업 3~15분 포함)
 ```
 
 하는 일 (순서대로, 중간에 사람이 끼어들지 않습니다)
 
-1. 커밋하지 않은 변경이 있으면 실행을 거부합니다. 이 커밋으로 jar를 빌드해 배포하고(`./gradlew build -x test`, `compose up -d --build`), 컨테이너 안 jar와 빌드한 jar의 sha256이 같은지 확인해 `env.txt`에 남깁니다. 컨테이너별 CPU, 메모리 상한과 JVM 힙 옵션도 `env.txt`에 남기고(`자원 ...` 줄), 이때부터 부하가 끝날 때까지 `docker stats`를 `STATS_INTERVAL`초마다 기록합니다 (PostgreSQL, Kafka, k6 포함 모든 컨테이너).
+1. 커밋하지 않은 변경이 있으면 실행을 거부합니다. 이 커밋으로 jar를 빌드해 배포하고(`./gradlew build -x test`, `compose up -d --build`), 기준 스냅샷으로 DB와 Kafka를 되돌린 뒤(`baseline.sh restore`, 3-4절. 스냅샷 sha256과 상태를 `env.txt`에 남김), 컨테이너 안 jar와 빌드한 jar의 sha256이 같은지 확인해 `env.txt`에 남깁니다. 컨테이너별 CPU, 메모리 상한과 JVM 힙 옵션도 `env.txt`에 남기고(`자원 ...` 줄), 이때부터 부하가 끝날 때까지 `docker stats`를 `STATS_INTERVAL`초마다 기록합니다 (PostgreSQL, Kafka, k6 포함 모든 컨테이너).
 2. 토큰을 새로 받고(회원 수 확인), 예수금이 최대로 필요한 금액 이상인지 확인합니다.
 3. gateway, subscription, account를 재시작(콜드 상태)하고, healthy와 Eureka UP을 기다린 뒤 45초 쉬고 사전 점검(`precheck.sh`)을 합니다.
 4. 회차에 쓸 공모주를 모두 미리 만듭니다 (부하 중에는 만들지 않습니다).
-5. S0: 1,000건 회차를 워밍업 → 안정 판정(회차 평균 응답이 연속 3회차 각각 그 평균의 ±`STABLE_PCT`% 이내) → 측정 3회 순서로 실행합니다.
-6. S1: 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
-7. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다. docker stats 기록은 `docker-stats.csv`와 `자원.md`(실행마다 k6 구간의 컨테이너별 CPU, 메모리 최대)로 정리합니다. 어떤 실행의 k6 구간에 샘플이 없으면 후처리 실패(종료 코드 10)로 셉니다.
+5. 워밍업: 측정 앞의 독립 단계입니다. `WARM_RATE`(기본 200건/초)로 일정한 부하를 걸고(모든 요청이 확정되게 공모주를 돌림), `WARM_BUCKET`(15초)마다 게이트웨이 평균 응답 시간을 Prometheus에서 읽습니다. 최근 `WARM_WINDOW`개 구간(2분)에 직선을 맞춰 기울기가 분당 창 평균의 ±`WARM_SLOPE_PCT`%(5%) 이내인 판정이 `WARM_CONSEC`번(2번) 연속이면 정상 상태로 보고 끝냅니다. 최소 `WARM_MIN`(180초), 최대 `WARM_MAX`(900초)이고, 최대까지 닿지 않으면 중단합니다. 구간마다 `warmup.csv`에 남고, 끝나면 소진을 확인하고 쉽니다.
+   - 회차마다 흔들림으로 판정하던 방식(연속 3회차 ±20%)은 아직 빨라지는 중이어도 통과할 수 있어서, 워밍업이 끝나는 시점이 실행마다 달라지고 측정값에 섞였습니다. 시간 구간의 추세(기울기)로 보면 내려가는 중에는 통과하지 않습니다.
+   - 데워진 뒤 응답이 수 ms로 작으면 1~2ms 흔들림도 상대 기울기로는 크게 보여 최대 시간에 닿을 수 있습니다. 그때는 `warmup.csv`를 보고 판단합니다.
+6. S0: 1,000건(100명 x 10회) 측정 3회를 실행합니다.
+7. S1: 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
+8. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다. docker stats 기록은 `docker-stats.csv`와 `자원.md`(실행마다 k6 구간의 컨테이너별 CPU, 메모리 최대)로 정리합니다. 어떤 실행의 k6 구간에 샘플이 없으면 후처리 실패(종료 코드 10)로 셉니다. 기록 간격(5초)의 2배보다 짧은 실행은 샘플이 빠질 수 있어 경고로만 남깁니다.
+9. 측정이 끝난 DB를 `db-after.dump`로 남깁니다(`DB_DUMP=1`). 다음 측정은 기준 스냅샷으로 되돌리므로 이번 측정의 원본 행은 여기에만 남습니다.
 
 - 쿼리 통계: 첫 실행 직전에 `pg_stat_statements`를 비우고(`loadtest/sql/slow-queries.sql`), 실행마다 소진 확인 뒤 그 실행의 통계를 `slow-queries.txt`에 남기고 다시 비웁니다. 요청과 소진까지의 Consumer 쿼리가 들어가고, 실행 사이에 토큰 재발급이 끼면 그 로그인 쿼리도 다음 실행에 섞입니다. 조회가 실패해도 측정은 이어 가고 후처리 실패(종료 코드 10)로 셉니다. `compose.perf.yml`로 띄우지 않아 확장을 쓸 수 없으면 시작 전에 멈춥니다(종료 코드 9).
 - **모든 부하 실행(S0 회차, S1 단계) 뒤에 이번 공모주의 `PENDING`/`COMPENSATING` 0, 필수 Consumer 그룹 lag 0, outbox 미발행 0을 확인하고 `GAP`초 쉰 뒤 다음 실행을 합니다.** 앞 실행의 처리 대기가 다음 실행의 G2에 섞이지 않게 하는 것은 소진 확인이 맡습니다. `GAP`(기본 30초)은 보고서의 서버 지표 구간(요청 구간 앞뒤 10초, Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도입니다. JVM GC(G1은 쉬는 동안 스스로 돌지 않음)와 DB 체크포인트는 대기로 피할 수 없습니다. 개선 전후를 비교할 때는 같은 `GAP`을 씁니다.
 - psql, Kafka, git, 토큰 재발급, k6 조회가 실패하면 0으로 보지 않고 중단합니다. Consumer lag은 `LOG-END-OFFSET - CURRENT-OFFSET`으로 계산하고(커밋 오프셋이 `-`인데 메시지가 있으면 대기로 셉니다), 필수 그룹(`REQUIRED_GROUPS`)이 없으면 실패입니다.
 - 토큰이 다음 실행 중에 만료될 것 같으면 실행 사이(요청 없는 구간)에 재발급하고 `GAP`초 쉽니다. 재발급 시점은 `진행.log`에 남습니다.
 - 같은 이름의 결과 폴더가 있으면 거부합니다(이전 결과를 덮어쓰지 않음). 두 개를 동시에 실행할 수 없습니다(`loadtest/results/.official.lock`). 중단(Ctrl+C)하면 이번 실행이 띄운 k6 컨테이너만 멈춥니다.
-- 시험 실행: `ALLOW_DIRTY=1 SKIP_BUILD=1 WCAP=3 STABLE_PCT=1000 GAP=5 STAGES=50,100 DUR=10 S1_REPEAT=3 bash loadtest/official.sh --batch smoke-1` (약 15분, 정식 결과로 쓰지 않습니다)
+- 시험 실행: `ALLOW_DIRTY=1 SKIP_BUILD=1 WARM_MIN=60 WARM_MAX=300 GAP=5 STAGES=50,100 DUR=10 S1_REPEAT=3 bash loadtest/official.sh --batch smoke-1` (약 20분, 정식 결과로 쓰지 않습니다)
+- 중간에 멈출 때는 `official.sh` 프로세스에 신호를 보냅니다. 감싼 셸만 멈추면 `official.sh`는 계속 돕니다. k6, docker stats 기록, 잠금은 `official.sh`가 끝날 때 정리됩니다.
 
 판정 기준 (`judge.py`)
 
@@ -143,7 +173,7 @@ bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results
 - 소진 시간은 마지막 요청 접수 이후 마지막 확정까지(`MAX(confirmed_at) - MAX(received_at)`)입니다. 확정 수가 요청 수와 다르면(오류, 거절, 미처리가 섞이면) G2는 무효입니다.
 - `판정.md`의 S1 한계 지점은 G1 또는 G2가 처음 깨지는 단계입니다.
 
-종료 코드: 0 정상, 2 안정 판정 미도달, 3 토큰, 4 예수금, 5 버전(dirty, jar 불일치), 6 소진 대기, 7 기동, 8 k6, 9 사전 점검, 10 부하는 끝났고 후처리 일부 실패, 11 공모주 생성, 12 잠금·결과 폴더, 13 도구 없음
+종료 코드: 0 정상, 2 워밍업이 최대 시간 안에 정상 상태에 닿지 않음 또는 판정 실패, 3 토큰, 4 예수금, 5 버전(dirty, jar 불일치), 6 소진 대기, 7 기동, 8 k6, 9 사전 점검, 10 부하는 끝났고 후처리 일부 실패, 11 공모주 생성, 12 잠금·결과 폴더, 13 도구 없음, 14 기준 상태 복원 실패
 
 결과를 쓸 때 같이 적는 한계: k6와 서비스가 같은 PC, Prometheus 5초 수집, docker stats 5초 간격 순간값(조회 1번에 약 2~3초, 조회도 CPU를 씀), 토큰 재발급의 로그인 요청, S1은 공모가 `S1_PRICE`원 종목 (금액만 다르고 처리 경로는 같다고 보지만 확인하지 않았습니다)
 
@@ -220,16 +250,18 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 7. 결과 파일
 
-`loadtest/results/{run_id}/`에 저장됩니다. 정식 측정은 `loadtest/results/{batch}/`에 묶음 파일이 따로 생기고, 실행마다 `{batch}-S0-n1`, `{batch}-S0-r1`, `{batch}-S1-{속도}-r{반복}` 폴더가 생깁니다.
+`loadtest/results/{run_id}/`에 저장됩니다. 정식 측정은 `loadtest/results/{batch}/`에 묶음 파일이 따로 생기고, 실행마다 `{batch}-W`(워밍업), `{batch}-S0-r1`, `{batch}-S1-{속도}-r{반복}` 폴더가 생깁니다.
 
 | 정식 측정 묶음 파일 | 내용 |
 | --- | --- |
 | `진행.log` | 진행 기록 (재시작 시각, 토큰 재발급 시점, 회차별 처리량, 소진 대기 시간) |
 | `env.txt` | 커밋, dirty 여부, 서비스별 jar sha256, OS, bash, Python, Docker, compose 버전, 설정값 전부 |
-| `manifest.csv` | 실행 목록 (run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
+| `manifest.csv` | 실행 목록 (워밍업은 시나리오 `W`, 구간 `warmup`으로 판정에 쓰지 않음. run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
+| `warmup.csv` | 워밍업 구간마다 끝 시각, 경과 초, 요청 수, 평균 응답 ms, 분당 기울기 %, 연속 통과 수, 판정 |
+| `db-after.dump` | 측정이 끝난 DB 덤프 (`pg_dump -Fc --create`. `pg_restore --create -d postgres`로 되살린다) |
 | `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |
 | `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점) |
-| `docker-stats.raw` | docker stats 원본 (`<epoch초>	<JSON>` 한 줄씩, 조회 실패는 `ERROR` 줄) |
+| `docker-stats.raw` | docker stats 원본 (`<epoch초>\t<JSON>` 한 줄씩, 조회 실패는 `ERROR` 줄) |
 | `docker-stats.csv` | 위 원본을 숫자로 바꾼 표 (컨테이너별 CPU %(100% = 1코어), 메모리 사용·상한 바이트, PIDs, 네트워크, 디스크) |
 | `slow-queries-before.txt` | 측정 시작 전 `pg_stat_statements` 누적 (비우기 전, 기록용) |
 | `자원.md`, `자원.err` | 실행마다 k6 구간의 컨테이너별 CPU 최대·평균, CPU 상한 대비, 메모리 최대. k6는 `k6-<run_id>` 컨테이너 |
@@ -255,7 +287,10 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 | 변수 | 기본값 | 쓰는 곳 |
 | --- | --- | --- |
-| `WCAP`, `STABLE_PCT` | `20`, `20` | `official.sh` (S0 워밍업 상한 회차, 안정 판정 ±%) |
+| `WARM_RATE`, `WARM_MIN`, `WARM_MAX` | `200`, `180`, `900` | `official.sh` (워밍업 도착률 건/초, 최소, 최대 초) |
+| `WARM_BUCKET`, `WARM_WINDOW`, `WARM_SLOPE_PCT`, `WARM_CONSEC` | `15`, `8`, `5`, `2` | `official.sh` → `warmup.py` (구간 초, 추세 창 구간 수, 분당 기울기 허용 %, 연속 통과 수) |
+| `RESTORE`, `DB_DUMP` | `1`, `1` | `official.sh` (시작할 때 기준 스냅샷 복원, 끝난 뒤 DB 덤프. `RESTORE=0`은 `env.txt`에 남고 정식 결과로 쓰지 않음) |
+| `BASELINE_DIR` | `loadtest/data/baseline` | `baseline.sh`, `official.sh` (기준 스냅샷 위치) |
 | `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |
 | `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
 | `S1_REPEAT` | `3` | `official.sh` (S1 단계마다 반복 측정 횟수. 팀 규칙은 최소 3회, 3 미만이면 판정이 참고값) |
@@ -268,7 +303,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
 | `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `verify.sh`, `precheck.sh`, `official.sh`(하위 스크립트와 `judge.py --container`에 같은 값을 넘긴다) |
-| `KAFKA_CONTAINER` | `ipo-kafka` | `precheck.sh` |
+| `KAFKA_CONTAINER` | `ipo-kafka` | `precheck.sh`, `baseline.sh` |
 | `EUREKA_URL` | `http://localhost:8761` | `precheck.sh` |
 | `K6_MODE` | `auto` | `run-k6.sh` (`auto`, `local`, `container`) |
 | `K6_IMAGE` | `grafana/k6:1.3.0` | `run-k6.sh` (컨테이너 실행) |
@@ -278,14 +313,16 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `K6_NAME` | 없음 | `run-k6.sh` (컨테이너 실행 시 컨테이너 이름. `official.sh`는 `k6-<run_id>`로 줘서 docker stats에서 실행별 k6를 구분한다) |
 | `BASE_URL` | 로컬 `http://localhost:8080`, 컨테이너 `http://api-gateway:8080` | `run-k6.sh`, `seed_users.py` |
 | `LOADTEST_PASSWORD` | `loadtest1234` | `seed_users.py` (시드 회원의 비밀번호) |
-| `PROMETHEUS_URL` | `http://127.0.0.1:9090` | `report.py` (`--prometheus`로도 지정. Windows에서 `localhost`는 IPv6를 먼저 시도해 연결마다 약 2초가 더 걸려서 `127.0.0.1`을 쓴다) |
+| `PROMETHEUS_URL` | `http://127.0.0.1:9090` | `report.py`, `official.sh`(워밍업 판정) (`--prometheus`로도 지정. Windows에서 `localhost`는 IPv6를 먼저 시도해 연결마다 약 2초가 더 걸려서 `127.0.0.1`을 쓴다) |
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `judge.py`, `docker_stats.py`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
-bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 안정 판정). 조회 실패를 0으로 넘기지 않는지 확인
+bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
+bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
+python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 ```

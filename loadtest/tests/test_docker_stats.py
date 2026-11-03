@@ -48,12 +48,18 @@ class Size(unittest.TestCase):
         self.assertEqual(ds.size("965MB"), 965e6)
         self.assertEqual(ds.size("32.8kB"), 32800)
         self.assertEqual(ds.size("0B"), 0)
+        self.assertEqual(ds.size("1e+03MB"), 1e9)  # 실제 docker stats 출력 (2026-11-03 정식측정-5)
+        self.assertEqual(ds.size("1.5E+02kB"), 150000)
 
     def test_unknown_unit_fails(self):
         with self.assertRaises(ValueError):
             ds.size("12XB")
         with self.assertRaises(ValueError):
             ds.size("--")
+        with self.assertRaises(ValueError):
+            ds.size("1e+MB")
+        with self.assertRaises(ValueError):
+            ds.size("1.2.3MB")
 
 
 class Real(unittest.TestCase):
@@ -102,7 +108,32 @@ class Summary(unittest.TestCase):
         f = Files(line(100, "ipo-kafka") + line(100, "k6-b-r1"), [row("b-r1", 100, 110), row("b-r2", 500, 510)])
         rc, md = f.run()
         self.assertEqual(rc, 1)
-        self.assertIn("b-r2: k6 구간(500~510)에 샘플 없음", md)
+        self.assertIn("b-r2: k6 구간(500~510, 10초)에 샘플 없음", md)
+
+    def test_short_run_missing_k6_is_warning(self):
+        # S0처럼 k6 구간이 기록 간격(5초)의 2배보다 짧으면 실패가 아니라 참고로 남긴다 (정식측정-5에서 S0 회차 4개)
+        f = Files(line(100, "ipo-kafka") + line(120, "ipo-kafka") + line(120, "k6-b-r2"),
+                  [row("b-r1", 100, 104), row("b-r2", 118, 125), row("b-r3", 200, 203)], env="설정 STATS_INTERVAL=5 K6_CPUS=2\n")
+        rc, md = f.run()
+        self.assertEqual(rc, 0, md)
+        self.assertIn("## 참고 (짧은 실행)", md)
+        self.assertIn("b-r1: k6 컨테이너(k6-b-r1) 샘플 없음", md)
+        self.assertIn("b-r3: k6 구간(200~203, 3초)에 샘플 없음", md)
+        self.assertNotIn("## 문제", md)
+
+    def test_interval_is_read_from_env(self):
+        # 기록 간격 10초면 k6 구간 15초 실행(2배인 20초보다 짧음)은 참고로 남긴다. 기본값 5초로 읽으면 실패가 된다
+        f = Files(line(100, "ipo-kafka"), [row("b-r1", 100, 115)], env="설정 STATS_INTERVAL=10 K6_CPUS=2\n")
+        self.assertEqual(ds.read_interval(f.env), 10)
+        rc, md = f.run()
+        self.assertEqual(rc, 0, md)
+        self.assertIn("기록 간격(10초)", md)
+
+    def test_long_run_missing_samples_still_fails(self):
+        f = Files(line(100, "ipo-kafka"), [row("b-r1", 100, 110)], env="설정 STATS_INTERVAL=5\n")
+        rc, md = f.run()
+        self.assertEqual(rc, 1)
+        self.assertIn("## 문제", md)
 
     def test_missing_k6_container_fails(self):
         f = Files(line(100, "ipo-kafka"), [row("b-r1", 100, 110)])

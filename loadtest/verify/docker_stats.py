@@ -17,11 +17,11 @@ import sys
 
 BIN = {"B": 1, "KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3, "TiB": 1024 ** 4}
 DEC = {"B": 1, "kB": 1000, "KB": 1000, "MB": 1000 ** 2, "GB": 1000 ** 3, "TB": 1000 ** 4}
-SIZE = re.compile(r"^\s*([0-9.]+)\s*([A-Za-z]+)\s*$")
+SIZE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\s*([A-Za-z]+)\s*$")  # docker는 1000MB를 1e+03MB로 쓰기도 한다
 
 
 def size(text):
-    """'731.3MiB', '1GiB', '965MB', '0B' → 바이트. 모르는 단위면 ValueError"""
+    """'731.3MiB', '1GiB', '965MB', '0B', '1e+03MB' → 바이트. 모르는 단위면 ValueError"""
     m = SIZE.match(text)
     if not m:
         raise ValueError(f"크기 형식이 아님: {text!r}")
@@ -87,6 +87,17 @@ def read_limits(path):
     return lim
 
 
+def read_interval(path, default=5):
+    """env.txt의 '설정 STATS_INTERVAL=<초>' 값. 없으면 기본 5초"""
+    if path:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                m = re.search(r"\bSTATS_INTERVAL=([0-9]+)", line)
+                if m and int(m.group(1)) > 0:
+                    return int(m.group(1))
+    return default
+
+
 def read_runs(path):
     with open(path, encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
@@ -116,9 +127,9 @@ def write_csv(samples, path):
                         int(s["blk_r"]), int(s["blk_w"])])
 
 
-def summarize(samples, errors, runs, limits):
-    """(자원.md 본문, 문제 목록)"""
-    problems = []
+def summarize(samples, errors, runs, limits, interval=5):
+    """(자원.md 본문, 문제 목록). k6 구간이 기록 간격의 2배보다 짧은 실행(S0 회차 등)은 샘플이 빠질 수 있어 경고로만 남긴다"""
+    problems, warnings = [], []
     if not samples:
         problems.append("샘플이 하나도 없음")
     times = sorted({s["t"] for s in samples})
@@ -131,8 +142,10 @@ def summarize(samples, errors, runs, limits):
     names = sorted({group(s["name"]) for s in samples})
     for run, a, b in runs:
         w = [s for s in samples if a <= s["t"] <= b and (not s["name"].startswith("k6-") or s["name"] == f"k6-{run}")]
+        short = (b - a) < 2 * interval
+        bucket = warnings if short else problems
         if not w:
-            problems.append(f"{run}: k6 구간({a}~{b})에 샘플 없음")
+            bucket.append(f"{run}: k6 구간({a}~{b}, {b - a}초)에 샘플 없음" + (" (기록 간격보다 짧은 실행)" if short else ""))
             lines += [f"## {run}", "", "샘플 없음", ""]
             continue
         lines += [f"## {run}", "", f"샘플 시각 {len({s['t'] for s in w})}개", "",
@@ -149,8 +162,10 @@ def summarize(samples, errors, runs, limits):
             mmax = max(v, key=lambda s: s["mem"])
             lines.append(f"| {n} | {cmax:.1f}% | {cavg:.1f}% | {rel} | {mib(mmax['mem']):.0f}MiB / {mib(mmax['mem_limit']):.0f}MiB | {max(s['mem_pct'] for s in v):.1f}% |")
         if not any(s["name"] == f"k6-{run}" for s in w):
-            problems.append(f"{run}: k6 컨테이너(k6-{run}) 샘플 없음")
+            bucket.append(f"{run}: k6 컨테이너(k6-{run}) 샘플 없음" + (f" (k6 구간 {b - a}초로 기록 간격보다 짧은 실행)" if short else ""))
         lines.append("")
+    if warnings:
+        lines += ["## 참고 (짧은 실행)", "", f"k6 구간이 기록 간격({interval}초)의 2배보다 짧아 샘플이 빠질 수 있는 실행이다. 실패로 세지 않는다.", ""] + [f"- {x}" for x in warnings] + [""]
     if problems:
         lines += ["## 문제", ""] + [f"- {p}" for p in problems] + [""]
     return "\n".join(lines), problems
@@ -168,11 +183,12 @@ def main(argv=None):
         samples, errors = parse_raw(a.raw)
         runs = read_runs(a.manifest)
         limits = read_limits(a.env)
+        interval = read_interval(a.env)
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
         print(f"docker_stats.py: {e}", file=sys.stderr)
         return 1
     write_csv(samples, a.csv)
-    md, problems = summarize(samples, errors, runs, limits)
+    md, problems = summarize(samples, errors, runs, limits, interval)
     with open(a.md, "w", encoding="utf-8") as f:
         f.write(md)
     for p in problems:

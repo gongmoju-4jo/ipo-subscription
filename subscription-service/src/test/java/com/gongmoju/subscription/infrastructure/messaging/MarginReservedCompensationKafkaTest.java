@@ -59,6 +59,7 @@ class MarginReservedCompensationKafkaTest {
     private static final String TOPIC = MarginReservedMessage.TOPIC;
     private static final String DLT_TOPIC = TOPIC + ".DLT";
     private static final String VOID_REQUESTED_TOPIC = "margin.void-requested";
+    private static final String VOIDED_TOPIC = MarginVoidedMessage.TOPIC;
 
     @Container
     @ServiceConnection
@@ -80,6 +81,7 @@ class MarginReservedCompensationKafkaTest {
     static void createTopics() throws Exception {
         KafkaTestSupport.createTopicsWithDlt(kafka.getBootstrapServers(), TOPIC);
         KafkaTestSupport.createTopicsWithDlt(kafka.getBootstrapServers(), VOID_REQUESTED_TOPIC);
+        KafkaTestSupport.createTopicsWithDlt(kafka.getBootstrapServers(), VOIDED_TOPIC);
     }
 
     @MockitoSpyBean
@@ -111,6 +113,7 @@ class MarginReservedCompensationKafkaTest {
     void setUp() throws Exception {
         // 리스너가 파티션을 모두 할당받은 뒤 시작함
         KafkaTestSupport.awaitAssignment(listenerRegistry, TOPIC);
+        KafkaTestSupport.awaitAssignment(listenerRegistry, VOIDED_TOPIC);
         ipoId = UUID.randomUUID();
         subscriptionId = UUID.randomUUID();
         accountId = UUID.randomUUID();
@@ -133,6 +136,7 @@ class MarginReservedCompensationKafkaTest {
     @AfterEach
     void tearDown() {
         jdbcTemplate.update("DELETE FROM processed_event WHERE consumer_name = 'subscription-margin-reserved'");
+        jdbcTemplate.update("DELETE FROM processed_event WHERE consumer_name = 'subscription-margin-voided'");
         jdbcTemplate.update("DELETE FROM outbox WHERE aggregate_id = ?", subscriptionId);
         jdbcTemplate.update("DELETE FROM subscription WHERE ipo_id = ?", ipoId);
         jdbcTemplate.update("DELETE FROM ipo WHERE ipo_id = ?", ipoId);
@@ -187,6 +191,36 @@ class MarginReservedCompensationKafkaTest {
         assertThat(status()).isEqualTo("PENDING");
         assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM outbox WHERE aggregate_id = ?", Integer.class, subscriptionId)).isZero();
         assertThat(readTopic(VOID_REQUESTED_TOPIC, accountId.toString(), Duration.ofSeconds(3), 1)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("확정 실패 보상으로 해제를 요청한 뒤 margin.voided를 받으면 CANCELLED가 되고 처리 기록이 남는다")
+    void consume_completesCancellation_afterCompensationAndVoidedResponse() throws Exception {
+        doThrow(new IllegalStateException("확정 저장 실패")).when(confirmService).confirm(any());
+
+        send(validJson());
+
+        await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> assertThat(status()).isEqualTo("COMPENSATING"));
+        List<ConsumerRecord<String, String>> requests = readTopic(VOID_REQUESTED_TOPIC, accountId.toString(), Duration.ofSeconds(30), 1);
+        assertThat(requests).hasSize(1);
+        JsonNode request = objectMapper.readTree(requests.get(0).value());
+        assertThat(request.get("subscriptionId").asText()).isEqualTo(subscriptionId.toString());
+        assertThat(request.get("reason").asText()).isEqualTo("CONFIRM_FAILED");
+
+        UUID voidedEventId = UUID.randomUUID();
+        String voidedPayload = """
+                {"eventId":"%s","eventType":"margin.voided","occurredAt":"2026-10-27T16:00:29.350+09:00",
+                 "subscriptionId":"%s","amount":1500000}""".formatted(voidedEventId, subscriptionId);
+        kafkaTemplate.send(VOIDED_TOPIC, accountId.toString(), voidedPayload).get(10, TimeUnit.SECONDS);
+
+        await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> assertThat(status()).isEqualTo("CANCELLED"));
+        assertThat(jdbcTemplate.queryForObject("SELECT cancel_reason FROM subscription WHERE subscription_id = ?", String.class, subscriptionId))
+                .isEqualTo("CONFIRM_FAILED");
+        assertThat(jdbcTemplate.queryForObject("SELECT attempts FROM subscription WHERE subscription_id = ?", Integer.class, subscriptionId))
+                .isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ? AND consumer_name = 'subscription-margin-voided'", Integer.class, voidedEventId))
+                .isEqualTo(1);
+        assertThat(readTopic(VOIDED_TOPIC + ".DLT", accountId.toString(), Duration.ofSeconds(3), 1)).isEmpty();
     }
 
     private void send(String payload) {

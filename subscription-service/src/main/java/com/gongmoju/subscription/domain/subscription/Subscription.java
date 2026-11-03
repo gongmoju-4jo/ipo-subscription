@@ -197,6 +197,23 @@ public class Subscription extends BaseEntity {
         this.lastRequestedAt = Instant.now();
     }
 
+    /**
+     * 증거금 해제 완료 응답({@code margin.voided})으로 {@code COMPENSATING} 또는 {@code CANCEL_REQUESTED}를 {@code CANCELLED}로 전환함.
+     * 해제 사유({@code cancelReason})는 {@code CANCELLED}에서도 필수라서 그대로 유지하고, 상태가 바뀌었고 더 요청할 것이 없으므로 요청 횟수({@code attempts})를 0으로 초기화함 (ERD).
+     *
+     * @throws IllegalStateException {@code COMPENSATING}, {@code CANCEL_REQUESTED}가 아닌 상태에서 호출했거나, 해제 사유가 없는 경우
+     */
+    public void completeCancellation() {
+        if (status != SubscriptionStatus.COMPENSATING && status != SubscriptionStatus.CANCEL_REQUESTED) {
+            throw new IllegalStateException("COMPENSATING, CANCEL_REQUESTED 상태에서만 취소를 완료할 수 있습니다: " + status);
+        }
+        if (cancelReason == null) {
+            throw new IllegalStateException("해제 사유가 없는 청약은 취소를 완료할 수 없습니다: " + status);
+        }
+        this.status = SubscriptionStatus.CANCELLED;
+        this.attempts = 0;
+    }
+
     private static Subscription create(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                        long requestedQuantity, long marginAmount, Instant receivedAt) {
         if (requestedQuantity < 1) {

@@ -71,6 +71,13 @@ outbox:  # Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks
     alert-threshold: 5            # 이 횟수 이상 연속 실패하면 알림 로그. Consumer 재시도(3회)와 별개이고, 넘어도 발행은 계속 시도한다
     send-timeout: 10s             # Producer의 delivery.timeout.ms(10s, API 직접 발행과 같은 Producer를 씀) 이상으로 맞춘다. 발행기가 실패로 처리한 뒤 Producer가 재시도하지 않게 한다
 
+ipo:
+  close:  # 공모주 마감 스케줄러 (F-13, D-16)
+    enabled: true         # false면 스케줄 실행을 끈다
+    interval: PT5S        # 이전 실행이 끝난 뒤 다시 확인하기까지 쉬는 시간
+    grace-period: PT20S   # 마감 시각 뒤 대기 시간. 마감 전에 받은 요청의 발행이 끝나기를 기다린다 (max.block.ms 5초 + delivery.timeout.ms 10초 + 여유)
+    alert-after: PT5M     # 대기 시간 뒤 이 시간 동안 마감하지 못하면 ERROR 로그. 이후 같은 간격으로 반복하고, 강제로 마감하지는 않는다
+
 eureka:
   client:
     service-url:

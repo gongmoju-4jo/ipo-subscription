@@ -127,7 +127,8 @@ class MarginVoidRequestedConsumerKafkaTest {
         UUID subscriptionId = reserve(15_000);
         jdbcTemplate.update("UPDATE margin SET status = 'POSTED', posted_amount = 10000, settled_at = now() WHERE subscription_id = ?",
                 subscriptionId);
-        String payload = json(UUID.randomUUID(), subscriptionId, accountId);
+        UUID eventId = UUID.randomUUID();
+        String payload = json(eventId, subscriptionId, accountId);
 
         long startedAt = System.nanoTime();
         send(accountId, payload);
@@ -136,13 +137,15 @@ class MarginVoidRequestedConsumerKafkaTest {
         assertThat(cashBalance()).isEqualTo(5_000L);
         assertThat(marginStatus(subscriptionId)).isEqualTo("POSTED");
         assertThat(outboxEventTypes(accountId)).containsExactly("margin.reserved");
+        assertRolledBack(eventId, subscriptionId);
     }
 
     @Test
     void 요청_계좌가_margin_계좌와_다르면_재시도_없이_DLT로_가고_반환하지_않는다() throws Exception {
         UUID subscriptionId = reserve(15_000);
         UUID otherAccountId = insertAccount(UUID.randomUUID());
-        String payload = json(UUID.randomUUID(), subscriptionId, otherAccountId);
+        UUID eventId = UUID.randomUUID();
+        String payload = json(eventId, subscriptionId, otherAccountId);
 
         long startedAt = System.nanoTime();
         send(otherAccountId, payload);
@@ -151,6 +154,14 @@ class MarginVoidRequestedConsumerKafkaTest {
         assertThat(cashBalance()).isEqualTo(5_000L);
         assertThat(marginStatus(subscriptionId)).isEqualTo("PENDING");
         assertThat(outboxEventTypes(otherAccountId)).isEmpty();
+        assertRolledBack(eventId, subscriptionId);
+    }
+
+    // 예외로 롤백되어 처리 기록, 반환 기록이 남지 않아야 원 토픽 재발행 때 다시 처리되고 뒤늦은 인출도 막히지 않는다
+    private void assertRolledBack(UUID eventId, UUID subscriptionId) {
+        assertThat(processedCount(eventId)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM margin_void_intent WHERE subscription_id = ?", Integer.class, subscriptionId)).isZero();
     }
 
     private void assertArrivesInDltQuickly(UUID key, String originalPayload, long startedAtNanos) {

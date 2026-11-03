@@ -11,6 +11,7 @@ import org.springframework.beans.factory.DisposableBean;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -93,10 +94,12 @@ class KafkaSubscriptionRequestedLagChecker implements SubscriptionRequestedLagCh
         }
     }
 
+    // close()는 남은 요청이 끝날 때까지 제한 없이 기다려서 Kafka에 접속할 수 없으면 종료가 늦어진다.
+    // 남은 요청은 결과를 쓸 곳이 없는 조회라서 조회 제한 시간만큼만 기다리고 포기한다
     @Override
     public synchronized void destroy() {
         if (adminClient != null) {
-            adminClient.close();
+            adminClient.close(Duration.ofSeconds(TIMEOUT_SECONDS));
         }
     }
 }

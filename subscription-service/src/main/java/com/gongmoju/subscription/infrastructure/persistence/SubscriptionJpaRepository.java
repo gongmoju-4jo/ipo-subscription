@@ -28,6 +28,10 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
 
     boolean existsByIpoIdAndUserIdAndStatusNotIn(UUID ipoId, UUID userId, Collection<SubscriptionStatus> statuses);
 
+    // 메서드 이름 쿼리는 ipo 테이블을 조인하므로 s.ipo.id로 subscription.ipo_id 컬럼에 직접 건다 (아래 findByIpoIdAndStatus와 같은 이유)
+    @Query("select count(s) from Subscription s where s.ipo.id = :ipoId and s.status in :statuses")
+    long countByIpoIdAndStatusIn(@Param("ipoId") UUID ipoId, @Param("statuses") Collection<SubscriptionStatus> statuses);
+
     /**
      * 네이티브 쿼리는 JPA Auditing과 {@code @Version}을 거치지 않으므로 {@code created_*}, {@code updated_*}, {@code version}을 직접 채움.
      * {@code ON CONFLICT} 대상을 {@code request_id}로 명시하여 다른 UNIQUE 위반({@code uk_subscription_active})은 예외로 전파됨. 트랜잭션 안에서 호출해야 함.
@@ -56,8 +60,4 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
             countQuery = "select count(s) from Subscription s where s.ipo.id = :ipoId and s.status = :status")
     Page<Subscription> findByIpoIdAndStatus(@Param("ipoId") UUID ipoId, @Param("status") SubscriptionStatus status,
                                             Pageable pageable);
-
-    // 위와 같은 이유로 s.ipo.id에 직접 건다
-    @Query("select count(s) from Subscription s where s.ipo.id = :ipoId and s.status = :status")
-    long countByIpoIdAndStatus(@Param("ipoId") UUID ipoId, @Param("status") SubscriptionStatus status);
 }

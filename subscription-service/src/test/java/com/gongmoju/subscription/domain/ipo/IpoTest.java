@@ -15,7 +15,7 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@DisplayName("공모주 (접수 Consumer 방어 검증, 마감)")
+@DisplayName("공모주 (접수 Consumer 방어 검증, 마감, 배정 완료)")
 class IpoTest {
 
     private static final Instant END_AT = Instant.parse("2026-10-27T07:00:00Z");
@@ -89,6 +89,36 @@ class IpoTest {
 
         // when, then
         assertThatThrownBy(ipo::close)
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(SubscriptionErrorCode.INVALID_STATUS_TRANSITION);
+        assertThat(ipo.getStatus()).isEqualTo(status);
+    }
+
+    @Test
+    @DisplayName("CLOSED 공모주의 배정을 완료하면 ALLOCATED가 된다")
+    void finishAllocation_changesClosedToAllocated() {
+        // given
+        Ipo ipo = ipoEndingAt(END_AT);
+        ReflectionTestUtils.setField(ipo, "status", IpoStatus.CLOSED);
+
+        // when
+        ipo.finishAllocation();
+
+        // then
+        assertThat(ipo.getStatus()).isEqualTo(IpoStatus.ALLOCATED);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(value = IpoStatus.class, names = {"OPEN", "ALLOCATED"})
+    @DisplayName("CLOSED가 아닌 공모주의 배정을 완료하면 INVALID_STATUS_TRANSITION이고 상태는 그대로다")
+    void finishAllocation_throws_whenNotClosed(IpoStatus status) {
+        // given
+        Ipo ipo = ipoEndingAt(END_AT);
+        ReflectionTestUtils.setField(ipo, "status", status);
+
+        // when, then
+        assertThatThrownBy(ipo::finishAllocation)
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(SubscriptionErrorCode.INVALID_STATUS_TRANSITION);

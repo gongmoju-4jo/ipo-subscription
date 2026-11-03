@@ -11,6 +11,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -64,12 +65,12 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     }
 
     @Override
-    public Page<Subscription> findByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status, Pageable pageable) {
-        return jpaRepository.findByIpoIdAndStatus(ipoId, status, pageable);
+    public long countByIpoIdAndStatusIn(UUID ipoId, Collection<SubscriptionStatus> statuses) {
+        return jpaRepository.countByIpoIdAndStatusIn(ipoId, statuses);
     }
 
     @Override
-    public long countByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status) {
-        return jpaRepository.countByIpoIdAndStatus(ipoId, status);
+    public Page<Subscription> findByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status, Pageable pageable) {
+        return jpaRepository.findByIpoIdAndStatus(ipoId, status, pageable);
     }
 }

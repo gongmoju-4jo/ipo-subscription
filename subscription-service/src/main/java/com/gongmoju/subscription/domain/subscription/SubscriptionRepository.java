@@ -3,6 +3,7 @@ package com.gongmoju.subscription.domain.subscription;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -36,9 +37,9 @@ public interface SubscriptionRepository {
      */
     boolean existsActiveByIpoIdAndUserId(UUID ipoId, UUID userId);
 
+    // 공모주의 청약 중 주어진 상태들의 건수 (마감 조건의 진행 중 SAGA 건수, ipo.closed의 confirmedCount, 배정 완료 때 배정 대상 청약 수)
+    long countByIpoIdAndStatusIn(UUID ipoId, Collection<SubscriptionStatus> statuses);
+
     // 공모주의 특정 상태 청약 목록 (배정용 확정 청약 목록). 공모주 정보는 읽지 않는다
     Page<Subscription> findByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status, Pageable pageable);
-
-    // 공모주의 상태별 청약 건수 (마감 조건의 진행 중 SAGA 건수, ipo.closed의 confirmedCount)
-    long countByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status);
 }

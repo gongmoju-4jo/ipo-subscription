@@ -171,6 +171,44 @@ docker-compose restart {서비스 이름}                                       
 - 둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩한다. 포트가 겹치거나 Windows 예약 포트면 `.env`에서 `PROMETHEUS_PORT`, `GRAFANA_PORT`를 바꾼다
 - 부하 테스트 절차는 [부하 테스트 가이드](./LOADTEST.md)
 
+#### Slack 장애 알림
+
+Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 시간 계속되면 Slack 채널로 장애 메시지를, 정상으로 돌아오면 복구 메시지를 보낸다.
+
+| 규칙 | 조건 | 지속 시간 |
+| --- | --- | --- |
+| `ServiceDown` | Prometheus가 서비스 지표 수집에 실패 (`up < 1`, 컨테이너 종료, 응답 없음) | 1분 |
+| `HttpServerErrorRateHigh` | 서비스별 5xx 응답 비율 5% 초과 (`/actuator/**` 제외) | 2분 |
+| `HikariConnectionPending` | DB 커넥션을 기다리는 요청이 있음 (`hikaricp_connections_pending > 0`) | 1분 |
+| `JvmHeapUsageHigh` | 힙 사용률 90% 초과 | 5분 |
+
+- DB 커넥션 대기, 힙 기준값은 정식 부하 측정(S1 600건/초)에서 울리지 않는 값이다 (대기가 이어진 최장 시간 약 25초, 힙 최대 76%)
+- 설정 파일은 `docker/grafana/provisioning/alerting/`: `rules.yml`(규칙), `contact-points.yml`(Slack 연락처, 메시지 형식), `policies.yml`(묶어 보내기, 반복 주기)
+  - 파일로 넣은 규칙은 Grafana 화면에서 수정할 수 없다. 파일을 고친 뒤 `docker-compose restart grafana`
+  - 연락처, 정책(메시지 형식 포함)은 재시작 후 약 1분 뒤에 적용된다. 그 사이에 나가는 알림은 이전 설정을 쓴다
+- 처음 발생하면 30초 동안 같은 묶음을 모아 보내고, 묶음에 바뀐 것(새 알림, 복구)은 1분 간격으로 보낸다. 복구되지 않으면 1시간마다 다시 보낸다
+- 장애 메시지에는 서비스, 내용, 시작 시각이, 복구 메시지에는 서비스, 복구된 장애, 복구 시각이 나온다. 제목 앞에 환경 이름이 붙는다 (예: `[local] 🚨 장애 발생 ServiceDown`)
+
+`.env` (모두 선택, 기본값은 주석 처리된 채로 둔다)
+
+| 키 | 뜻 | 로컬 | 배포 환경 |
+| --- | --- | --- | --- |
+| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL (비밀값, 커밋 ❌) | 비워 둠. 알림을 확인할 때만 **개인 테스트 채널** URL | 장애대응 채널 URL (배포 환경 비밀값에만) |
+| `ALERT_ENV` | 메시지 제목 앞 환경 이름 | 기본값 `local` | `prod` |
+| `GF_SERVER_ROOT_URL` | 메시지 안 Grafana 링크 주소 | 기본값 `http://localhost:{GRAFANA_PORT}` | 실제 접속 주소 |
+
+- 📌 장애대응 채널 URL은 로컬 `.env`에 넣지 않는다. 넣으면 로컬에서 서비스를 껐다 켤 때마다 장애대응 채널에 알림이 간다
+- `SLACK_WEBHOOK_URL`이 비어 있으면 Grafana는 그대로 시작하고 알림만 나가지 않는다 (로그: `SLACK_WEBHOOK_URL이 비어 있어 Slack 장애 알림이 나가지 않습니다.`)
+- `.env`를 바꾼 뒤에는 `docker-compose up -d grafana` (재시작만으로는 환경변수가 바뀌지 않는다)
+- 배포 환경에서 부하 테스트를 할 때는 Grafana → Alerting → Silences에서 알림을 일시 중지한다
+- Grafana가 내려가 있으면 알림도 나가지 않는다
+
+동작 확인 (개인 테스트 채널 URL을 넣은 상태)
+
+1. `docker-compose up -d grafana` 후 로그에 `finished to provision alerting`이 있는지 본다 (`docker-compose logs grafana`)
+2. `docker-compose stop allocation-service` → 약 1분 30초 뒤 `[local] 🚨 장애 발생 ServiceDown`
+3. `docker-compose start allocation-service` → 서비스가 뜨고 1~2분 안에 `[local] ✅ 복구 ServiceDown`
+
 #### IntelliJ 실행과 Docker 실행의 차이
 
 | | IntelliJ (개발) | Docker (확인) |
@@ -599,6 +637,13 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
 
 - **Grafana가 바로 종료됨 (`GRAFANA_ADMIN_PASSWORD가 비어 있습니다`)**
   - `.env`의 `GRAFANA_ADMIN_PASSWORD`에 직접 정한 값을 넣고 다시 `docker-compose up -d grafana`
+
+- **Slack 장애 알림이 오지 않음**
+  - `docker-compose logs grafana`에 `SLACK_WEBHOOK_URL이 비어 있어`가 있으면 `.env`에 URL이 없거나, `.env`를 바꾼 뒤 `docker-compose up -d grafana`를 하지 않은 것
+  - `Failed to provision alerting`이 있으면 `docker/grafana/provisioning/alerting/`의 파일 형식 오류. 로그의 파일 이름과 내용을 확인한다
+  - 알림은 조건이 지속 시간(1~5분) 동안 이어지고 30초를 더 기다린 뒤에 나간다. 바로 오지 않는 것은 정상
+  - Grafana → Alerting → Alert rules에서 규칙 상태(Normal, Pending, Firing)와 오류를 확인한다
+  - ⚠️ Slack 전송이 실패하면 Grafana 오류 로그에 Webhook URL이 그대로 찍힐 수 있다. 로그를 이슈, PR, 메신저에 붙일 때는 `hooks.slack.com/services/...` 부분을 지운다
 
 - **Docker에서 서비스가 `unhealthy`이거나 `starting`에서 안 넘어감**
   - `docker-compose logs {서비스 이름}`에서 `APPLICATION FAILED`나 `ERROR`를 확인한다

@@ -63,9 +63,10 @@ export function makeOptions(scenarioName, scenarios, extraThresholds = {}) {
 }
 
 // 청약 신청 1건. 요청마다 requestId, subscriptionId, 상태 코드를 한 줄(JSON)로 남긴다 (--console-output 파일)
-export function subscribe({ scenario, idx, user, accountId, requestId, expected, tags = {} }) {
-  if (!IPO_ID) throw new Error('IPO_ID 환경변수가 필요합니다');
-  const body = JSON.stringify({ requestId, ipoId: IPO_ID, accountId, requestedQuantity: QUANTITY });
+// ipoId를 따로 주면 그 공모주로 청약한다 (S1이 단계 부하에서 확정 건을 계속 만들려고 공모주를 돌려 쓴다). 안 주면 IPO_ID.
+export function subscribe({ scenario, idx, user, accountId, requestId, expected, tags = {}, ipoId = IPO_ID }) {
+  if (!ipoId) throw new Error('IPO_ID 환경변수가 필요합니다');
+  const body = JSON.stringify({ requestId, ipoId, accountId, requestedQuantity: QUANTITY });
   const res = http.post(`${BASE_URL}/api/v1/subscriptions`, body, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${user.token}` },
     responseCallback: http.expectedStatuses(...expected),
@@ -74,7 +75,7 @@ export function subscribe({ scenario, idx, user, accountId, requestId, expected,
   let data = {};
   let code = '';
   try { const j = res.json(); data = j.data || {}; code = (j.error && j.error.code) || ''; } catch (e) { /* 본문이 JSON이 아님 */ }
-  console.log(JSON.stringify({ s: scenario, run: RUN_ID, idx, requestId, status: res.status, subscriptionId: data.subscriptionId || '', code }));
+  console.log(JSON.stringify({ s: scenario, run: RUN_ID, idx, requestId, status: res.status, subscriptionId: data.subscriptionId || '', code, stage: tags.stage || '' }));
   return { res, data, code };
 }
 

@@ -7,6 +7,8 @@
 # 환경변수: K6_IMAGE(grafana/k6:1.3.0), K6_NETWORK(컨테이너 실행 시 compose 네트워크, 기본 ipo-subscription_default),
 #          K6_MODE(auto, local, container), BASE_URL(설치형 기본 http://localhost:8080, 컨테이너 기본 http://api-gateway:8080),
 #          K6_CPUS, K6_MEMORY(컨테이너 실행 시 k6 컨테이너의 CPU, 메모리 상한. 예: 1.0, 512m. 서비스와 같은 머신이면 k6도 CPU를 쓴다)
+#          K6_LABEL(컨테이너 실행 시 loadtest.batch 라벨. official.sh가 중단될 때 자기가 띄운 k6만 골라 멈추는 데 쓴다)
+#          K6_NAME(컨테이너 실행 시 컨테이너 이름. official.sh는 k6-<run_id>로 줘서 docker stats에서 실행별 k6를 구분한다)
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -45,6 +47,8 @@ else
   LIMITS=()
   [ -n "${K6_CPUS:-}" ] && LIMITS+=(--cpus "$K6_CPUS")
   [ -n "${K6_MEMORY:-}" ] && LIMITS+=(--memory "$K6_MEMORY")
+  [ -n "${K6_LABEL:-}" ] && LIMITS+=(--label "loadtest.batch=$K6_LABEL")
+  [ -n "${K6_NAME:-}" ] && LIMITS+=(--name "$K6_NAME")
   docker run --rm --network "${K6_NETWORK:-ipo-subscription_default}" -v "$HOSTDIR:/loadtest" ${LIMITS[@]+"${LIMITS[@]}"} "${ENVS[@]}" "$K6_IMAGE" run \
     --summary-export="/loadtest/results/$RUN_ID/summary.json" --console-output="/loadtest/results/$RUN_ID/requests.log" "/loadtest/k6/$SCEN.js"
 fi

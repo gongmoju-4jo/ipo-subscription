@@ -58,4 +58,25 @@ public class Allocation extends BaseEntity {
 
     @Column(nullable = false)
     private long allocatedAmount;
+
+    /**
+     * 배정 계산 결과로 청약 1건의 배정 결과를 만든다 (0주 포함).
+     *
+     * @param allocationRound 배정 회차
+     * @param result          청약 1건의 계산 결과
+     * @return 새 배정 결과
+     */
+    public static Allocation of(AllocationRound allocationRound, AllocationCalculation.SubscriptionAllocation result) {
+        Allocation allocation = new Allocation();
+        allocation.allocationRound = allocationRound;
+        allocation.ipoId = allocationRound.getIpoId();
+        allocation.subscriptionId = result.subscription().subscriptionId();
+        allocation.userId = result.subscription().userId();
+        allocation.accountId = result.subscription().accountId();
+        allocation.equalAllocatedQuantity = result.equalAllocatedQuantity();
+        allocation.proportionalAllocatedQuantity = result.proportionalAllocatedQuantity();
+        allocation.allocatedQuantity = result.allocatedQuantity();
+        allocation.allocatedAmount = result.allocatedAmount();
+        return allocation;
+    }
 }

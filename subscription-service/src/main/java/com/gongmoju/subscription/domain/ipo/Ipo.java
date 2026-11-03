@@ -122,6 +122,20 @@ public class Ipo extends BaseEntity {
     }
 
     /**
+     * 청약을 마감한다 (OPEN → CLOSED, D-16). 마감 조건(대기 시간, 랙 0, 진행 중 SAGA 0건)은 호출하는 쪽에서 확인한다.
+     *
+     * @throws BusinessException OPEN이 아니면 INVALID_STATUS_TRANSITION(409)
+     */
+    public void close() {
+        if (status != IpoStatus.OPEN) {
+            throw new BusinessException(SubscriptionErrorCode.INVALID_STATUS_TRANSITION,
+                    SubscriptionErrorCode.INVALID_STATUS_TRANSITION.getMessage(),
+                    List.of(new ApiErrorDetail("ipoId", "청약 중인 공모주가 아닙니다.")));
+        }
+        status = IpoStatus.CLOSED;
+    }
+
+    /**
      * 배정용 확정 청약 목록을 줄 수 있는지 검증한다 (API 명세 4.1). 마감(CLOSED) 이후에는 확정 청약이 더 생기거나 바뀌지 않는다.
      *
      * @throws BusinessException CLOSED가 아니면 INVALID_STATUS_TRANSITION(409)
@@ -132,5 +146,15 @@ public class Ipo extends BaseEntity {
                     SubscriptionErrorCode.INVALID_STATUS_TRANSITION.getMessage(),
                     List.of(new ApiErrorDetail("ipoId", "마감된 공모주가 아닙니다.")));
         }
+    }
+
+    /**
+     * 배정을 완료한다 (CLOSED → ALLOCATED, 이벤트 명세 {@code allocation.finished}). 개별 청약의 정산, 환불 완료까지 뜻하지는 않는다.
+     *
+     * @throws BusinessException CLOSED가 아니면 INVALID_STATUS_TRANSITION(409)
+     */
+    public void finishAllocation() {
+        validateClosed();
+        status = IpoStatus.ALLOCATED;
     }
 }

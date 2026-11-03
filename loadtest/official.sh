@@ -23,6 +23,7 @@
 #                   (요청 구간 앞뒤 10초 + Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도다. GC, DB 체크포인트는 대기로 피할 수 없다
 #                   개선 전후를 비교할 때는 같은 값을 쓴다
 #   STAGES=100,200,300,433  S1 속도 단계(건/초)       DUR=90  S1 단계 유지(초)
+#   S1_REPEAT=3     S1 단계마다 같은 조건으로 몇 번 측정할지 (팀 규칙: 최소 3회, 중앙값). 3 미만이면 판정이 "참고값"이 된다
 #   S0_PRICE=15000  S1_PRICE=1000  QUANTITY=10     공모가(원), 청약 수량(주)
 #   PRE_VUS=500 MAX_VUS=2000   S1 k6 가상 사용자
 #   P95_LIMIT=15 DRAIN_LIMIT=15  G2 합격 기준(초)
@@ -54,7 +55,7 @@ JAR_TARGETS="ipo-api-gateway:api-gateway ipo-account-service:account-service ipo
 ALL_CONTAINERS="ipo-postgres ipo-kafka ipo-eureka-server ipo-api-gateway ipo-account-service ipo-subscription-service ipo-allocation-service"
 
 WCAP="${WCAP:-20}"; STABLE_PCT="${STABLE_PCT:-20}"; GAP="${GAP:-30}"
-STAGES="${STAGES:-100,200,300,433}"; DUR="${DUR:-90}"
+STAGES="${STAGES:-100,200,300,433}"; DUR="${DUR:-90}"; S1_REPEAT="${S1_REPEAT:-3}"
 S0_PRICE="${S0_PRICE:-15000}"; S1_PRICE="${S1_PRICE:-1000}"; QUANTITY="${QUANTITY:-10}"
 PRE_VUS="${PRE_VUS:-500}"; MAX_VUS="${MAX_VUS:-2000}"
 S0_VUS=100; S0_ITERS=10    # S0 = 100명 x 10회 = 1,000건 (발제 조건, 바꾸지 않는다). 판정은 요청 수가 이 값과 같아야 유효로 본다
@@ -320,7 +321,7 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
     else echo "jar $mod 로컬=$local_sha 컨테이너=${cont_sha:-조회 실패} (다름)" >> "$OUT/env.txt"; mismatch=$((mismatch + 1)); fi
   done
   {
-    echo "설정 WCAP=$WCAP STABLE_PCT=$STABLE_PCT GAP=$GAP STAGES=$STAGES DUR=$DUR S0_VUS=$S0_VUS S0_ITERS=$S0_ITERS S0_PRICE=$S0_PRICE S1_PRICE=$S1_PRICE QUANTITY=$QUANTITY PRE_VUS=$PRE_VUS MAX_VUS=$MAX_VUS"
+    echo "설정 WCAP=$WCAP STABLE_PCT=$STABLE_PCT GAP=$GAP STAGES=$STAGES DUR=$DUR S1_REPEAT=$S1_REPEAT S0_VUS=$S0_VUS S0_ITERS=$S0_ITERS S0_PRICE=$S0_PRICE S1_PRICE=$S1_PRICE QUANTITY=$QUANTITY PRE_VUS=$PRE_VUS MAX_VUS=$MAX_VUS"
     echo "설정 PG_CONTAINER=$PG_CONTAINER KAFKA_CONTAINER=$KAFKA_CONTAINER EUREKA_URL=$EUREKA_URL"
     echo "설정 P95_LIMIT=$P95_LIMIT DRAIN_LIMIT=$DRAIN_LIMIT DRAIN_TIMEOUT=$DRAIN_TIMEOUT SKIP_BUILD=${SKIP_BUILD:-0} ALLOW_DIRTY=${ALLOW_DIRTY:-0}"
     echo "설정 REQUIRED_GROUPS=$REQUIRED_GROUPS"
@@ -339,28 +340,32 @@ run_s0() { # 인자: run_id, phase(warmup|measure)
   t1="$(date +%s)"
   d="$(drain "$ipo" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
-  echo "$run,S0,$phase,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d" >> "$MANIFEST"
+  echo "$run,S0,$phase,,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d" >> "$MANIFEST"
   LAST_AVG="$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg)" || die 1 "$run 평균 응답을 읽지 못함"
   rate="$(json_metric "$DIR/results/$run/summary.json" http_reqs rate)" || rate="?"
   say "$run ($phase) 처리량=${rate}건/초 avg=${LAST_AVG}ms 소진 대기=${d}초. ${GAP}초 대기 (요청 없음)"
   sleep "$GAP"
 }
 
-run_s1() { # 인자: 속도, 마지막 단계면 1
-  local rate="$1" last="$2" run ipos first t0 t1 d drc
-  run="$BATCH-S1-$rate"
-  ipos="$(awk -v r="$rate" '$1 == r { print $2 }' "$PLAN")"
-  [ -n "$ipos" ] || die 11 "S1 ${rate}건/초 공모주 목록 없음"
+# s1-plan.txt("속도 반복번호 공모주,공모주,...")에서 한 단계, 한 반복의 공모주 목록. 정확히 한 줄이 아니면 실패
+plan_ipos() { # 인자: plan 파일, 속도, 반복 번호
+  awk -v r="$2" -v k="$3" '$1 == r && $2 == k { n++; v = $3 } END { if (n != 1 || v == "") exit 1; print v }' "$1"
+}
+
+run_s1() { # 인자: 속도, 반복 번호, 마지막 실행이면 1
+  local rate="$1" rep="$2" last="$3" run ipos first t0 t1 d drc
+  run="$BATCH-S1-$rate-r$rep"
+  ipos="$(plan_ipos "$PLAN" "$rate" "$rep")" || die 11 "S1 ${rate}건/초 ${rep}회차 공모주 목록 없음"
   first="${ipos%%,*}"
   ensure_token $((DUR + 300))
-  say "$run 시작: ${rate}건/초 x ${DUR}초, 공모주 $(printf '%s\n' "$ipos" | awk -F, '{print NF}')개"
+  say "$run 시작: ${rate}건/초 x ${DUR}초 (${rep}/${S1_REPEAT}회), 공모주 $(printf '%s\n' "$ipos" | awk -F, '{print NF}')개"
   t0="$(date +%s)"
   k6_run s1 "$first" "$run" -e "IPO_IDS=$ipos" -e "RATE=$rate" -e "DURATION=${DUR}s" -e "PRE_VUS=$PRE_VUS" -e "MAX_VUS=$MAX_VUS" -e "QUANTITY=$QUANTITY" \
     || die 8 "$run k6 실패"
   t1="$(date +%s)"
   d="$(drain "$ipos" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
-  echo "$run,S1,measure,$rate,$DUR,$((rate * DUR)),$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d" >> "$MANIFEST"
+  echo "$run,S1,measure,$rep,$rate,$DUR,$((rate * DUR)),$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d" >> "$MANIFEST"
   say "$run 처리량=$(json_metric "$DIR/results/$run/summary.json" http_reqs rate 2>/dev/null)건/초 avg=$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg 2>/dev/null)ms 소진 대기=${d}초"
   if [ "$last" != 1 ]; then say "${GAP}초 대기 (요청 없음)"; sleep "$GAP"; fi
 }
@@ -403,14 +408,15 @@ post_process() {
 }
 
 main() {
-  local dirty need minbal accounts s1_cost r n k l ids dlt0 dlt1 avgs stable_at i
+  local dirty need minbal accounts s1_cost r n k l ids dlt0 dlt1 avgs stable_at i rep last
   while [ $# -gt 0 ]; do
     case "$1" in --batch) BATCH="${2:-}"; shift 2 ;; *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;; esac
   done
   case "$BATCH" in ''|*[!A-Za-z0-9._-]*) echo "사용: $0 --batch <이름> (영문, 숫자, . _ - 만)" >&2; exit 1 ;; esac
-  for v in WCAP STABLE_PCT GAP DUR S0_PRICE S1_PRICE QUANTITY PRE_VUS MAX_VUS DRAIN_TIMEOUT; do
+  for v in WCAP STABLE_PCT GAP DUR S1_REPEAT S0_PRICE S1_PRICE QUANTITY PRE_VUS MAX_VUS DRAIN_TIMEOUT; do
     is_uint "${!v}" || { echo "$v가 0 이상의 정수가 아님: ${!v}" >&2; exit 1; }
   done
+  [ "$S1_REPEAT" -ge 1 ] || { echo "S1_REPEAT는 1 이상 (팀 규칙은 3)" >&2; exit 1; }
   IFS=',' read -ra ST <<< "$STAGES"
   for r in "${ST[@]}"; do is_uint "$r" && [ "$r" -gt 0 ] || { echo "STAGES 값이 올바르지 않음: $STAGES" >&2; exit 1; }; done
 
@@ -453,7 +459,7 @@ main() {
   # 1. 토큰 (회원 수 확인 포함) → 예수금
   refresh_tokens || die 3 "토큰 재발급 실패"
   s1_cost=0
-  for r in "${ST[@]}"; do s1_cost=$(( s1_cost + $(ceil_div $((r * DUR)) "$USERS") )); done
+  for r in "${ST[@]}"; do s1_cost=$(( s1_cost + $(ceil_div $((r * DUR)) "$USERS") * S1_REPEAT )); done
   need=$(( S0_PRICE * QUANTITY * (WCAP + 3) + S1_PRICE * QUANTITY * s1_cost ))
   minbal="$(pg_int "select coalesce(min(a.cash_balance), 0) from account.account a join account.users u on u.user_id = a.user_id where u.login_id like 'lt%'")" || die 4 "예수금 조회 실패"
   accounts="$(pg_int "select count(*) from account.account a join account.users u on u.user_id = a.user_id where u.login_id like 'lt%'")" || die 4 "계좌 수 조회 실패"
@@ -482,12 +488,15 @@ main() {
   done
   : > "$PLAN"
   for r in "${ST[@]}"; do
-    n=$(( $(ceil_div $((r * DUR)) "$USERS") + 1 )); l=""
-    for i in $(seq 1 "$n"); do k="$(new_ipo "$BATCH-S1-$r-$i" "$S1_PRICE")" || die 11 "S1 공모주 생성 실패"; l="$l,$k"; done
-    echo "$r ${l#,}" >> "$PLAN"
+    n=$(( $(ceil_div $((r * DUR)) "$USERS") + 1 ))
+    for rep in $(seq 1 "$S1_REPEAT"); do   # 반복마다 새 공모주 (회원은 앞 반복의 공모주에 이미 청약했다)
+      l=""
+      for i in $(seq 1 "$n"); do k="$(new_ipo "$BATCH-S1-$r-r$rep-$i" "$S1_PRICE")" || die 11 "S1 공모주 생성 실패"; l="$l,$k"; done
+      echo "$r $rep ${l#,}" >> "$PLAN"
+    done
   done
-  say "공모주 생성: S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 단계별 $(awk '{print $1 ":" gsub(/,/, ",") + 1 "개"}' "$PLAN" | tr '\n' ' ')(공모가 $S1_PRICE)"
-  echo "run_id,scenario,phase,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s" > "$MANIFEST"
+  say "공모주 생성: S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 $(wc -l < "$PLAN" | tr -d ' ')묶음(단계 ${#ST[@]}개 x ${S1_REPEAT}회, 묶음당 $(awk 'NR == 1 {print gsub(/,/, ",") + 1}' "$PLAN")~$(awk 'END {print gsub(/,/, ",") + 1}' "$PLAN")개, 공모가 $S1_PRICE)"
+  echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s" > "$MANIFEST"
 
   # 4. S0: 워밍업 → 안정 판정 → 측정 3회
   avgs=(); stable_at=0
@@ -502,8 +511,12 @@ main() {
   # 5. S1: 토큰을 새로 받고 쉰 뒤 속도 단계마다 독립 실행
   refresh_tokens || die 3 "S1 전 토큰 재발급 실패"
   say "재발급 뒤 ${GAP}초 대기 (요청 없음)"; sleep "$GAP"
+  # 단계마다 S1_REPEAT회를 연달아 실행한다 (단계를 섞으면 앞 단계의 영향이 섞인다). 팀 규칙: 같은 조건 최소 3회, 중앙값
   for i in $(seq 0 $((${#ST[@]} - 1))); do
-    run_s1 "${ST[$i]}" "$([ "$i" -eq $((${#ST[@]} - 1)) ] && echo 1 || echo 0)"
+    for rep in $(seq 1 "$S1_REPEAT"); do
+      last=0; [ "$i" -eq $((${#ST[@]} - 1)) ] && [ "$rep" -eq "$S1_REPEAT" ] && last=1
+      run_s1 "${ST[$i]}" "$rep" "$last"
+    done
   done
   if dlt1="$(kafka_dlt_total)"; then say "DLT 합계(종료)=$dlt1 (증가 $((dlt1 - dlt0)))"; else say "DLT 합계(종료) 조회 실패"; fi
   say "== 부하 종료. 후처리 시작"

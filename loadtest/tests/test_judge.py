@@ -17,7 +17,7 @@ spec.loader.exec_module(judge)
 
 U = ["6f1c3b0e-1111-4a2b-8c3d-%012d" % i for i in range(1, 20)]
 # official.sh가 쓰는 manifest.csv 머리줄과 같아야 한다
-MANIFEST_HEADER = "run_id,scenario,phase,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s\n"
+MANIFEST_HEADER = "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s\n"
 
 
 def summary(requests=1000, rate=500.0, avg=80.0, p95=130.0, fail=0.0, dropped=None):
@@ -37,13 +37,13 @@ class Case:
         self.rows = []
         self.g2 = {}
 
-    def run(self, run_id, scenario, phase, target, ipos, s, d, dur="", expected=None):
+    def run(self, run_id, scenario, phase, target, ipos, s, d, dur="", expected=None, rep=""):
         os.makedirs(os.path.join(self.tmp, run_id))
         with open(os.path.join(self.tmp, run_id, "summary.json"), "w", encoding="utf-8") as f:
             json.dump(s, f)
         if expected is None:  # official.sh처럼 S0은 1,000건, S1은 목표 속도 x 유지 시간
             expected = 1000 if scenario == "S0" else (int(target) * int(dur) if target and dur else "")
-        self.rows.append(f"{run_id},{scenario},{phase},{target},{dur},{expected},{';'.join(ipos)},0,0,1")
+        self.rows.append(f"{run_id},{scenario},{phase},{rep},{target},{dur},{expected},{';'.join(ipos)},0,0,1")
         self.g2[tuple(ipos)] = d
 
     def manifest(self):
@@ -151,11 +151,45 @@ class TestG2(unittest.TestCase):
 
 
 class TestS1(unittest.TestCase):
-    def s1(self, stages):
+    def s1(self, stages, repeat=3):
+        """단계마다 같은 값으로 repeat회 (official.sh 기본과 같이 3회)"""
         c = Case()
-        for i, (rate, s, d) in enumerate(stages):
-            c.run(f"s1-{rate}", "S1", "measure", rate, [U[2 * i], U[2 * i + 1]], s, d)
+        n = 0
+        for rate, s, d in stages:
+            for k in range(1, repeat + 1):
+                c.run(f"s1-{rate}-r{k}", "S1", "measure", rate, [U[n]], s, d, rep=k)
+                n += 1
         return section(c.judge(), "S1")
+
+    def runs(self, rate, items):
+        """한 단계의 반복마다 다른 값: items = [(summary, g2), ...]"""
+        c = Case()
+        for k, (s, d) in enumerate(items, start=1):
+            c.run(f"s1-{rate}-r{k}", "S1", "measure", rate, [U[k]], s, d, rep=k)
+        return section(c.judge(), "S1")
+
+    def test_median_of_three(self):  # 반복 3회 중 하나가 튀어도 중앙값으로 판정
+        ok = summary(requests=9000, avg=5, p95=20, dropped=0)
+        out = self.runs(100, [(ok, g2(confirmed=9000, p95=5, drain=5)), (ok, g2(confirmed=9000, p95=40, drain=40)),
+                              (ok, g2(confirmed=9000, p95=6, drain=7))])
+        self.assertIn("100건/초 (3회 중앙값)", out)
+        self.assertIn("p95 6.00초, 소진 7.00초 → 통과", out)
+
+    def test_invalid_run_blocks_stage(self):  # 무효 회차가 섞이면 그 단계는 판정하지 않는다 (S0과 같은 규칙)
+        ok = summary(requests=9000, avg=5, p95=20, dropped=0)
+        out = self.runs(100, [(ok, g2(confirmed=9000, p95=5, drain=5)), (summary(requests=9000, dropped=3), g2(confirmed=9000)),
+                              (ok, g2(confirmed=9000, p95=6, drain=7))])
+        self.assertIn("100건/초: 판정하지 않음 (3회 중 유효 2회", out)
+        self.assertIn("100건/초부터 판정 불가", out)
+
+    def test_fewer_than_three_is_reference(self):
+        out = self.s1([(100, summary(requests=9000, avg=4, p95=14, dropped=0), g2(confirmed=9000, p95=1, drain=1))], repeat=1)
+        self.assertIn("1회 중앙값, 참고값: 1회", out)
+        self.assertIn("3회 미만이라 참고값", out)
+
+    def test_three_runs_no_reference_note(self):
+        out = self.s1([(100, summary(requests=9000, avg=4, p95=14, dropped=0), g2(confirmed=9000, p95=1, drain=1))])
+        self.assertNotIn("참고값", out)
 
     def test_limit_point(self):
         out = self.s1([(100, summary(requests=9000, rate=93, avg=4, p95=14, dropped=0), g2(confirmed=9000, p95=1, drain=1)),
@@ -168,9 +202,13 @@ class TestS1(unittest.TestCase):
         self.assertIn("한계 지점 미도달", out)
 
     def test_dropped_makes_invalid(self):
-        out = self.s1([(100, summary(requests=9000, rate=93, avg=4, p95=14, dropped=5), g2(confirmed=9000, p95=1, drain=1))])
-        self.assertIn("G2 무효(밀린 반복)", out)
-        self.assertIn("측정 실패", out)
+        c = Case()
+        c.run("s1-100-r1", "S1", "measure", 100, [U[0]], summary(requests=9000, rate=93, avg=4, p95=14, dropped=5),
+              g2(confirmed=9000, p95=1, drain=1), rep=1)
+        full = c.judge()
+        line = [x for x in full.splitlines() if x.startswith("| s1-100-r1 ")][0]
+        self.assertIn("무효(밀린 반복)", line)
+        self.assertIn("측정 실패", section(full, "S1"))
 
     def test_delivered_uses_request_count(self):  # 스모크: k6 rate 78.6건/초였지만 실제로 998/1000건을 보냈다 (rate에 VU 준비 시간이 섞임)
         c = Case()

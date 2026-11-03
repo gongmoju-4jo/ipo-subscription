@@ -141,6 +141,15 @@ H_SH="$(grep -o '"run_id,scenario[^"]*"' "$DIR/official.sh" | head -1 | tr -d '"
 H_PY="$(grep -o 'MANIFEST_HEADER = "run_id,scenario[^"\\]*' "$HERE/test_judge.py" | sed 's/^MANIFEST_HEADER = "//')"
 [ -n "$H_SH" ] && [ "$H_SH" = "$H_PY" ] && ok "manifest 머리줄: official.sh와 test_judge.py가 같다" || bad "manifest 머리줄" "sh='$H_SH' py='$H_PY'"
 
+# ---- plan_ipos (S1 반복마다 다른 공모주 묶음) ----
+P="$(mktemp)"; printf '100 1 %s,%s\n100 2 %s\n200 1 %s\n' "$U1" "$U2" "$U2" "$U1" > "$P"
+expect_out "plan_ipos: 단계, 반복 번호로 묶음을 찾는다" 0 "$U2" plan_ipos "$P" 100 2
+expect_out "plan_ipos: 여러 공모주 묶음" 0 "$U1,$U2" plan_ipos "$P" 100 1
+expect_out "plan_ipos: 없는 반복 → 실패" 1 "" plan_ipos "$P" 100 3
+expect_out "plan_ipos: 반복 번호 10이 1에 걸리지 않는다" 1 "" plan_ipos "$P" 100 10
+printf '100 1 %s\n100 1 %s\n' "$U1" "$U2" > "$P"
+expect_out "plan_ipos: 같은 단계·반복이 두 줄이면 실패" 1 "" plan_ipos "$P" 100 1
+
 # ---- post_process: 실제 함수를 가짜 명령으로 돌려 하위 명령에 넘어가는 인자를 본다 ----
 # (CodeRabbit 지적: judge.py에 --container를 넘기지 않아 PG_CONTAINER를 바꾸면 G2를 다른 DB에서 조회)
 PP="$(mktemp -d)"; CALLS="$PP/calls.log"; : > "$CALLS"

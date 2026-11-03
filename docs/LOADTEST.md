@@ -109,7 +109,7 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한)를 마친 상태에서 실행합니다.
 
 ```bash
-bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 40분, 추정)
+bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 75~80분, 추정)
 ```
 
 하는 일 (순서대로, 중간에 사람이 끼어들지 않습니다)
@@ -119,23 +119,23 @@ bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results
 3. gateway, subscription, account를 재시작(콜드 상태)하고, healthy와 Eureka UP을 기다린 뒤 45초 쉬고 사전 점검(`precheck.sh`)을 합니다.
 4. 회차에 쓸 공모주를 모두 미리 만듭니다 (부하 중에는 만들지 않습니다).
 5. S0: 1,000건 회차를 워밍업 → 안정 판정(회차 평균 응답이 연속 3회차 각각 그 평균의 ±`STABLE_PCT`% 이내) → 측정 3회 순서로 실행합니다.
-6. S1: 속도 단계(`STAGES`)마다 `DUR`초씩 독립 k6 실행을 합니다. 단계마다 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
+6. S1: 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
 7. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다.
 
 - **모든 부하 실행(S0 회차, S1 단계) 뒤에 이번 공모주의 `PENDING`/`COMPENSATING` 0, 필수 Consumer 그룹 lag 0, outbox 미발행 0을 확인하고 `GAP`초 쉰 뒤 다음 실행을 합니다.** 앞 실행의 처리 대기가 다음 실행의 G2에 섞이지 않게 하는 것은 소진 확인이 맡습니다. `GAP`(기본 30초)은 보고서의 서버 지표 구간(요청 구간 앞뒤 10초, Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도입니다. JVM GC(G1은 쉬는 동안 스스로 돌지 않음)와 DB 체크포인트는 대기로 피할 수 없습니다. 개선 전후를 비교할 때는 같은 `GAP`을 씁니다.
 - psql, Kafka, git, 토큰 재발급, k6 조회가 실패하면 0으로 보지 않고 중단합니다. Consumer lag은 `LOG-END-OFFSET - CURRENT-OFFSET`으로 계산하고(커밋 오프셋이 `-`인데 메시지가 있으면 대기로 셉니다), 필수 그룹(`REQUIRED_GROUPS`)이 없으면 실패입니다.
 - 토큰이 다음 실행 중에 만료될 것 같으면 실행 사이(요청 없는 구간)에 재발급하고 `GAP`초 쉽니다. 재발급 시점은 `진행.log`에 남습니다.
 - 같은 이름의 결과 폴더가 있으면 거부합니다(이전 결과를 덮어쓰지 않음). 두 개를 동시에 실행할 수 없습니다(`loadtest/results/.official.lock`). 중단(Ctrl+C)하면 이번 실행이 띄운 k6 컨테이너만 멈춥니다.
-- 시험 실행: `ALLOW_DIRTY=1 SKIP_BUILD=1 WCAP=3 STABLE_PCT=1000 GAP=5 STAGES=50,100 DUR=10 bash loadtest/official.sh --batch smoke-1` (약 10분, 정식 결과로 쓰지 않습니다)
+- 시험 실행: `ALLOW_DIRTY=1 SKIP_BUILD=1 WCAP=3 STABLE_PCT=1000 GAP=5 STAGES=50,100 DUR=10 S1_REPEAT=3 bash loadtest/official.sh --batch smoke-1` (약 15분, 정식 결과로 쓰지 않습니다)
 
 판정 기준 (`judge.py`)
 
-| | S0 (측정 3회 중앙값) | S1 (속도 단계별) |
+| | S0 (측정 3회 중앙값) | S1 (속도 단계마다 반복 3회 중앙값) |
 | --- | --- | --- |
 | G1 합격 | 처리량 200건/초 이상, 평균 500ms 이하, 오류율 1% 미만 | 평균 500ms 이하, 오류율 1% 미만 |
 | G1 목표 | 처리량 400건/초 이상, 평균 250ms 이하, p95 500ms 이하, 오류 0 | 평균 250ms 이하, p95 500ms 이하, 오류 0 |
 | G2 합격 | 접수→확정 p95 15초 이하, 소진 시간 15초 이하 | 같음 |
-| 무효 | 요청 수가 1,000건이 아닌 회차(2분 제한 안에 다 못 보냄)는 무효. 측정 3회가 모두 유효하지 않으면 판정하지 않음 | 밀린 반복(`dropped_iterations`)이 있으면 무효 |
+| 무효 | 요청 수가 1,000건이 아닌 회차(2분 제한 안에 다 못 보냄)는 무효. 측정 3회가 모두 유효하지 않으면 판정하지 않음 | 밀린 반복(`dropped_iterations`)이 있는 회차는 무효. 무효 회차가 섞인 단계는 판정하지 않음. 3회 미만이면 참고값(결론에 쓰지 않음) |
 
 - S1은 한계 지점(평균 500ms 또는 오류율 1%가 처음 깨지는 단계)으로 보므로 처리량을 기준에 넣지 않고, 목표 속도 대비 실제 전달률을 따로 보여줍니다.
 - 소진 시간은 마지막 요청 접수 이후 마지막 확정까지(`MAX(confirmed_at) - MAX(received_at)`)입니다. 확정 수가 요청 수와 다르면(오류, 거절, 미처리가 섞이면) G2는 무효입니다.
@@ -218,14 +218,14 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 7. 결과 파일
 
-`loadtest/results/{run_id}/`에 저장됩니다. 정식 측정은 `loadtest/results/{batch}/`에 묶음 파일이 따로 생기고, 실행마다 `{batch}-S0-n1`, `{batch}-S0-r1`, `{batch}-S1-{속도}` 폴더가 생깁니다.
+`loadtest/results/{run_id}/`에 저장됩니다. 정식 측정은 `loadtest/results/{batch}/`에 묶음 파일이 따로 생기고, 실행마다 `{batch}-S0-n1`, `{batch}-S0-r1`, `{batch}-S1-{속도}-r{반복}` 폴더가 생깁니다.
 
 | 정식 측정 묶음 파일 | 내용 |
 | --- | --- |
 | `진행.log` | 진행 기록 (재시작 시각, 토큰 재발급 시점, 회차별 처리량, 소진 대기 시간) |
 | `env.txt` | 커밋, dirty 여부, 서비스별 jar sha256, OS, bash, Python, Docker, compose 버전, 설정값 전부 |
-| `manifest.csv` | 실행 목록 (run_id, 시나리오, 구간, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
-| `s1-plan.txt` | S1 단계별 공모주 ID |
+| `manifest.csv` | 실행 목록 (run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
+| `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |
 | `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점) |
 
 | 실행별 파일 | 내용 |
@@ -251,6 +251,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `WCAP`, `STABLE_PCT` | `20`, `20` | `official.sh` (S0 워밍업 상한 회차, 안정 판정 ±%) |
 | `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |
 | `STAGES`, `DUR` | `100,200,300,433`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초) |
+| `S1_REPEAT` | `3` | `official.sh` (S1 단계마다 반복 측정 횟수. 팀 규칙은 최소 3회, 3 미만이면 판정이 참고값) |
 | `S0_PRICE`, `S1_PRICE`, `QUANTITY` | `15000`, `1000`, `10` | `official.sh` (공모가, 청약 수량) |
 | `PRE_VUS`, `MAX_VUS` | `500`, `2000` | `official.sh` (S1 k6 가상 사용자) |
 | `P95_LIMIT`, `DRAIN_LIMIT` | `15`, `15` | `official.sh` → `judge.py` (G2 합격 기준 초) |

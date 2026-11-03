@@ -15,6 +15,8 @@
   dropped_iterations가 생기지 않는다. 대신 maxDuration 2분 안에 다 못 보낸 회차를 요청 수로 걸러낸다)
 - 확정 수가 요청 수와 다르면 G2 무효 (오류, 거절, 미처리가 섞인 값)
 - S0 최종 판정은 measure 회차가 정확히 3개이고 모두 유효할 때만 그 중앙값으로 한다
+- S1은 속도 단계마다 반복 측정의 중앙값으로 판정한다. 무효 회차가 하나라도 있으면 그 단계는 판정하지 않고,
+  3회 미만이면 판정은 하되 참고값으로 표시한다 (팀 문서 0장: 최소 3회, 중앙값)
 """
 import argparse
 import csv
@@ -26,6 +28,7 @@ import sys
 
 G1_PASS_AVG, G1_PASS_FAIL, G1_PASS_RATE = 500.0, 0.01, 200.0
 G1_GOAL_AVG, G1_GOAL_P95, G1_GOAL_RATE = 250.0, 500.0, 400.0
+REPEAT_MIN = 3   # 팀 문서 0장: 같은 조건으로 최소 3회, 대표값은 중앙값 (모든 측정에 적용)
 
 
 def load_summary(results_dir, run):
@@ -148,20 +151,44 @@ def judge(manifest, p95_limit, drain_limit, query=query_g2, container="ipo-postg
         w(f"- G2: 접수→확정 p95 {p95:.2f}초, 소진 {drain:.2f}초 → {v2}")
 
     w()
-    w("## S1 (속도 단계별)")
+    w(f"## S1 (속도 단계별, 같은 단계 반복 측정의 중앙값. 팀 규칙: 최소 {REPEAT_MIN}회)")
     if not s1_rows:
         w("S1 실행 없음")
+        return
+    stages = {}
+    for target, s, d, gp, gg, v2 in s1_rows:
+        stages.setdefault(target, []).append((s, d, gp, gg, v2))
+    limit, few = None, []
+    for target in sorted(stages):
+        runs = stages[target]
+        valid = [x for x in runs if x[2] != "무효" and not x[4].startswith("무효")]
+        if len(valid) != len(runs):
+            w(f"- {target}건/초: 판정하지 않음 ({len(runs)}회 중 유효 {len(valid)}회. 무효 회차를 다시 측정해야 한다)")
+            if limit is None:
+                limit = (target, None, None)
+            continue
+        med = statistics.median
+        s = {k: med([x[0][k] for x in valid]) for k in ("avg", "p95", "fail")}
+        s["dropped"], s["rate"] = 0, 0.0
+        gp, gg = g1(s, "S1")
+        p95, drain = med([x[1]["p95"] for x in valid]), med([x[1]["drain"] for x in valid])
+        v2 = "통과" if p95 <= p95_limit and drain <= drain_limit else "불합격"
+        note = ""
+        if len(runs) < REPEAT_MIN:
+            few.append(target)
+            note = f", 참고값: {len(runs)}회"
+        w(f"- {target}건/초 ({len(runs)}회 중앙값{note}): G1 avg {s['avg']:.1f}ms, p95 {s['p95']:.1f}ms, 오류율 {s['fail'] * 100:.2f}% → {gp} (목표 {gg}) / "
+          f"G2 접수→확정 p95 {p95:.2f}초, 소진 {drain:.2f}초 → {v2}")
+        if not (gp == "통과" and v2 == "통과") and limit is None:
+            limit = (target, gp, v2)
+    if limit is None:
+        w(f"- 한계 지점: 측정한 가장 높은 단계({max(stages)}건/초)까지 G1, G2 모두 통과 (한계 지점 미도달)")
+    elif limit[1] is None:
+        w(f"- 한계 지점: {limit[0]}건/초부터 판정 불가 (무효 회차가 있다. 한계가 아니라 측정 실패다)")
     else:
-        limit = None
-        for target, s, d, gp, gg, v2 in sorted(s1_rows, key=lambda x: x[0]):
-            ok = gp == "통과" and v2 == "통과"
-            w(f"- {target}건/초: G1 {gp} (목표 {gg}), G2 {v2}")
-            if not ok and limit is None:
-                limit = (target, gp, v2)
-        if limit is None:
-            w(f"- 한계 지점: 측정한 가장 높은 단계({max(x[0] for x in s1_rows)}건/초)까지 G1, G2 모두 통과 (한계 지점 미도달)")
-        else:
-            w(f"- 한계 지점: {limit[0]}건/초 (G1 {limit[1]}, G2 {limit[2]}). 무효가 원인이면 한계가 아니라 측정 실패다")
+        w(f"- 한계 지점: {limit[0]}건/초 (G1 {limit[1]}, G2 {limit[2]})")
+    if few:
+        w(f"- {', '.join(f'{t}건/초' for t in few)}는 {REPEAT_MIN}회 미만이라 참고값이다. 결론에 쓰지 않는다 (팀 문서 0장)")
 
 
 def main(argv=None):

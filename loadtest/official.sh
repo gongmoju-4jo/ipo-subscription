@@ -43,6 +43,8 @@ PG_CONTAINER="${PG_CONTAINER:-ipo-postgres}"
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-ipo-kafka}"
 KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-localhost:29092}"
 EUREKA_URL="${EUREKA_URL:-http://localhost:8761}"
+# 하위 스크립트(precheck.sh, verify.sh, new_ipo.sh)도 같은 컨테이너, 주소를 쓰게 한다
+export PG_CONTAINER KAFKA_CONTAINER EUREKA_URL
 K6_IMAGE="${K6_IMAGE:-grafana/k6:1.3.0}"
 USERS_CSV="$DIR/data/users.csv"
 RESTART_SERVICES="api-gateway subscription-service account-service"
@@ -55,6 +57,7 @@ WCAP="${WCAP:-20}"; STABLE_PCT="${STABLE_PCT:-20}"; GAP="${GAP:-30}"
 STAGES="${STAGES:-100,200,300,433}"; DUR="${DUR:-90}"
 S0_PRICE="${S0_PRICE:-15000}"; S1_PRICE="${S1_PRICE:-1000}"; QUANTITY="${QUANTITY:-10}"
 PRE_VUS="${PRE_VUS:-500}"; MAX_VUS="${MAX_VUS:-2000}"
+S0_VUS=100; S0_ITERS=10    # S0 = 100명 x 10회 = 1,000건 (발제 조건, 바꾸지 않는다). 판정은 요청 수가 이 값과 같아야 유효로 본다
 P95_LIMIT="${P95_LIMIT:-15}"; DRAIN_LIMIT="${DRAIN_LIMIT:-15}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-2400}"
 REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
 TOKEN_MAX_S=$((55 * 60))   # 토큰 만료 1시간보다 5분 일찍 끊는다
@@ -317,7 +320,8 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
     else echo "jar $mod 로컬=$local_sha 컨테이너=${cont_sha:-조회 실패} (다름)" >> "$OUT/env.txt"; mismatch=$((mismatch + 1)); fi
   done
   {
-    echo "설정 WCAP=$WCAP STABLE_PCT=$STABLE_PCT GAP=$GAP STAGES=$STAGES DUR=$DUR S0_PRICE=$S0_PRICE S1_PRICE=$S1_PRICE QUANTITY=$QUANTITY PRE_VUS=$PRE_VUS MAX_VUS=$MAX_VUS"
+    echo "설정 WCAP=$WCAP STABLE_PCT=$STABLE_PCT GAP=$GAP STAGES=$STAGES DUR=$DUR S0_VUS=$S0_VUS S0_ITERS=$S0_ITERS S0_PRICE=$S0_PRICE S1_PRICE=$S1_PRICE QUANTITY=$QUANTITY PRE_VUS=$PRE_VUS MAX_VUS=$MAX_VUS"
+    echo "설정 PG_CONTAINER=$PG_CONTAINER KAFKA_CONTAINER=$KAFKA_CONTAINER EUREKA_URL=$EUREKA_URL"
     echo "설정 P95_LIMIT=$P95_LIMIT DRAIN_LIMIT=$DRAIN_LIMIT DRAIN_TIMEOUT=$DRAIN_TIMEOUT SKIP_BUILD=${SKIP_BUILD:-0} ALLOW_DIRTY=${ALLOW_DIRTY:-0}"
     echo "설정 REQUIRED_GROUPS=$REQUIRED_GROUPS"
   } >> "$OUT/env.txt"
@@ -331,11 +335,11 @@ run_s0() { # 인자: run_id, phase(warmup|measure)
   [ "$S0_NEXT" -lt "${#S0_IPOS[@]}" ] || die 11 "S0 공모주가 모자람"
   ipo="${S0_IPOS[$S0_NEXT]}"; S0_NEXT=$((S0_NEXT + 1))
   t0="$(date +%s)"
-  k6_run s0 "$ipo" "$run" -e "QUANTITY=$QUANTITY" || die 8 "$run k6 실패"
+  k6_run s0 "$ipo" "$run" -e "VUS=$S0_VUS" -e "ITERATIONS=$S0_ITERS" -e "QUANTITY=$QUANTITY" || die 8 "$run k6 실패"
   t1="$(date +%s)"
   d="$(drain "$ipo" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
-  echo "$run,S0,$phase,,,$ipo,$t0,$t1,$d" >> "$MANIFEST"
+  echo "$run,S0,$phase,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d" >> "$MANIFEST"
   LAST_AVG="$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg)" || die 1 "$run 평균 응답을 읽지 못함"
   rate="$(json_metric "$DIR/results/$run/summary.json" http_reqs rate)" || rate="?"
   say "$run ($phase) 처리량=${rate}건/초 avg=${LAST_AVG}ms 소진 대기=${d}초. ${GAP}초 대기 (요청 없음)"
@@ -356,28 +360,32 @@ run_s1() { # 인자: 속도, 마지막 단계면 1
   t1="$(date +%s)"
   d="$(drain "$ipos" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
-  echo "$run,S1,measure,$rate,$DUR,$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d" >> "$MANIFEST"
+  echo "$run,S1,measure,$rate,$DUR,$((rate * DUR)),$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d" >> "$MANIFEST"
   say "$run 처리량=$(json_metric "$DIR/results/$run/summary.json" http_reqs rate 2>/dev/null)건/초 avg=$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg 2>/dev/null)ms 소진 대기=${d}초"
   if [ "$last" != 1 ]; then say "${GAP}초 대기 (요청 없음)"; sleep "$GAP"; fi
 }
 
-# manifest.csv를 열 위치가 아니라 열 이름으로 읽어 "run_id 시나리오 공모주(;구분)"를 한 줄씩 낸다. 필요한 열이 없으면 실패
+# manifest.csv를 열 위치가 아니라 열 이름으로 읽어 "run_id 시나리오 공모주(;구분) 예상요청수"를 한 줄씩 낸다.
+# 빈 값은 '-'로 낸다 (빈 칸이면 read가 다음 필드를 당겨 읽는다). run_id, scenario, ipo_ids 열이 없으면 실패
 manifest_runs() {
   awk -F, '
+    function v(name) { return (name in c && $c[name] != "") ? $c[name] : "-" }
     NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i
               if (!("run_id" in c) || !("scenario" in c) || !("ipo_ids" in c)) exit 1
               next }
-    NF > 0  { print $c["run_id"] " " $c["scenario"] " " $c["ipo_ids"] }' "$1"
+    NF > 0  { print v("run_id") " " v("scenario") " " v("ipo_ids") " " v("expected_requests") }' "$1"
 }
 
 # 부하가 모두 끝난 뒤: 보고서(report.py), 요청 분류(check_requests.py), 정합성 SQL(verify.sh), 판정(judge.py)
 post_process() {
-  local fails=0 run scen ipos i k expect runs
+  local fails=0 run scen ipos expected i k expect runs
   runs="$(manifest_runs "$MANIFEST")" || { say "후처리: manifest.csv 형식 오류"; return 1; }
-  while read -r run scen ipos; do
-    [ -n "$run" ] || continue
+  while read -r run scen ipos expected; do
+    [ -n "$run" ] && [ "$run" != - ] || continue
+    [ "$ipos" = - ] && ipos=""
     (cd "$DIR" && py report.py --run-id "$run") > "$DIR/results/$run/report.out" 2>&1 || { say "후처리: $run report.py 실패"; fails=$((fails + 1)); }
-    expect=""; [ "$scen" = S0 ] && expect="--expect-requests 1000"
+    # S0은 요청 수가 정확히 맞아야 한다. S1은 k6가 목표 속도를 다 못 보낼 수 있어 판정(전달률, 밀린 반복)에서 본다
+    expect=""; [ "$scen" = S0 ] && is_uint "$expected" && expect="--expect-requests $expected"
     # shellcheck disable=SC2086  # expect는 비어 있거나 옵션 2개
     py "$(pypath "$DIR/verify/check_requests.py")" "$(pypath "$DIR/results/$run/requests.log")" $expect > "$DIR/results/$run/check_requests.txt" 2>&1 \
       || { say "후처리: $run 요청 분류 이상 (check_requests.txt)"; fails=$((fails + 1)); }
@@ -388,7 +396,8 @@ post_process() {
     done
     [ "$k" -gt 0 ] || { say "후처리: $run 공모주 ID 없음"; fails=$((fails + 1)); }
   done <<< "$runs"
-  py "$(pypath "$DIR/verify/judge.py")" "$(pypath "$MANIFEST")" --p95-limit "$P95_LIMIT" --drain-limit "$DRAIN_LIMIT" > "$OUT/판정.md" 2> "$OUT/판정.err" \
+  py "$(pypath "$DIR/verify/judge.py")" "$(pypath "$MANIFEST")" --p95-limit "$P95_LIMIT" --drain-limit "$DRAIN_LIMIT" --container "$PG_CONTAINER" \
+    > "$OUT/판정.md" 2> "$OUT/판정.err" \
     || { say "후처리: judge.py 실패 (판정.err)"; fails=$((fails + 1)); }
   return "$fails"
 }
@@ -478,7 +487,7 @@ main() {
     echo "$r ${l#,}" >> "$PLAN"
   done
   say "공모주 생성: S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 단계별 $(awk '{print $1 ":" gsub(/,/, ",") + 1 "개"}' "$PLAN" | tr '\n' ' ')(공모가 $S1_PRICE)"
-  echo "run_id,scenario,phase,target_rate,duration_s,ipo_ids,k6_start,k6_end,drain_s" > "$MANIFEST"
+  echo "run_id,scenario,phase,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s" > "$MANIFEST"
 
   # 4. S0: 워밍업 → 안정 판정 → 측정 3회
   avgs=(); stable_at=0

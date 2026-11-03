@@ -11,6 +11,8 @@
 - G2: 접수→확정 p95 <= --p95-limit, 소진 시간(마지막 접수 이후 마지막 확정까지) <= --drain-limit
 무효 (판정하지 않는다)
 - S1에 dropped_iterations가 있으면 G1, G2 모두 무효 (요청을 정한 속도로 못 보냄)
+- S0 요청 수가 manifest의 expected_requests(1,000)와 다르면 G1, G2 모두 무효 (S0은 per-vu-iterations라
+  dropped_iterations가 생기지 않는다. 대신 maxDuration 2분 안에 다 못 보낸 회차를 요청 수로 걸러낸다)
 - 확정 수가 요청 수와 다르면 G2 무효 (오류, 거절, 미처리가 섞인 값)
 - S0 최종 판정은 measure 회차가 정확히 3개이고 모두 유효할 때만 그 중앙값으로 한다
 """
@@ -115,6 +117,9 @@ def judge(manifest, p95_limit, drain_limit, query=query_g2, container="ipo-postg
         d = query(ipos, container)
         gp, gg = g1(s, scen)
         v2 = g2(s, d, scen, p95_limit, drain_limit)
+        expected = int(r["expected_requests"]) if r.get("expected_requests") else None
+        if scen == "S0" and expected is not None and s["requests"] != expected:
+            gp, gg, v2 = "무효", "무효", f"무효(요청 {s['requests']} / 예상 {expected})"
         shown = (gp, gg, v2) if phase != "warmup" else ("참고", "참고", "참고")
         # 전달률 = 보낸 요청 수 / (목표 속도 x 유지 시간). k6의 rate는 가상 사용자 준비 시간까지 포함한 전체 시간으로 나눈 값이라 짧은 실행에서 낮게 나온다
         dur = int(r["duration_s"]) if r.get("duration_s") else None
@@ -129,7 +134,7 @@ def judge(manifest, p95_limit, drain_limit, query=query_g2, container="ipo-postg
 
     w()
     w("## S0 (measure 회차 중앙값)")
-    valid = [x for x in s0_measure if not x[3].startswith("무효")]
+    valid = [x for x in s0_measure if x[2] != "무효" and not x[3].startswith("무효")]
     if len(s0_measure) != 3 or len(valid) != 3:
         w(f"판정하지 않음: measure 회차 {len(s0_measure)}개 중 유효 {len(valid)}개 (3개 모두 유효해야 한다)")
     else:

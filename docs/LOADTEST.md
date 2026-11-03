@@ -135,7 +135,7 @@ bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results
 | G1 합격 | 처리량 200건/초 이상, 평균 500ms 이하, 오류율 1% 미만 | 평균 500ms 이하, 오류율 1% 미만 |
 | G1 목표 | 처리량 400건/초 이상, 평균 250ms 이하, p95 500ms 이하, 오류 0 | 평균 250ms 이하, p95 500ms 이하, 오류 0 |
 | G2 합격 | 접수→확정 p95 15초 이하, 소진 시간 15초 이하 | 같음 |
-| 무효 | 측정 3회가 모두 유효하지 않으면 판정하지 않음 | 밀린 반복(`dropped_iterations`)이 있으면 무효 |
+| 무효 | 요청 수가 1,000건이 아닌 회차(2분 제한 안에 다 못 보냄)는 무효. 측정 3회가 모두 유효하지 않으면 판정하지 않음 | 밀린 반복(`dropped_iterations`)이 있으면 무효 |
 
 - S1은 한계 지점(평균 500ms 또는 오류율 1%가 처음 깨지는 단계)으로 보므로 처리량을 기준에 넣지 않고, 목표 속도 대비 실제 전달률을 따로 보여줍니다.
 - 소진 시간은 마지막 요청 접수 이후 마지막 확정까지(`MAX(confirmed_at) - MAX(received_at)`)입니다. 확정 수가 요청 수와 다르면(오류, 거절, 미처리가 섞이면) G2는 무효입니다.
@@ -224,7 +224,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | --- | --- |
 | `진행.log` | 진행 기록 (재시작 시각, 토큰 재발급 시점, 회차별 처리량, 소진 대기 시간) |
 | `env.txt` | 커밋, dirty 여부, 서비스별 jar sha256, OS, bash, Python, Docker, compose 버전, 설정값 전부 |
-| `manifest.csv` | 실행 목록 (run_id, 시나리오, 구간, 목표 속도, 공모주 ID, k6 시작·종료 시각, 소진 대기) |
+| `manifest.csv` | 실행 목록 (run_id, 시나리오, 구간, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
 | `s1-plan.txt` | S1 단계별 공모주 ID |
 | `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점) |
 
@@ -258,7 +258,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `REQUIRED_GROUPS` | `subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve` | `official.sh` (lag을 확인할 필수 Consumer 그룹) |
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
-| `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `verify.sh`, `precheck.sh` |
+| `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `verify.sh`, `precheck.sh`, `official.sh`(하위 스크립트와 `judge.py --container`에 같은 값을 넘긴다) |
 | `KAFKA_CONTAINER` | `ipo-kafka` | `precheck.sh` |
 | `EUREKA_URL` | `http://localhost:8761` | `precheck.sh` |
 | `K6_MODE` | `auto` | `run-k6.sh` (`auto`, `local`, `container`) |

@@ -127,17 +127,36 @@ REPO="$REPO_SAVE"
 
 # ---- manifest_runs (열을 추가하자 후처리가 위치로 읽어 공모주 자리에 유지 시간이 들어간 결함) ----
 M="$(mktemp)"
-printf 'run_id,scenario,phase,target_rate,duration_s,ipo_ids,k6_start,k6_end,drain_s\nb-S0-r1,S0,measure,,,%s,1,2,3\nb-S1-100,S1,measure,100,90,%s;%s,1,2,3\n' "$U1" "$U1" "$U2" > "$M"
-expect_out "manifest_runs: 열 이름으로 공모주를 읽는다" 0 "b-S0-r1 S0 $U1
-b-S1-100 S1 $U1;$U2" manifest_runs "$M"
+printf 'run_id,scenario,phase,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s\nb-S0-r1,S0,measure,,,1000,%s,1,2,3\nb-S1-100,S1,measure,100,90,9000,%s;%s,1,2,3\n' "$U1" "$U1" "$U2" > "$M"
+expect_out "manifest_runs: 열 이름으로 공모주, 예상 요청 수를 읽는다" 0 "b-S0-r1 S0 $U1 1000
+b-S1-100 S1 $U1;$U2 9000" manifest_runs "$M"
 printf 'ipo_ids,drain_s,run_id,scenario\n%s,3,b-S0-r1,S0\n' "$U1" > "$M"
-expect_out "manifest_runs: 열 순서가 바뀌어도 같다" 0 "b-S0-r1 S0 $U1" manifest_runs "$M"
+expect_out "manifest_runs: 열 순서가 바뀌어도 같고, 없는 열은 '-'" 0 "b-S0-r1 S0 $U1 -" manifest_runs "$M"
+printf 'run_id,scenario,expected_requests,ipo_ids\nb-S0-r1,S0,,%s\n' "$U1" > "$M"
+expect_out "manifest_runs: 빈 값은 '-'라서 다음 필드가 당겨지지 않는다" 0 "b-S0-r1 S0 $U1 -" manifest_runs "$M"
 printf 'run_id,scenario,phase\nb,S0,measure\n' > "$M"
 expect_out "manifest_runs: ipo_ids 열이 없으면 실패" 1 "" manifest_runs "$M"
 # official.sh가 쓰는 머리줄과 judge.py 테스트의 머리줄이 같은지 (두 곳이 어긋나면 판정이 열을 못 찾는다)
 H_SH="$(grep -o '"run_id,scenario[^"]*"' "$DIR/official.sh" | head -1 | tr -d '"')"
 H_PY="$(grep -o 'MANIFEST_HEADER = "run_id,scenario[^"\\]*' "$HERE/test_judge.py" | sed 's/^MANIFEST_HEADER = "//')"
 [ -n "$H_SH" ] && [ "$H_SH" = "$H_PY" ] && ok "manifest 머리줄: official.sh와 test_judge.py가 같다" || bad "manifest 머리줄" "sh='$H_SH' py='$H_PY'"
+
+# ---- post_process: 실제 함수를 가짜 명령으로 돌려 하위 명령에 넘어가는 인자를 본다 ----
+# (CodeRabbit 지적: judge.py에 --container를 넘기지 않아 PG_CONTAINER를 바꾸면 G2를 다른 DB에서 조회)
+PP="$(mktemp -d)"; CALLS="$PP/calls.log"; : > "$CALLS"
+DIR_SAVE="$DIR"; OUT_SAVE="${OUT:-}"; MANIFEST_SAVE="${MANIFEST:-}"; PG_SAVE="$PG_CONTAINER"
+DIR="$PP"; OUT="$PP/batch"; MANIFEST="$OUT/manifest.csv"; PG_CONTAINER=custom-pg; mkdir -p "$OUT" "$PP/results/b-S0-r1" "$PP/results/b-S1-100"
+printf 'run_id,scenario,phase,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s\nb-S0-r1,S0,measure,,,1000,%s,1,2,3\nb-S1-100,S1,measure,100,90,9000,%s;%s,1,2,3\n' "$U1" "$U1" "$U2" > "$MANIFEST"
+py()   { echo "py $*" >> "$CALLS"; return 0; }
+bash() { echo "bash $*" >> "$CALLS"; return 0; }
+( post_process ) 2>/dev/null; rc=$?
+unset -f py bash
+[ "$rc" = 0 ] && ok "post_process: 가짜 명령으로 끝까지 돈다" || bad "post_process rc" "$rc"
+grep -q -- "judge.py.*--container custom-pg" "$CALLS" && ok "post_process: judge.py에 --container를 넘긴다" || bad "post_process --container" "$(grep judge "$CALLS")"
+[ "$(grep -c "verify.sh --ipo" "$CALLS")" = 3 ] && ok "post_process: 공모주마다 정합성 SQL (1 + 2 = 3번)" || bad "post_process verify" "$(grep -c verify.sh "$CALLS")"
+grep "check_requests.py" "$CALLS" | grep "b-S0-r1" | grep -q -- "--expect-requests 1000" && ok "post_process: S0 요청 분류에 예상 요청 수를 넘긴다" || bad "post_process S0 expect" "$(grep check_requests "$CALLS")"
+grep "check_requests.py" "$CALLS" | grep "b-S1-100" | grep -q -- "--expect-requests" && bad "post_process S1 expect" "S1에도 넘김" || ok "post_process: S1 요청 분류에는 예상 요청 수를 넘기지 않는다"
+DIR="$DIR_SAVE"; OUT="$OUT_SAVE"; MANIFEST="$MANIFEST_SAVE"; PG_CONTAINER="$PG_SAVE"
 
 echo; echo "통과 $PASS, 실패 $FAIL"
 [ "$FAIL" -eq 0 ]

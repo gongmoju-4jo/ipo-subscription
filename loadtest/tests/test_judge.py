@@ -17,7 +17,7 @@ spec.loader.exec_module(judge)
 
 U = ["6f1c3b0e-1111-4a2b-8c3d-%012d" % i for i in range(1, 20)]
 # official.sh가 쓰는 manifest.csv 머리줄과 같아야 한다
-MANIFEST_HEADER = "run_id,scenario,phase,target_rate,duration_s,ipo_ids,k6_start,k6_end,drain_s\n"
+MANIFEST_HEADER = "run_id,scenario,phase,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s\n"
 
 
 def summary(requests=1000, rate=500.0, avg=80.0, p95=130.0, fail=0.0, dropped=None):
@@ -37,11 +37,13 @@ class Case:
         self.rows = []
         self.g2 = {}
 
-    def run(self, run_id, scenario, phase, target, ipos, s, d, dur=""):
+    def run(self, run_id, scenario, phase, target, ipos, s, d, dur="", expected=None):
         os.makedirs(os.path.join(self.tmp, run_id))
         with open(os.path.join(self.tmp, run_id, "summary.json"), "w", encoding="utf-8") as f:
             json.dump(s, f)
-        self.rows.append(f"{run_id},{scenario},{phase},{target},{dur},{';'.join(ipos)},0,0,1")
+        if expected is None:  # official.sh처럼 S0은 1,000건, S1은 목표 속도 x 유지 시간
+            expected = 1000 if scenario == "S0" else (int(target) * int(dur) if target and dur else "")
+        self.rows.append(f"{run_id},{scenario},{phase},{target},{dur},{expected},{';'.join(ipos)},0,0,1")
         self.g2[tuple(ipos)] = d
 
     def manifest(self):
@@ -120,6 +122,23 @@ class TestG2(unittest.TestCase):
         out = section(s0_case(g2s=[g2(), g2(confirmed=999), g2()]).judge(), "S0")
         self.assertIn("판정하지 않음", out)
         self.assertIn("유효 2개", out)
+
+    def test_s0_incomplete_run_is_invalid(self):  # 2분 안에 1,000건을 다 못 보낸 회차 (확정 수 = 요청 수라 G2만 보면 유효로 보인다)
+        c = Case()
+        for i in range(3):
+            n = 950 if i == 1 else 1000
+            c.run(f"r{i + 1}", "S0", "measure", "", [U[i]], summary(requests=n), g2(confirmed=n))
+        out = c.judge()
+        line = [x for x in out.splitlines() if x.startswith("| r2 ")][0]
+        self.assertIn("무효(요청 950 / 예상 1000)", line)
+        self.assertIn("| 무효 | 무효 |", line)
+        s0 = section(out, "S0")
+        self.assertIn("판정하지 않음", s0)
+        self.assertIn("유효 2개", s0)
+
+    def test_s0_complete_runs_judged(self):
+        out = section(s0_case().judge(), "S0")
+        self.assertIn("G1:", out)
 
     def test_no_confirmed(self):
         c = s0_case(g2s=[g2(), None, g2()])

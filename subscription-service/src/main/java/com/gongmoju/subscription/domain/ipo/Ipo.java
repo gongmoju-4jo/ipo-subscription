@@ -147,4 +147,14 @@ public class Ipo extends BaseEntity {
                     List.of(new ApiErrorDetail("ipoId", "마감된 공모주가 아닙니다.")));
         }
     }
+
+    /**
+     * 배정을 완료한다 (CLOSED → ALLOCATED, 이벤트 명세 {@code allocation.finished}). 개별 청약의 정산, 환불 완료까지 뜻하지는 않는다.
+     *
+     * @throws BusinessException CLOSED가 아니면 INVALID_STATUS_TRANSITION(409)
+     */
+    public void finishAllocation() {
+        validateClosed();
+        status = IpoStatus.ALLOCATED;
+    }
 }

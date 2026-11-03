@@ -230,7 +230,6 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 | 실행별 파일 | 내용 |
 | --- | --- |
-
 | `summary.json` | k6 요약 (처리량, 평균, p90, p95, p99, 오류율, 임계값 판정) |
 | `requests.log` | 요청마다 requestId, subscriptionId, 상태 코드, stage |
 | `precheck.txt` | 사전 점검 결과 (DLT 메시지 수 포함) |

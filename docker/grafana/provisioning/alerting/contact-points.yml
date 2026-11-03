@@ -13,10 +13,14 @@ contactPoints:
           title: '[${ALERT_ENV}] {{ if eq .Status "firing" }}🚨 장애 발생{{ else }}✅ 복구{{ end }} {{ .CommonLabels.alertname }}'
           # 장애는 내용과 시작 시각, 복구는 어떤 장애가 복구됐는지와 복구 시각을 보여 준다
           # (복구 알림의 StartsAt은 장애 시작이 아니라 정상으로 돌아온 시점이라 쓰지 않는다)
+          # job 라벨이 없으면 Prometheus 조회 실패(DatasourceError 등)라 서비스 대신 규칙 이름과 오류 내용을 보여 준다
           text: |-
-            {{ range .Alerts }}• 서비스: {{ .Labels.job }}
-            {{ if eq .Status "firing" }}• 내용: {{ .Annotations.summary }}
-            • 시작: {{ .StartsAt.Local.Format "2006-01-02 15:04:05" }} (KST)
-            {{ else }}• 복구된 장애: {{ .Annotations.summary }}
-            • 복구: {{ .EndsAt.Local.Format "2006-01-02 15:04:05" }} (KST)
+            {{ range .Alerts }}{{ if .Labels.job }}• 서비스: {{ .Labels.job }}
+            {{ else }}• 규칙: {{ or .Labels.rulename .Labels.alertname }} (지표 조회 실패, Prometheus 확인 필요)
+            {{ end }}{{ if eq .Status "firing" }}{{ if .Labels.job }}• 내용: {{ .Annotations.summary }}
+            {{ else }}• 오류: {{ or .Annotations.Error "조회 결과 없음" }}
+            {{ end }}• 시작: {{ .StartsAt.Local.Format "2006-01-02 15:04:05" }} (KST)
+            {{ else }}{{ if .Labels.job }}• 복구된 장애: {{ .Annotations.summary }}
+            {{ else }}• 복구된 장애: 지표 조회 실패
+            {{ end }}• 복구: {{ .EndsAt.Local.Format "2006-01-02 15:04:05" }} (KST)
             {{ end }}{{ end }}

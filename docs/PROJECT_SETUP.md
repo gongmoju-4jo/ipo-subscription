@@ -185,6 +185,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 - DB 커넥션 대기, 힙 기준값은 정식 부하 측정(S1 600건/초)에서 울리지 않는 값이다 (대기가 이어진 최장 시간 약 25초, 힙 최대 76%)
 - 설정 파일은 `docker/grafana/provisioning/alerting/`: `rules.yml`(규칙), `contact-points.yml`(Slack 연락처, 메시지 형식), `policies.yml`(묶어 보내기, 반복 주기)
   - 파일로 넣은 규칙은 Grafana 화면에서 수정할 수 없다. 파일을 고친 뒤 `docker-compose restart grafana`
+  - 연락처, 정책(메시지 형식 포함)은 재시작 후 약 1분 뒤에 적용된다. 그 사이에 나가는 알림은 이전 설정을 쓴다
 - 처음 발생하면 30초 동안 같은 묶음을 모아 보내고, 묶음에 바뀐 것(새 알림, 복구)은 1분 간격으로 보낸다. 복구되지 않으면 1시간마다 다시 보낸다
 - 장애 메시지에는 서비스, 내용, 시작 시각이, 복구 메시지에는 서비스, 복구된 장애, 복구 시각이 나온다. 제목 앞에 환경 이름이 붙는다 (예: `[local] 🚨 장애 발생 ServiceDown`)
 
@@ -642,6 +643,7 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
   - `Failed to provision alerting`이 있으면 `docker/grafana/provisioning/alerting/`의 파일 형식 오류. 로그의 파일 이름과 내용을 확인한다
   - 알림은 조건이 지속 시간(1~5분) 동안 이어지고 30초를 더 기다린 뒤에 나간다. 바로 오지 않는 것은 정상
   - Grafana → Alerting → Alert rules에서 규칙 상태(Normal, Pending, Firing)와 오류를 확인한다
+  - ⚠️ Slack 전송이 실패하면 Grafana 오류 로그에 Webhook URL이 그대로 찍힐 수 있다. 로그를 이슈, PR, 메신저에 붙일 때는 `hooks.slack.com/services/...` 부분을 지운다
 
 - **Docker에서 서비스가 `unhealthy`이거나 `starting`에서 안 넘어감**
   - `docker-compose logs {서비스 이름}`에서 `APPLICATION FAILED`나 `ERROR`를 확인한다

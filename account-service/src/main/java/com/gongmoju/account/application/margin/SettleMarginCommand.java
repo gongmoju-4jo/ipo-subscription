@@ -16,6 +16,7 @@ public record SettleMarginCommand(
         UUID eventId,
         UUID subscriptionId,
         UUID accountId,
+        UUID ipoId,
         long allocatedAmount
 ) {
 }

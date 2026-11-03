@@ -40,12 +40,14 @@ class MarginSettleServiceTest {
 
     private UUID userId;
     private UUID accountId;
+    private UUID ipoId;
 
     // 예수금 20,000원으로 시작해서 15,000원을 인출해 둔다 (예수금 5,000 / 청약증거금 15,000)
     @BeforeEach
     void setUp() {
         userId = UUID.randomUUID();
         accountId = insertAccount(userId, "100000000001");
+        ipoId = UUID.randomUUID();
     }
 
     @AfterEach
@@ -225,6 +227,41 @@ class MarginSettleServiceTest {
         assertPendingUntouched(subscriptionId);
     }
 
+    @Test
+    void 공모주가_다르면_예외로_롤백한다() {
+        UUID subscriptionId = reserve(15_000);
+        SettleMarginCommand command = new SettleMarginCommand(
+                UUID.randomUUID(), subscriptionId, accountId, UUID.randomUUID(), 6_000);
+
+        assertThatThrownBy(() -> marginSettleService.settle(command))
+                .isInstanceOf(InvalidEventException.class);
+
+        assertPendingUntouched(subscriptionId);
+    }
+
+    @Test
+    void 배정_대금이_음수면_예외로_롤백한다() {
+        UUID subscriptionId = reserve(15_000);
+
+        assertThatThrownBy(() -> marginSettleService.settle(command(subscriptionId, accountId, -1)))
+                .isInstanceOf(InvalidEventException.class);
+
+        assertPendingUntouched(subscriptionId);
+    }
+
+    @Test
+    void 계좌_청약증거금이_증거금보다_적으면_재시도_없이_예외로_롤백한다() {
+        UUID subscriptionId = reserve(15_000);
+        jdbcTemplate.update("UPDATE account SET margin_balance = 10000 WHERE account_id = ?", accountId);
+
+        assertThatThrownBy(() -> marginSettleService.settle(command(subscriptionId, accountId, 6_000)))
+                .isInstanceOf(InvalidEventException.class);
+
+        assertBalance(5_000, 10_000);
+        assertThat(margin(subscriptionId).get("status")).isEqualTo("PENDING");
+        assertRolledBack();
+    }
+
     // 인출 상태 그대로 (예수금 5,000 / 청약증거금 15,000, PENDING) 정산 쪽 기록이 없어야 한다
     private void assertPendingUntouched(UUID subscriptionId) {
         assertBalance(5_000, 15_000);
@@ -243,12 +280,12 @@ class MarginSettleServiceTest {
     private UUID reserve(long amount) {
         UUID subscriptionId = UUID.randomUUID();
         marginReserveService.reserve(new ReserveMarginCommand(
-                UUID.randomUUID(), subscriptionId, userId, accountId, UUID.randomUUID(), amount));
+                UUID.randomUUID(), subscriptionId, userId, accountId, ipoId, amount));
         return subscriptionId;
     }
 
     private SettleMarginCommand command(UUID subscriptionId, UUID accountId, long allocatedAmount) {
-        return new SettleMarginCommand(UUID.randomUUID(), subscriptionId, accountId, allocatedAmount);
+        return new SettleMarginCommand(UUID.randomUUID(), subscriptionId, accountId, ipoId, allocatedAmount);
     }
 
     private UUID insertAccount(UUID ownerId, String accountNumber) {

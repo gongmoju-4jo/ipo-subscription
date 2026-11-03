@@ -16,6 +16,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Objects;
+
 /**
  * 배정 결과(allocation.result)에 따라 청약증거금을 정산하고 잔여 금액을 환불한다.
  * <p>
@@ -53,12 +55,18 @@ public class MarginSettleService {
         Account account = accountRepository.findByIdForUpdate(command.accountId())
                 .orElseThrow(() -> invalid(command, "계좌가 없습니다."));
 
-        // 3. margin 확인: 없음, 계좌 불일치, 증거금보다 큰 배정 대금은 돈을 옮기지 않고 DLT
+        // 3. margin 확인: 없음, 계좌, 공모주 불일치, 음수나 증거금보다 큰 배정 대금은 돈을 옮기지 않고 DLT
         Margin margin = marginRepository.findBySubscriptionId(command.subscriptionId())
                 .orElseThrow(() -> invalid(command, "증거금이 없습니다."));
 
         if (!margin.getAccount().getId().equals(command.accountId())) {
             throw invalid(command, "증거금 계좌와 요청 계좌가 다릅니다. margin accountId=" + margin.getAccount().getId());
+        }
+        if (!margin.getIpoId().equals(command.ipoId())) {
+            throw invalid(command, "증거금 공모주와 요청 공모주가 다릅니다. margin ipoId=" + margin.getIpoId());
+        }
+        if (command.allocatedAmount() < 0) {
+            throw invalid(command, "배정 대금이 음수입니다.");
         }
         if (command.allocatedAmount() > margin.getAmount()) {
             throw invalid(command, "배정 대금이 증거금보다 큽니다. amount=" + margin.getAmount());
@@ -67,6 +75,10 @@ public class MarginSettleService {
         // 4. margin 상태로 분기
         switch (margin.getStatus()) {
             case PENDING -> {
+                // 4-0. 계좌 청약증거금이 이 margin보다 적으면 잔고와 margin이 어긋난 것이라 재시도해도 같으므로 DLT
+                if (account.getMarginBalance() < margin.getAmount()) {
+                    throw invalid(command, "계좌 청약증거금이 증거금보다 적습니다. marginBalance=" + account.getMarginBalance());
+                }
                 if (command.allocatedAmount() == 0) {
                     voidZero(command, account, margin);
                 } else {
@@ -75,7 +87,7 @@ public class MarginSettleService {
             }
             case POSTED -> {
                 // 4-3. 이미 정산됨: 같은 배정 대금이면 돈은 안 옮기고 처음 응답을 다시 보낸다
-                if (margin.getPostedAmount() != command.allocatedAmount()) {
+                if (!Objects.equals(margin.getPostedAmount(), command.allocatedAmount())) {
                     throw invalid(command, "이미 다른 배정 대금으로 정산됐습니다. postedAmount=" + margin.getPostedAmount());
                 }
                 log.info("[증거금 정산] 재요청, margin.settled 재발행. eventId={}, subscriptionId={}, marginId={}, postedAmount={}",
@@ -91,6 +103,8 @@ public class MarginSettleService {
                         command.eventId(), command.subscriptionId(), margin.getId());
                 marginEventPublisher.publishSettled(settled(margin, 0));
             }
+            // 상태가 추가됐는데 분기가 없으면 응답 없이 처리 기록만 남으므로 막는다
+            default -> throw invalid(command, "처리할 수 없는 증거금 상태입니다. status=" + margin.getStatus());
         }
     }
 
@@ -139,8 +153,8 @@ public class MarginSettleService {
 
     // 값이 잘못된 요청: 예외로 롤백(processed_event도 남지 않음), 재시도 없이 DLT
     private InvalidEventException invalid(SettleMarginCommand command, String reason) {
-        log.error("[증거금 정산] DLT 대상. {} eventId={}, subscriptionId={}, accountId={}, allocatedAmount={}",
-                reason, command.eventId(), command.subscriptionId(), command.accountId(), command.allocatedAmount());
+        log.error("[증거금 정산] DLT 대상. {} eventId={}, subscriptionId={}, accountId={}, ipoId={}, allocatedAmount={}",
+                reason, command.eventId(), command.subscriptionId(), command.accountId(), command.ipoId(), command.allocatedAmount());
         return new InvalidEventException(reason + " subscriptionId=" + command.subscriptionId());
     }
 }

@@ -4,8 +4,9 @@
 k6 요약(summary.json), 요청 로그(requests.log), 같은 시간대의 Prometheus 지표를 합쳐서 results/<run_id>/report.md로 쓴다.
 수치를 손으로 옮기다 틀리는 것을 막고, 모든 수치의 원본을 같은 폴더에 남긴다 (Prometheus 질의와 응답은 prometheus.json).
 
-사용: python report.py --run-id <run_id> [--prometheus http://localhost:9090] [--pad 10]
-  --prometheus  기본값은 환경변수 PROMETHEUS_URL 또는 http://localhost:9090 (컨테이너에서 실행하면 http://prometheus:9090)
+사용: python report.py --run-id <run_id> [--prometheus http://127.0.0.1:9090] [--pad 10]
+  --prometheus  기본값은 환경변수 PROMETHEUS_URL 또는 http://127.0.0.1:9090 (컨테이너에서 실행하면 http://prometheus:9090)
+                localhost가 아니라 127.0.0.1인 이유: Windows에서 localhost는 IPv6(::1)를 먼저 시도해 연결마다 약 2초가 더 걸린다
   --pad         측정 구간 앞뒤로 더하는 초 (Prometheus 수집 간격이 5초라 구간이 짧으면 샘플이 모자란다)
 서버 지표의 구간은 요청 로그의 첫 요청과 마지막 요청 시각에 앞뒤 pad초를 더한 값이다.
 """
@@ -124,7 +125,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--results-dir", default=os.path.join(HERE, "results"))
-    ap.add_argument("--prometheus", default=os.environ.get("PROMETHEUS_URL", "http://localhost:9090"))
+    ap.add_argument("--prometheus", default=os.environ.get("PROMETHEUS_URL", "http://127.0.0.1:9090"))
     ap.add_argument("--pad", type=int, default=10)
     ap.add_argument("--no-wait", action="store_true", help="마지막 수집을 기다리지 않는다")
     args = ap.parse_args()

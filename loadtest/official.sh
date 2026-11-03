@@ -32,6 +32,11 @@
 #   REQUIRED_GROUPS="subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve"
 #   SKIP_BUILD=1    빌드, 배포를 건너뛴다 (jar sha256 비교는 그대로 한다)
 #   ALLOW_DIRTY=1   커밋하지 않은 변경이 있어도 실행 (env.txt에 dirty로 남는다. 정식 결과에 쓰지 않는다)
+#   STATS_INTERVAL=5  docker stats 기록 간격(초). 0이면 기록하지 않는다. 조회 1번에 약 2~3초 걸려서 간격은 조회 시간을 포함한다
+#                   PostgreSQL, Kafka, k6를 포함한 모든 컨테이너의 CPU, 메모리를 docker-stats.raw에 남기고, 후처리에서
+#                   docker-stats.csv와 자원.md(실행마다 k6 구간의 컨테이너별 최대)로 바꾼다. 조회도 CPU를 쓰므로 개선 전후는 같은 값으로 비교한다
+# 쿼리 통계: 실행마다 소진 확인 뒤 pg_stat_statements(loadtest/sql/slow-queries.sql)를 results/<run_id>/slow-queries.txt에 남기고 비운다
+#   (그 실행의 요청과 소진까지의 Consumer 쿼리. 회차 사이 토큰 재발급이 끼면 그 로그인 쿼리도 다음 실행에 섞인다)
 #
 # 종료 코드: 0 정상 / 2 안정 판정 미도달 / 3 토큰 / 4 예수금 / 5 버전(dirty, jar 불일치) / 6 소진 대기 / 7 기동 / 8 k6 / 9 사전 점검
 #           / 10 부하는 끝났고 후처리 일부 실패 / 11 공모주 생성 / 12 잠금, 결과 폴더 / 13 도구 / 1 그 밖
@@ -63,9 +68,11 @@ S0_VUS=100; S0_ITERS=10    # S0 = 100명 x 10회 = 1,000건 (발제 조건, 바�
 P95_LIMIT="${P95_LIMIT:-15}"; DRAIN_LIMIT="${DRAIN_LIMIT:-15}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-2400}"
 REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
 TOKEN_MAX_S=$((55 * 60))   # 토큰 만료 1시간보다 5분 일찍 끊는다
+STATS_INTERVAL="${STATS_INTERVAL:-5}"
+K6_CPUS=2; K6_MEMORY=1g    # k6 컨테이너 상한 (모든 실행 같음. env.txt에 기록)
 
 BATCH=""; OUT=""; LOG=""; MANIFEST=""; PLAN=""; LOCK="$DIR/results/.official.lock"; LOCK_OWNED=""
-PY=""; COMPOSE=(); K6_NET=""; TOKEN_AT=0; TOKEN_N=0; S0_IPOS=(); S0_NEXT=0; LAST_AVG=""; USERS=0
+PY=""; COMPOSE=(); K6_NET=""; TOKEN_AT=0; TOKEN_N=0; S0_IPOS=(); S0_NEXT=0; LAST_AVG=""; USERS=0; STATS_PID=""; SLOWQ_FAILS=0
 
 # ---------- 공통 ----------
 say() { local line; line="$(date '+%F %T') $*"; printf '%s\n' "$line" >&2; [ -n "$LOG" ] && printf '%s\n' "$line" >> "$LOG"; return 0; }
@@ -174,12 +181,15 @@ kafka_lag() {
 parse_offsets() {
   awk -F: -v t="$1" '$1 == t && $3 ~ /^[0-9]+$/ { s += $3; c++ } END { if (c == 0) exit 1; print s }'
 }
+# DLT 토픽 전체를 한 번에 조회한다 (토픽 이름 정규식). 토픽마다 행이 있어야 하고, 하나라도 없으면 실패
 kafka_dlt_total() {
-  local topics t out n total=0
+  local topics t out n total=0 re
   topics="$(kafka_topics)" || return 1
+  re="($(printf '%s\n' "$topics" | sed 's/\./\\./g' | paste -sd '|' -))\\.DLT"
+  out="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --topic "$re" 2>&1)" || return 1
+  out="$(printf '%s\n' "$out" | tr -d '\r')"
   for t in $topics; do
-    out="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --topic "$t.DLT" 2>&1)" || return 1
-    n="$(printf '%s\n' "$out" | tr -d '\r' | parse_offsets "$t.DLT")" || return 1
+    n="$(printf '%s\n' "$out" | parse_offsets "$t.DLT")" || return 1
     total=$((total + n))
   done
   echo "$total"
@@ -259,18 +269,21 @@ ensure_token() {
   fi
 }
 
-new_ipo() { # 인자: 이름, 공모가. 공모주 ID 출력
-  local id
-  id="$(cd "$DIR" && bash seed/new_ipo.sh --name "$1" --price "$2" 2>>"$LOG" | tr -d '\r\n ')" || return 1
-  is_uuid "$id" || return 1
-  printf '%s' "$id"
+# 공모주 여러 개를 SQL 한 번으로 만든다 (이름은 <접두사>-1 ~ <접두사>-N). 정확히 N개의 UUID가 아니면 실패
+new_ipos() { # 인자: 이름 접두사, 개수, 공모가. 공모주 ID를 쉼표로 이어 출력
+  local out n id
+  out="$(cd "$DIR" && bash seed/new_ipo.sh --name "$1" --count "$2" --price "$3" 2>>"$LOG" | tr -d '\r ')" || return 1
+  n=0
+  while IFS= read -r id; do [ -z "$id" ] && continue; is_uuid "$id" || return 1; n=$((n + 1)); done <<< "$out"
+  [ "$n" -eq "$2" ] || return 1
+  printf '%s\n' "$out" | awk 'NF' | paste -sd ',' -
 }
 
 # k6 실행. 종료 코드 0(통과), 99(임계값 위반)만 정상으로 보고, summary.json에 요청이 있어야 한다
 k6_run() { # 인자: 시나리오, 첫 공모주, run_id, -e 인자들...
   local scen="$1" ipo="$2" run="$3" rc n; shift 3
   mkdir -p "$DIR/results/$run"
-  (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS=2 K6_MEMORY=1g K6_LABEL="$BATCH" K6_NETWORK="$K6_NET" \
+  (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_LABEL="$BATCH" K6_NAME="k6-$run" K6_NETWORK="$K6_NET" \
      bash run-k6.sh "$scen" --ipo "$ipo" --run-id "$run" "$@") > "$DIR/results/$run/k6-console.out" 2>&1
   rc=$?
   case "$rc" in 0|99) ;; *) say "$run k6 종료 코드 $rc (k6-console.out 확인)"; return "$rc" ;; esac
@@ -290,8 +303,68 @@ sys.exit(0 if len(a) >= 3 and m > 0 and all(abs(x - m) / m <= pct / 100 for x in
 PYEOF
 }
 
+# ---------- 자원 기록 (docker stats) ----------
+# 간격마다 모든 컨테이너를 한 번 조회해 "<epoch>\t<json>" 줄로 덧붙인다. 조회 실패는 "<epoch>\tERROR\t<메시지>"로 남기고 계속한다
+stats_loop() { # 인자: 출력 파일, 간격(초)
+  local f="$1" iv="$2" t0 out el
+  while :; do
+    t0="$(date +%s)"
+    if out="$(docker stats --no-stream --format '{{json .}}' 2>&1)"; then
+      printf '%s\n' "$out" | awk -v t="$t0" 'NF { sub(/\r$/, ""); print t "\t" $0 }' >> "$f"
+    else
+      printf '%s\tERROR\t%s\n' "$t0" "$(printf '%s' "$out" | head -1)" >> "$f"
+    fi
+    el=$(( $(date +%s) - t0 ))
+    [ "$el" -lt "$iv" ] && sleep $(( iv - el ))
+  done
+}
+
+stats_start() {
+  [ "$STATS_INTERVAL" -gt 0 ] || { say "docker stats 기록 안 함 (STATS_INTERVAL=0)"; return 0; }
+  stats_loop "$OUT/docker-stats.raw" "$STATS_INTERVAL" &
+  STATS_PID=$!
+  say "docker stats 기록 시작 (${STATS_INTERVAL}초 간격, docker-stats.raw)"
+}
+
+stats_stop() {
+  [ -n "$STATS_PID" ] || return 0
+  kill "$STATS_PID" 2>/dev/null; wait "$STATS_PID" 2>/dev/null
+  STATS_PID=""
+  say "docker stats 기록 종료 ($(grep -c . "$OUT/docker-stats.raw" 2>/dev/null || echo 0)줄)"
+}
+
+# 쿼리 통계 (pg_stat_statements, loadtest/sql/slow-queries.sql). compose.perf.yml이 미리 읽어 들이도록 설정한다
+slowq() { # 인자: 출력 파일, 1이면 통계를 비운다
+  if [ "${2:-0}" = 1 ]; then
+    docker exec -i "$PG_CONTAINER" psql -U postgres -d ipo -v ON_ERROR_STOP=1 -v reset=1 -f - < "$DIR/sql/slow-queries.sql" > "$1" 2>&1
+  else
+    docker exec -i "$PG_CONTAINER" psql -U postgres -d ipo -v ON_ERROR_STOP=1 -f - < "$DIR/sql/slow-queries.sql" > "$1" 2>&1
+  fi
+}
+
+# 실행 하나가 끝나고 소진까지 확인한 뒤: 이번 실행 동안의 쿼리 통계를 남기고 비운다 (요청이 없는 구간에서 부른다).
+# 실패해도 측정은 이어 가고, 후처리에서 실패로 센다 (종료 코드 10)
+slowq_run() { # 인자: run_id
+  if slowq "$DIR/results/$1/slow-queries.txt" && slowq "$DIR/results/$1/.slow-queries-reset.out" 1; then
+    rm -f "$DIR/results/$1/.slow-queries-reset.out"; return 0
+  fi
+  say "$1 쿼리 통계(pg_stat_statements) 조회 또는 초기화 실패 (results/$1/slow-queries.txt)"
+  SLOWQ_FAILS=$((SLOWQ_FAILS + 1)); return 0
+}
+
+# 컨테이너별 CPU, 메모리 상한과 JVM 옵션을 env.txt에 남긴다 ("자원 <이름> cpu=<코어> mem=<바이트> ..."). 0은 상한 없음
+record_limits() {
+  local c line
+  for c in $ALL_CONTAINERS; do
+    line="$(docker inspect -f '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' "$c" 2>/dev/null)" || { echo "자원 $c 조회 실패" >> "$OUT/env.txt"; continue; }
+    echo "자원 $c cpu=$(awk -v n="${line%% *}" 'BEGIN { printf "%g", n / 1e9 }') mem=${line##* } $(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null | grep -E '^(JAVA_TOOL_OPTIONS|KAFKA_HEAP_OPTS)=' | tr '\n' ' ')" >> "$OUT/env.txt"
+  done
+  echo "자원 k6 cpu=$K6_CPUS mem=$K6_MEMORY (실행마다 k6-<run_id> 컨테이너)" >> "$OUT/env.txt"
+}
+
 cleanup() {
   local ids
+  stats_stop
   ids="$(docker ps -q --filter "label=loadtest.batch=${BATCH:-none}" 2>/dev/null)"
   # shellcheck disable=SC2086  # 컨테이너 ID 목록을 나눠서 넘긴다
   [ -n "$ids" ] && docker stop $ids >/dev/null 2>&1 && say "남은 k6 컨테이너를 멈춤"
@@ -326,6 +399,7 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
     echo "설정 PG_CONTAINER=$PG_CONTAINER KAFKA_CONTAINER=$KAFKA_CONTAINER EUREKA_URL=$EUREKA_URL"
     echo "설정 P95_LIMIT=$P95_LIMIT DRAIN_LIMIT=$DRAIN_LIMIT DRAIN_TIMEOUT=$DRAIN_TIMEOUT SKIP_BUILD=${SKIP_BUILD:-0} ALLOW_DIRTY=${ALLOW_DIRTY:-0}"
     echo "설정 REQUIRED_GROUPS=$REQUIRED_GROUPS"
+    echo "설정 STATS_INTERVAL=$STATS_INTERVAL K6_CPUS=$K6_CPUS K6_MEMORY=$K6_MEMORY"
   } >> "$OUT/env.txt"
   return "$mismatch"
 }
@@ -342,6 +416,7 @@ run_s0() { # 인자: run_id, phase(warmup|measure)
   d="$(drain "$ipo" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
   echo "$run,S0,$phase,,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d" >> "$MANIFEST"
+  slowq_run "$run"
   LAST_AVG="$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg)" || die 1 "$run 평균 응답을 읽지 못함"
   rate="$(json_metric "$DIR/results/$run/summary.json" http_reqs rate)" || rate="?"
   say "$run ($phase) 처리량=${rate}건/초 avg=${LAST_AVG}ms 소진 대기=${d}초. ${GAP}초 대기 (요청 없음)"
@@ -367,6 +442,7 @@ run_s1() { # 인자: 속도, 반복 번호, 마지막 실행이면 1
   d="$(drain "$ipos" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
   echo "$run,S1,measure,$rep,$rate,$DUR,$((rate * DUR)),$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d" >> "$MANIFEST"
+  slowq_run "$run"
   say "$run 처리량=$(json_metric "$DIR/results/$run/summary.json" http_reqs rate 2>/dev/null)건/초 avg=$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg 2>/dev/null)ms 소진 대기=${d}초"
   if [ "$last" != 1 ]; then say "${GAP}초 대기 (요청 없음)"; sleep "$GAP"; fi
 }
@@ -384,7 +460,7 @@ manifest_runs() {
 
 # 부하가 모두 끝난 뒤: 보고서(report.py), 요청 분류(check_requests.py), 정합성 SQL(verify.sh), 판정(judge.py)
 post_process() {
-  local fails=0 run scen ipos expected i k expect runs
+  local fails=0 run scen ipos expected i k expect runs vargs
   runs="$(manifest_runs "$MANIFEST")" || { say "후처리: manifest.csv 형식 오류"; return 1; }
   while read -r run scen ipos expected; do
     [ -n "$run" ] && [ "$run" != - ] || continue
@@ -395,16 +471,25 @@ post_process() {
     # shellcheck disable=SC2086  # expect는 비어 있거나 옵션 2개
     py "$(pypath "$DIR/verify/check_requests.py")" "$(pypath "$DIR/results/$run/requests.log")" $expect > "$DIR/results/$run/check_requests.txt" 2>&1 \
       || { say "후처리: $run 요청 분류 이상 (check_requests.txt)"; fails=$((fails + 1)); }
-    k=0
-    for i in ${ipos//;/ }; do
-      k=$((k + 1))
-      (cd "$DIR" && bash verify.sh --ipo "$i" --run-id "$run/verify-$k") > /dev/null 2>&1 || { say "후처리: $run 정합성 SQL 실패 (공모주 $k)"; fails=$((fails + 1)); }
-    done
-    [ "$k" -gt 0 ] || { say "후처리: $run 공모주 ID 없음"; fails=$((fails + 1)); }
+    # 실행 하나의 공모주를 psql 한 번으로 검사한다 (results/<run>/verify-<번호>/sql_result.txt)
+    k=0; vargs=()
+    for i in ${ipos//;/ }; do k=$((k + 1)); vargs+=(--ipo "$i"); done
+    if [ "$k" -gt 0 ]; then
+      (cd "$DIR" && bash verify.sh "${vargs[@]}" --run-id "$run" --each-dir) > "$DIR/results/$run/verify.out" 2>&1 \
+        || { say "후처리: $run 정합성 SQL 실패 (verify.out)"; fails=$((fails + 1)); }
+    else
+      say "후처리: $run 공모주 ID 없음"; fails=$((fails + 1))
+    fi
   done <<< "$runs"
   py "$(pypath "$DIR/verify/judge.py")" "$(pypath "$MANIFEST")" --p95-limit "$P95_LIMIT" --drain-limit "$DRAIN_LIMIT" --container "$PG_CONTAINER" \
     > "$OUT/판정.md" 2> "$OUT/판정.err" \
     || { say "후처리: judge.py 실패 (판정.err)"; fails=$((fails + 1)); }
+  [ "$SLOWQ_FAILS" -eq 0 ] || { say "후처리: 쿼리 통계 조회 실패 ${SLOWQ_FAILS}번 (진행.log)"; fails=$((fails + SLOWQ_FAILS)); }
+  if [ "$STATS_INTERVAL" -gt 0 ]; then
+    py "$(pypath "$DIR/verify/docker_stats.py")" "$(pypath "$OUT/docker-stats.raw")" --manifest "$(pypath "$MANIFEST")" --env "$(pypath "$OUT/env.txt")" \
+      --csv "$(pypath "$OUT/docker-stats.csv")" --md "$(pypath "$OUT/자원.md")" 2> "$OUT/자원.err" \
+      || { say "후처리: docker stats 정리 실패 또는 빠진 구간 있음 (자원.err)"; fails=$((fails + 1)); }
+  fi
   return "$fails"
 }
 
@@ -414,7 +499,7 @@ main() {
     case "$1" in --batch) BATCH="${2:-}"; shift 2 ;; *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;; esac
   done
   case "$BATCH" in ''|*[!A-Za-z0-9._-]*) echo "사용: $0 --batch <이름> (영문, 숫자, . _ - 만)" >&2; exit 1 ;; esac
-  for v in WCAP STABLE_PCT GAP DUR S1_REPEAT S0_PRICE S1_PRICE QUANTITY PRE_VUS MAX_VUS DRAIN_TIMEOUT; do
+  for v in WCAP STABLE_PCT GAP DUR S1_REPEAT S0_PRICE S1_PRICE QUANTITY PRE_VUS MAX_VUS DRAIN_TIMEOUT STATS_INTERVAL; do
     is_uint "${!v}" || { echo "$v가 0 이상의 정수가 아님: ${!v}" >&2; exit 1; }
   done
   [ "$S1_REPEAT" -ge 1 ] || { echo "S1_REPEAT는 1 이상 (팀 규칙은 3)" >&2; exit 1; }
@@ -455,7 +540,9 @@ main() {
   K6_NET="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' ipo-api-gateway 2>/dev/null | awk '{print $1}')"
   [ -n "$K6_NET" ] || die 13 "게이트웨이 컨테이너의 네트워크를 찾지 못함"
   echo "k6_network=$K6_NET" >> "$OUT/env.txt"
+  record_limits
   say "버전 기록: $(head -1 "$OUT/env.txt")"
+  stats_start
 
   # 1. 토큰 (회원 수 확인 포함) → 예수금
   refresh_tokens || die 3 "토큰 재발급 실패"
@@ -481,23 +568,23 @@ main() {
   kafka_lag > /dev/null || die 9 "Consumer 그룹 조회 실패 또는 필수 그룹 없음 ($REQUIRED_GROUPS)"
   dlt0="$(kafka_dlt_total)" || die 9 "DLT 조회 실패"
   say "DLT 합계(시작)=$dlt0"
+  slowq "$OUT/slow-queries-before.txt" || die 9 "쿼리 통계(pg_stat_statements) 조회 실패. compose.perf.yml로 띄웠는지 확인 (slow-queries-before.txt)"
 
   # 3. 공모주 미리 생성 (부하 중에는 만들지 않는다)
-  for i in $(seq 1 $((WCAP + 3))); do
-    k="$(new_ipo "$BATCH-S0-$i" "$S0_PRICE")" || die 11 "S0 공모주 생성 실패"
-    S0_IPOS+=("$k")
-  done
+  l="$(new_ipos "$BATCH-S0" $((WCAP + 3)) "$S0_PRICE")" || die 11 "S0 공모주 생성 실패"
+  IFS=',' read -ra S0_IPOS <<< "$l"
   : > "$PLAN"
   for r in "${ST[@]}"; do
     n=$(( $(ceil_div $((r * DUR)) "$USERS") + 1 ))
     for rep in $(seq 1 "$S1_REPEAT"); do   # 반복마다 새 공모주 (회원은 앞 반복의 공모주에 이미 청약했다)
-      l=""
-      for i in $(seq 1 "$n"); do k="$(new_ipo "$BATCH-S1-$r-r$rep-$i" "$S1_PRICE")" || die 11 "S1 공모주 생성 실패"; l="$l,$k"; done
-      echo "$r $rep ${l#,}" >> "$PLAN"
+      l="$(new_ipos "$BATCH-S1-$r-r$rep" "$n" "$S1_PRICE")" || die 11 "S1 공모주 생성 실패"
+      echo "$r $rep $l" >> "$PLAN"
     done
   done
   say "공모주 생성: S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 $(wc -l < "$PLAN" | tr -d ' ')묶음(단계 ${#ST[@]}개 x ${S1_REPEAT}회, 묶음당 $(awk 'NR == 1 {print gsub(/,/, ",") + 1}' "$PLAN")~$(awk 'END {print gsub(/,/, ",") + 1}' "$PLAN")개, 공모가 $S1_PRICE)"
   echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s" > "$MANIFEST"
+  # 첫 실행의 쿼리 통계에 준비 단계(공모주 생성 등)가 섞이지 않게 비운다. 이후 실행마다 slowq_run이 남기고 비운다
+  slowq "$OUT/.slow-queries-reset.out" 1 || die 9 "쿼리 통계 초기화 실패 (.slow-queries-reset.out)"
 
   # 4. S0: 워밍업 → 안정 판정 → 측정 3회
   avgs=(); stable_at=0
@@ -511,6 +598,8 @@ main() {
 
   # 5. S1: 토큰을 새로 받고 쉰 뒤 속도 단계마다 독립 실행
   refresh_tokens || die 3 "S1 전 토큰 재발급 실패"
+  # 재발급(로그인) 쿼리가 S1 첫 실행의 쿼리 통계에 섞이지 않게 비운다
+  slowq "$OUT/.slow-queries-reset.out" 1 || { say "쿼리 통계 초기화 실패 (S1 전)"; SLOWQ_FAILS=$((SLOWQ_FAILS + 1)); }
   say "재발급 뒤 ${GAP}초 대기 (요청 없음)"; sleep "$GAP"
   # 단계마다 S1_REPEAT회를 연달아 실행한다 (단계를 섞으면 앞 단계의 영향이 섞인다). 팀 규칙: 같은 조건 최소 3회, 중앙값
   for i in $(seq 0 $((${#ST[@]} - 1))); do
@@ -520,6 +609,7 @@ main() {
     done
   done
   if dlt1="$(kafka_dlt_total)"; then say "DLT 합계(종료)=$dlt1 (증가 $((dlt1 - dlt0)))"; else say "DLT 합계(종료) 조회 실패"; fi
+  stats_stop
   say "== 부하 종료. 후처리 시작"
 
   # 6. 후처리와 판정

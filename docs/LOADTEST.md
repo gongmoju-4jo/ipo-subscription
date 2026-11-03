@@ -24,14 +24,15 @@
 | `compose.perf.yml` | 컨테이너별 CPU, 메모리 상한과 JVM 힙 고정, 슬로우 쿼리 설정 |
 | `loadtest/official.sh` | 정식 측정 전체 실행 (빌드, 배포, 버전 기록, S0, S1, 후처리, 판정). 4장 |
 | `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정 (`판정.md`) |
-| `loadtest/tests/` | `official.sh`, `judge.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
+| `loadtest/tests/` | `official.sh`, `judge.py`, `docker_stats.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 |
-| `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주) |
+| `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js` |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
-| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 10종 실행 |
+| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 10종 실행 (`--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
 | `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
 | `loadtest/stage_table.py` | S1 단계별 표 생성 (목표 속도, 실제 처리량, 지연, 실패율) |
 | `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
@@ -50,7 +51,7 @@
 | k6 | k6를 설치하고 실행 (`K6_MODE=local`) | `grafana/k6` 이미지로 실행 (`K6_MODE=container`) |
 | Gateway 주소 | `http://localhost:8080` | `http://api-gateway:8080` (호스트 포트를 거치지 않음) |
 | 회원 시드, 보고서 (Python) | Python 3이 설치돼 있으면 그대로 실행 | `python:3.12-slim` 컨테이너로 실행 |
-| Prometheus 주소 (보고서) | `http://localhost:9090` | `PROMETHEUS_URL=http://prometheus:9090` |
+| Prometheus 주소 (보고서) | `http://127.0.0.1:9090` | `PROMETHEUS_URL=http://prometheus:9090` |
 | 자원 상한 | 없음 (내 PC 자원을 그대로 씀) | `K6_CPUS`, `K6_MEMORY`로 k6 컨테이너 상한 설정 |
 
 - `K6_MODE`를 주지 않으면(`auto`) k6가 설치돼 있을 때 설치형, 없으면 컨테이너로 실행합니다.
@@ -109,19 +110,20 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한)를 마친 상태에서 실행합니다.
 
 ```bash
-bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 40분, 추정)
+bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 5분, 추정. 2026-11-03 측정은 87분이었고 그 뒤 후처리, 공모주 생성, DLT 조회를 줄였다)
 ```
 
 하는 일 (순서대로, 중간에 사람이 끼어들지 않습니다)
 
-1. 커밋하지 않은 변경이 있으면 실행을 거부합니다. 이 커밋으로 jar를 빌드해 배포하고(`./gradlew build -x test`, `compose up -d --build`), 컨테이너 안 jar와 빌드한 jar의 sha256이 같은지 확인해 `env.txt`에 남깁니다.
+1. 커밋하지 않은 변경이 있으면 실행을 거부합니다. 이 커밋으로 jar를 빌드해 배포하고(`./gradlew build -x test`, `compose up -d --build`), 컨테이너 안 jar와 빌드한 jar의 sha256이 같은지 확인해 `env.txt`에 남깁니다. 컨테이너별 CPU, 메모리 상한과 JVM 힙 옵션도 `env.txt`에 남기고(`자원 ...` 줄), 이때부터 부하가 끝날 때까지 `docker stats`를 `STATS_INTERVAL`초마다 기록합니다 (PostgreSQL, Kafka, k6 포함 모든 컨테이너).
 2. 토큰을 새로 받고(회원 수 확인), 예수금이 최대로 필요한 금액 이상인지 확인합니다.
 3. gateway, subscription, account를 재시작(콜드 상태)하고, healthy와 Eureka UP을 기다린 뒤 45초 쉬고 사전 점검(`precheck.sh`)을 합니다.
 4. 회차에 쓸 공모주를 모두 미리 만듭니다 (부하 중에는 만들지 않습니다).
 5. S0: 1,000건 회차를 워밍업 → 안정 판정(회차 평균 응답이 연속 3회차 각각 그 평균의 ±`STABLE_PCT`% 이내) → 측정 3회 순서로 실행합니다.
 6. S1: 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
-7. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다.
+7. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다. docker stats 기록은 `docker-stats.csv`와 `자원.md`(실행마다 k6 구간의 컨테이너별 CPU, 메모리 최대)로 정리합니다. 어떤 실행의 k6 구간에 샘플이 없으면 후처리 실패(종료 코드 10)로 셉니다.
 
+- 쿼리 통계: 첫 실행 직전에 `pg_stat_statements`를 비우고(`loadtest/sql/slow-queries.sql`), 실행마다 소진 확인 뒤 그 실행의 통계를 `slow-queries.txt`에 남기고 다시 비웁니다. 요청과 소진까지의 Consumer 쿼리가 들어가고, 실행 사이에 토큰 재발급이 끼면 그 로그인 쿼리도 다음 실행에 섞입니다. 조회가 실패해도 측정은 이어 가고 후처리 실패(종료 코드 10)로 셉니다. `compose.perf.yml`로 띄우지 않아 확장을 쓸 수 없으면 시작 전에 멈춥니다(종료 코드 9).
 - **모든 부하 실행(S0 회차, S1 단계) 뒤에 이번 공모주의 `PENDING`/`COMPENSATING` 0, 필수 Consumer 그룹 lag 0, outbox 미발행 0을 확인하고 `GAP`초 쉰 뒤 다음 실행을 합니다.** 앞 실행의 처리 대기가 다음 실행의 G2에 섞이지 않게 하는 것은 소진 확인이 맡습니다. `GAP`(기본 30초)은 보고서의 서버 지표 구간(요청 구간 앞뒤 10초, Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도입니다. JVM GC(G1은 쉬는 동안 스스로 돌지 않음)와 DB 체크포인트는 대기로 피할 수 없습니다. 개선 전후를 비교할 때는 같은 `GAP`을 씁니다.
 - psql, Kafka, git, 토큰 재발급, k6 조회가 실패하면 0으로 보지 않고 중단합니다. Consumer lag은 `LOG-END-OFFSET - CURRENT-OFFSET`으로 계산하고(커밋 오프셋이 `-`인데 메시지가 있으면 대기로 셉니다), 필수 그룹(`REQUIRED_GROUPS`)이 없으면 실패입니다.
 - 토큰이 다음 실행 중에 만료될 것 같으면 실행 사이(요청 없는 구간)에 재발급하고 `GAP`초 쉽니다. 재발급 시점은 `진행.log`에 남습니다.
@@ -143,7 +145,7 @@ bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results
 
 종료 코드: 0 정상, 2 안정 판정 미도달, 3 토큰, 4 예수금, 5 버전(dirty, jar 불일치), 6 소진 대기, 7 기동, 8 k6, 9 사전 점검, 10 부하는 끝났고 후처리 일부 실패, 11 공모주 생성, 12 잠금·결과 폴더, 13 도구 없음
 
-결과를 쓸 때 같이 적는 한계: k6와 서비스가 같은 PC, Prometheus 5초 수집, 토큰 재발급의 로그인 요청, S1은 공모가 `S1_PRICE`원 종목 (금액만 다르고 처리 경로는 같다고 보지만 확인하지 않았습니다)
+결과를 쓸 때 같이 적는 한계: k6와 서비스가 같은 PC, Prometheus 5초 수집, docker stats 5초 간격 순간값(조회 1번에 약 2~3초, 조회도 CPU를 씀), 토큰 재발급의 로그인 요청, S1은 공모가 `S1_PRICE`원 종목 (금액만 다르고 처리 경로는 같다고 보지만 확인하지 않았습니다)
 
 ## 5. 회차를 하나씩 실행
 
@@ -227,16 +229,21 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `manifest.csv` | 실행 목록 (run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
 | `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |
 | `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점) |
+| `docker-stats.raw` | docker stats 원본 (`<epoch초>	<JSON>` 한 줄씩, 조회 실패는 `ERROR` 줄) |
+| `docker-stats.csv` | 위 원본을 숫자로 바꾼 표 (컨테이너별 CPU %(100% = 1코어), 메모리 사용·상한 바이트, PIDs, 네트워크, 디스크) |
+| `slow-queries-before.txt` | 측정 시작 전 `pg_stat_statements` 누적 (비우기 전, 기록용) |
+| `자원.md`, `자원.err` | 실행마다 k6 구간의 컨테이너별 CPU 최대·평균, CPU 상한 대비, 메모리 최대. k6는 `k6-<run_id>` 컨테이너 |
 
 | 실행별 파일 | 내용 |
 | --- | --- |
 | `summary.json` | k6 요약 (처리량, 평균, p90, p95, p99, 오류율, 임계값 판정) |
 | `requests.log` | 요청마다 requestId, subscriptionId, 상태 코드, stage |
 | `precheck.txt` | 사전 점검 결과 (DLT 메시지 수 포함) |
-| `sql_result.txt` | 정합성 SQL 결과 (정식 측정은 공모주마다 `verify-{번호}/sql_result.txt`) |
+| `sql_result.txt` | 정합성 SQL 결과 (정식 측정은 공모주마다 `verify-{번호}/sql_result.txt`. 전체 계좌 기준인 2, 3번은 `verify-1`에만 결과가 있고 나머지는 "건너뜀"으로 남는다. 실행 결과 메시지는 `verify.out`) |
 | `check_requests.txt` | 요청 분류 결과 (정식 측정) |
 | `report.md` | 회차 보고서 (k6 요약, 결과 분류, 서비스별 서버 지표) |
 | `prometheus.json` | 보고서의 서버 지표 질의와 응답 원본 |
+| `slow-queries.txt` | 이 실행 동안의 쿼리 통계 (총 실행 시간, 평균 실행 시간 상위 10개. 정식 측정) |
 
 - 합격 기준은 처리량 200건/초 이상, 평균 500ms 이하, 오류율 1% 미만이고, 목표 기준은 400건/초 이상, 평균 250ms 이하, p95 500ms 이하, 오류 0입니다. 기본은 합격 기준이고 `-e THRESHOLD=goal`로 목표 기준을 씁니다. 기준은 측정 전에 정하고 측정 후에는 바꾸지 않습니다.
 - 기준을 어기면 종료 코드 99입니다. **`summary.json`의 `thresholds`는 `true`가 위반, `false`가 통과**입니다.
@@ -257,6 +264,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `P95_LIMIT`, `DRAIN_LIMIT` | `15`, `15` | `official.sh` → `judge.py` (G2 합격 기준 초) |
 | `DRAIN_TIMEOUT` | `2400` | `official.sh` (소진 대기 상한 초) |
 | `REQUIRED_GROUPS` | `subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve` | `official.sh` (lag을 확인할 필수 Consumer 그룹) |
+| `STATS_INTERVAL` | `5` | `official.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
 | `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `verify.sh`, `precheck.sh`, `official.sh`(하위 스크립트와 `judge.py --container`에 같은 값을 넘긴다) |
@@ -267,20 +275,22 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `K6_NETWORK` | `ipo-subscription_default` | `run-k6.sh` (컨테이너 실행, compose 네트워크 이름. `official.sh`는 게이트웨이 컨테이너의 네트워크를 읽어 넘긴다) |
 | `K6_CPUS`, `K6_MEMORY` | 없음 | `run-k6.sh` (컨테이너 실행, 예: `1.0`, `512m`. `official.sh`는 `2`, `1g`) |
 | `K6_LABEL` | 없음 | `run-k6.sh` (컨테이너 실행 시 `loadtest.batch` 라벨. `official.sh`가 중단될 때 자기가 띄운 k6만 멈추는 데 쓴다) |
+| `K6_NAME` | 없음 | `run-k6.sh` (컨테이너 실행 시 컨테이너 이름. `official.sh`는 `k6-<run_id>`로 줘서 docker stats에서 실행별 k6를 구분한다) |
 | `BASE_URL` | 로컬 `http://localhost:8080`, 컨테이너 `http://api-gateway:8080` | `run-k6.sh`, `seed_users.py` |
 | `LOADTEST_PASSWORD` | `loadtest1234` | `seed_users.py` (시드 회원의 비밀번호) |
-| `PROMETHEUS_URL` | `http://localhost:9090` | `report.py` (`--prometheus`로도 지정) |
+| `PROMETHEUS_URL` | `http://127.0.0.1:9090` | `report.py` (`--prometheus`로도 지정. Windows에서 `localhost`는 IPv6를 먼저 시도해 연결마다 약 2초가 더 걸려서 `127.0.0.1`을 쓴다) |
 
 ## 9. 스크립트 테스트
 
-`official.sh`나 `judge.py`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `judge.py`, `docker_stats.py`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 안정 판정). 조회 실패를 0으로 넘기지 않는지 확인
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자)
+python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 ```
 
-- `loadtest/tests/fixtures/consumer-groups.txt`는 `kafka-consumer-groups.sh --describe --all-groups`의 실제 출력입니다. Kafka 출력 형식이 바뀌면 새로 받아 바꿉니다.
+- `loadtest/tests/fixtures/consumer-groups.txt`는 `kafka-consumer-groups.sh --describe --all-groups`의 실제 출력, `docker-stats.raw`는 `docker stats --no-stream --format '{{json .}}'`의 실제 출력입니다. 출력 형식이 바뀌면 새로 받아 바꿉니다.
 - 테스트를 통과해도 실제 환경 경로(빌드, 재시작, k6, 후처리)는 확인되지 않습니다. 고친 뒤에는 4장의 시험 실행을 한 번 돌립니다.
 
 ## 10. 주의

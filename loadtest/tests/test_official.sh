@@ -113,6 +113,7 @@ refresh_tokens() { return 1; }
 TOKEN_AT=$(( $(date +%s) - 3100 ))
 ( ensure_token 300 ) 2>/dev/null; rc=$?
 [ "$rc" = 3 ] && ok "ensure_token: 재발급 실패 → 종료 코드 3" || bad "ensure_token 3" "rc=$rc"
+unset -f sleep   # 아래 docker stats 테스트는 진짜 sleep이 필요하다
 
 # ---- git (스모크에서 드러난 결함: -C 경로를 못 읽어 dirty가 0으로 통과) ----
 n="$(dirty_count)"; rc=$?
@@ -165,7 +166,89 @@ grep -q -- "judge.py.*--container custom-pg" "$CALLS" && ok "post_process: judge
 [ "$(grep -c "verify.sh --ipo" "$CALLS")" = 3 ] && ok "post_process: 공모주마다 정합성 SQL (1 + 2 = 3번)" || bad "post_process verify" "$(grep -c verify.sh "$CALLS")"
 grep "check_requests.py" "$CALLS" | grep "b-S0-r1" | grep -q -- "--expect-requests 1000" && ok "post_process: S0 요청 분류에 예상 요청 수를 넘긴다" || bad "post_process S0 expect" "$(grep check_requests "$CALLS")"
 grep "check_requests.py" "$CALLS" | grep "b-S1-100" | grep -q -- "--expect-requests" && bad "post_process S1 expect" "S1에도 넘김" || ok "post_process: S1 요청 분류에는 예상 요청 수를 넘기지 않는다"
+grep "docker_stats.py" "$CALLS" | grep -q -- "--manifest" && ok "post_process: STATS_INTERVAL>0이면 docker_stats.py로 자원 표를 만든다" || bad "post_process docker_stats" "$(grep docker_stats "$CALLS")"
+: > "$CALLS"; STATS_SAVE="$STATS_INTERVAL"; STATS_INTERVAL=0
+py()   { echo "py $*" >> "$CALLS"; return 0; }
+bash() { echo "bash $*" >> "$CALLS"; return 0; }
+( post_process ) 2>/dev/null
+unset -f py bash
+grep -q "docker_stats.py" "$CALLS" && bad "post_process STATS_INTERVAL=0" "docker_stats.py를 불렀다" || ok "post_process: STATS_INTERVAL=0이면 docker_stats.py를 부르지 않는다"
+py()   { [[ "$*" == *docker_stats.py* ]] && return 1; return 0; }
+bash() { return 0; }
+STATS_INTERVAL=5; ( post_process ) 2>/dev/null; rc=$?
+unset -f py bash
+[ "$rc" = 1 ] && ok "post_process: docker_stats.py 실패는 후처리 실패로 센다 (rc 1)" || bad "post_process docker_stats 실패" "rc=$rc"
+STATS_INTERVAL="$STATS_SAVE"
 DIR="$DIR_SAVE"; OUT="$OUT_SAVE"; MANIFEST="$MANIFEST_SAVE"; PG_CONTAINER="$PG_SAVE"
+
+# ---- docker stats 기록 (stats_loop, stats_start, stats_stop) ----
+ST="$(mktemp -d)"; OUT_SAVE="${OUT:-}"; OUT="$ST"
+docker() { [ "$1" = stats ] && printf '{"Name":"ipo-kafka","CPUPerc":"12.5%%"}\r\n{"Name":"k6-b-S1-100-r1","CPUPerc":"80%%"}\n'; }
+STATS_INTERVAL=1; stats_start 2>/dev/null; sleep 3; stats_stop 2>/dev/null
+n="$(grep -c . "$ST/docker-stats.raw" 2>/dev/null || echo 0)"
+[ "$n" -ge 4 ] && ok "stats: 1초 간격 3초 동안 샘플 2번 이상 (컨테이너 2개 x 2 이상 = $n줄)" || bad "stats 줄 수" "$n"
+awk -F'\t' '$1 !~ /^[0-9]+$/ || $2 !~ /^\{/ { bad = 1 } END { exit bad }' "$ST/docker-stats.raw" && ok "stats: 모든 줄이 '<epoch>\\t<json>' 형식" || bad "stats 형식" "$(head -2 "$ST/docker-stats.raw")"
+grep -q $'\r' "$ST/docker-stats.raw" && bad "stats CR" "CR이 남음" || ok "stats: docker 출력의 CR을 지운다 (Windows)"
+[ -z "$STATS_PID" ] && ok "stats_stop: 기록 프로세스를 멈추고 PID를 비운다" || bad "stats_stop PID" "$STATS_PID"
+m1="$(grep -c . "$ST/docker-stats.raw")"; sleep 2; m2="$(grep -c . "$ST/docker-stats.raw")"
+[ "$m1" = "$m2" ] && ok "stats_stop: 멈춘 뒤에는 더 쓰지 않는다" || bad "stats_stop 뒤 기록" "$m1 → $m2"
+: > "$ST/docker-stats.raw"
+docker() { echo "Cannot connect to the Docker daemon" >&2; return 1; }
+stats_start 2>/dev/null; sleep 2; stats_stop 2>/dev/null
+grep -q $'\tERROR\tCannot connect' "$ST/docker-stats.raw" && ok "stats: docker 조회 실패는 ERROR 줄로 남기고 계속한다" || bad "stats ERROR" "$(cat "$ST/docker-stats.raw")"
+rm -f "$ST/docker-stats.raw"; STATS_INTERVAL=0; stats_start 2>/dev/null
+[ -z "$STATS_PID" ] && [ ! -e "$ST/docker-stats.raw" ] && ok "stats: STATS_INTERVAL=0이면 기록하지 않는다" || bad "stats 0" "pid=$STATS_PID"
+STATS_INTERVAL=1; stats_start 2>/dev/null; P_ST="$STATS_PID"; cleanup 2>/dev/null
+kill -0 "$P_ST" 2>/dev/null && { bad "cleanup stats" "기록 프로세스가 살아 있음"; kill "$P_ST"; } || ok "cleanup: 중단될 때 docker stats 기록도 멈춘다"
+unset -f docker
+
+# ---- record_limits ----
+: > "$ST/env.txt"
+docker() {
+  case "$*" in
+    *NanoCpus*ipo-kafka) echo "1000000000 1073741824" ;;
+    *NanoCpus*ipo-postgres) return 1 ;;
+    *NanoCpus*) echo "500000000 536870912" ;;
+    *Config.Env*ipo-kafka) printf 'PATH=/x\nKAFKA_HEAP_OPTS=-Xms512m -Xmx512m\n' ;;
+    *Config.Env*) printf 'JAVA_TOOL_OPTIONS=-Xmx512m\n' ;;
+  esac
+}
+record_limits
+unset -f docker
+grep -q '^자원 ipo-kafka cpu=1 mem=1073741824 KAFKA_HEAP_OPTS=-Xms512m -Xmx512m' "$ST/env.txt" && ok "record_limits: CPU 코어, 메모리 바이트, 힙 옵션을 남긴다" || bad "record_limits kafka" "$(grep kafka "$ST/env.txt")"
+grep -q '^자원 ipo-eureka-server cpu=0.5 ' "$ST/env.txt" && ok "record_limits: 0.5코어" || bad "record_limits 0.5" "$(grep eureka "$ST/env.txt")"
+grep -q '^자원 ipo-postgres 조회 실패' "$ST/env.txt" && ok "record_limits: 조회 실패를 숨기지 않는다" || bad "record_limits 실패" "$(grep postgres "$ST/env.txt")"
+grep -q '^자원 k6 cpu=2 mem=1g' "$ST/env.txt" && ok "record_limits: k6 상한도 남긴다" || bad "record_limits k6" "$(grep k6 "$ST/env.txt")"
+
+# ---- k6_run: 실행마다 k6 컨테이너 이름 k6-<run_id> ----
+DIR_SAVE="$DIR"; DIR="$ST"; mkdir -p "$ST/results/b-S1-100-r1"
+( # 가짜 함수가 밖으로 새지 않게 서브셸에서
+  bash() { echo "K6_NAME=${K6_NAME:-} K6_CPUS=${K6_CPUS:-} K6_MEMORY=${K6_MEMORY:-}" > "$ST/k6env"; echo '{}' > "$ST/results/b-S1-100-r1/summary.json"; return 0; }
+  json_metric() { echo 5; }
+  k6_run s1 x b-S1-100-r1
+) 2>/dev/null
+grep -q '^K6_NAME=k6-b-S1-100-r1 K6_CPUS=2 K6_MEMORY=1g$' "$ST/k6env" && ok "k6_run: K6_NAME=k6-<run_id>, 상한 CPU 2, 메모리 1g를 넘긴다" || bad "k6_run 환경" "$(cat "$ST/k6env" 2>/dev/null)"
+DIR="$DIR_SAVE"; OUT="$OUT_SAVE"
+
+# ---- slowq_run: 실행마다 쿼리 통계를 남기고 비운다. 실패는 숨기지 않고 센다 ----
+DIR_SAVE="$DIR"; DIR="$ST"; mkdir -p "$ST/results/b-S0-r1" "$ST/sql"; echo "-- sql" > "$ST/sql/slow-queries.sql"; : > "$ST/calls"
+docker() { echo "docker $*" >> "$ST/calls"; cat > /dev/null; echo "== 총 실행 시간 상위 10개"; return 0; }
+SLOWQ_FAILS=0; slowq_run b-S0-r1
+grep -q '총 실행 시간' "$ST/results/b-S0-r1/slow-queries.txt" && ok "slowq_run: 통계를 slow-queries.txt에 남긴다" || bad "slowq_run 파일" "$(ls "$ST/results/b-S0-r1")"
+[ "$(grep -c 'psql' "$ST/calls")" = 2 ] && grep -q -- '-v reset=1' "$ST/calls" && ok "slowq_run: 조회한 뒤 reset=1로 비운다 (2번 호출)" || bad "slowq_run 호출" "$(cat "$ST/calls")"
+[ "$(sed -n 1p "$ST/calls" | grep -c reset)" = 0 ] && ok "slowq_run: 비우기 전에 먼저 조회한다" || bad "slowq_run 순서" "$(cat "$ST/calls")"
+[ ! -e "$ST/results/b-S0-r1/.slow-queries-reset.out" ] && [ "$SLOWQ_FAILS" = 0 ] && ok "slowq_run: 성공하면 실패 수 0, 임시 파일 정리" || bad "slowq_run 성공" "fails=$SLOWQ_FAILS"
+docker() { cat > /dev/null; echo 'ERROR:  relation "pg_stat_statements" does not exist'; return 3; }
+slowq_run b-S0-r1 2>/dev/null; rc=$?
+[ "$rc" = 0 ] && [ "$SLOWQ_FAILS" = 1 ] && ok "slowq_run: 실패하면 측정은 이어 가고(rc 0) 실패 수를 센다" || bad "slowq_run 실패" "rc=$rc fails=$SLOWQ_FAILS"
+unset -f docker
+DIR="$PP"; OUT="$PP/batch"; MANIFEST="$OUT/manifest.csv"; SLOWQ_FAILS=2
+py()   { return 0; }
+bash() { return 0; }
+( post_process ) 2>/dev/null; rc=$?
+unset -f py bash
+[ "$rc" = 2 ] && ok "post_process: 쿼리 통계 실패 수를 후처리 실패로 센다 (rc 2)" || bad "post_process SLOWQ" "rc=$rc"
+SLOWQ_FAILS=0; DIR="$DIR_SAVE"; OUT="$OUT_SAVE"; MANIFEST="$MANIFEST_SAVE"
 
 echo; echo "통과 $PASS, 실패 $FAIL"
 [ "$FAIL" -eq 0 ]

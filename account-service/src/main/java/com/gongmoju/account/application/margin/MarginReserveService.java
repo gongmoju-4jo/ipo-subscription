@@ -25,7 +25,7 @@ import java.util.Optional;
 /**
  * 증거금 인출 처리한다. (margin.reserve-requested)
  * <p>
- * 처리 기록 → 계좌 락 → 소유권 → 기존 margin → 선행 반환 기록 → 잔액 → 인출 → margin → 원장 → 응답 Outbox를 한 트랜잭션에서 처리한다
+ * 이벤트 처리 기록 → 계좌 락 → 소유권 → 기존 margin → void intent 기록 → 잔액 → 인출 → margin → 원장 → 응답 Outbox를 한 트랜잭션에서 처리한다
  */
 @Slf4j
 @Service
@@ -101,7 +101,6 @@ public class MarginReserveService {
         //   - 반환 요청(TIMEOUT 등)이 인출 요청보다 먼저 처리됐으면 청약은 이미 CANCELLED라서
         //     자금을 움직이지 않고 응답 이벤트 없이 로그만 남긴다. (E-17). 옮긴 돈이 없으니 예외 없이 처리 기록만 커밋한다
         //   - 잔액보다 먼저 봐야 이미 취소된 청약에 reserve-failed가 나가지 않는다. (E-19)
-        // TODO(반환 Consumer 이슈): margin_void_intent 삽입. 그 전까지는 기록이 생기지 않아 이 분기를 타지 않는다
         if (marginVoidIntentRepository.existsBySubscriptionId(command.subscriptionId())) {
             log.warn("[증거금 인출] 선행 반환 기록이 있어 인출 안 함, 응답 없음. eventId={}, subscriptionId={}, accountId={}",
                     command.eventId(), command.subscriptionId(), command.accountId());

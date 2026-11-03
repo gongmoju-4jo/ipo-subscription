@@ -29,7 +29,6 @@ import java.util.UUID;
  * <p>
  * 생성 후 수정하지 않으므로 BaseEntity를 상속하지 않는다.
  */
-// TODO(반환 Consumer 이슈): 삽입
 @Getter
 @Entity
 @Table(name = "margin_void_intent")
@@ -47,7 +46,7 @@ public class MarginVoidIntent {
     @JoinColumn(name = "account_id", nullable = false, updatable = false)
     private Account account;
 
-    // 처음 받은 반환 사유
+    // 최초 반환 요청의 사유
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 30)
     private MarginVoidReason reason;

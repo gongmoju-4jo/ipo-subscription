@@ -17,8 +17,13 @@
 #   - S1은 공모가 S1_PRICE원 종목 (예수금 때문에. 금액만 다르고 처리 경로는 같다고 보지만 확인하지 않았다)
 #
 # 환경변수 (모두 env.txt에 기록된다)
-#   WCAP=20         S0 워밍업 상한 회차 (넘으면 중단)
-#   STABLE_PCT=20   S0 안정 판정: 회차 평균 응답이 연속 3회차 각각 그 3회차 평균의 +-STABLE_PCT% 이내
+#   워밍업 (측정 앞의 독립 단계. 시간 기준으로 응답 시간 추세가 평평해질 때까지 일정한 부하를 건다. verify/warmup.py)
+#   WARM_RATE=200     워밍업 도착률(건/초). 확정 대기가 쌓이지 않는 속도로 두고, 모든 요청이 확정되게 공모주를 돌린다
+#   WARM_BUCKET=15    구간 길이(초). 구간마다 게이트웨이 평균 응답 시간을 Prometheus에서 읽는다
+#   WARM_WINDOW=8     추세를 볼 구간 수 (15초 x 8 = 최근 2분)
+#   WARM_SLOPE_PCT=5  기울기 허용 범위: 최근 창에 맞춘 직선의 기울기가 분당 창 평균의 +-5% 이내면 통과
+#   WARM_CONSEC=2     연속 통과 횟수 (한 번 우연히 평평하게 나온 것으로 끝내지 않는다)
+#   WARM_MIN=180 WARM_MAX=900  최소, 최대 시간(초). 최대까지 정상 상태에 닿지 않으면 중단 (종료 코드 2)
 #   GAP=30          실행 사이 대기(초). 앞 실행의 처리 대기는 소진 확인으로 없애고, 이 대기는 보고서의 서버 지표 구간
 #                   (요청 구간 앞뒤 10초 + Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도다. GC, DB 체크포인트는 대기로 피할 수 없다
 #                   개선 전후를 비교할 때는 같은 값을 쓴다
@@ -32,6 +37,9 @@
 #   REQUIRED_GROUPS="subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve"
 #   SKIP_BUILD=1    빌드, 배포를 건너뛴다 (jar sha256 비교는 그대로 한다)
 #   ALLOW_DIRTY=1   커밋하지 않은 변경이 있어도 실행 (env.txt에 dirty로 남는다. 정식 결과에 쓰지 않는다)
+#   RESTORE=1       시작할 때 기준 스냅샷으로 DB와 Kafka를 되돌린다 (baseline.sh restore). 측정마다 같은 DB 크기, 같은 데이터에서 시작한다.
+#                   0이면 되돌리지 않는다 (env.txt에 남고 정식 결과로 쓰지 않는다). 스냅샷은 baseline.sh save로 만든다
+#   DB_DUMP=1       후처리 뒤 측정이 끝난 DB를 db-after.dump로 남긴다 (원본 행 보관. 0이면 남기지 않는다)
 #   STATS_INTERVAL=5  docker stats 기록 간격(초). 0이면 기록하지 않는다. 조회 1번에 약 2~3초 걸려서 간격은 조회 시간을 포함한다
 #                   PostgreSQL, Kafka, k6를 포함한 모든 컨테이너의 CPU, 메모리를 docker-stats.raw에 남기고, 후처리에서
 #                   docker-stats.csv와 자원.md(실행마다 k6 구간의 컨테이너별 최대)로 바꾼다. 조회도 CPU를 쓰므로 개선 전후는 같은 값으로 비교한다
@@ -39,7 +47,7 @@
 #   (그 실행의 요청과 소진까지의 Consumer 쿼리. 회차 사이 토큰 재발급이 끼면 그 로그인 쿼리도 다음 실행에 섞인다)
 #
 # 종료 코드: 0 정상 / 2 안정 판정 미도달 / 3 토큰 / 4 예수금 / 5 버전(dirty, jar 불일치) / 6 소진 대기 / 7 기동 / 8 k6 / 9 사전 점검
-#           / 10 부하는 끝났고 후처리 일부 실패 / 11 공모주 생성 / 12 잠금, 결과 폴더 / 13 도구 / 1 그 밖
+#           / 10 부하는 끝났고 후처리 일부 실패(DB 덤프 포함) / 11 공모주 생성 / 12 잠금, 결과 폴더 / 13 도구 / 14 기준 상태 복원 / 1 그 밖
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 PYTHONUTF8=1
 
@@ -60,7 +68,8 @@ COLD_CONTAINERS="ipo-api-gateway ipo-subscription-service ipo-account-service"
 JAR_TARGETS="ipo-api-gateway:api-gateway ipo-account-service:account-service ipo-subscription-service:subscription-service ipo-allocation-service:allocation-service ipo-eureka-server:eureka-server"
 ALL_CONTAINERS="ipo-postgres ipo-kafka ipo-eureka-server ipo-api-gateway ipo-account-service ipo-subscription-service ipo-allocation-service"
 
-WCAP="${WCAP:-20}"; STABLE_PCT="${STABLE_PCT:-20}"; GAP="${GAP:-30}"
+WARM_RATE="${WARM_RATE:-200}"; WARM_BUCKET="${WARM_BUCKET:-15}"; WARM_WINDOW="${WARM_WINDOW:-8}"; WARM_SLOPE_PCT="${WARM_SLOPE_PCT:-5}"
+WARM_CONSEC="${WARM_CONSEC:-2}"; WARM_MIN="${WARM_MIN:-180}"; WARM_MAX="${WARM_MAX:-900}"; GAP="${GAP:-30}"
 STAGES="${STAGES:-100,200,300,433,600}"; DUR="${DUR:-90}"; S1_REPEAT="${S1_REPEAT:-3}"
 S0_PRICE="${S0_PRICE:-15000}"; S1_PRICE="${S1_PRICE:-1000}"; QUANTITY="${QUANTITY:-10}"
 PRE_VUS="${PRE_VUS:-500}"; MAX_VUS="${MAX_VUS:-2000}"
@@ -69,10 +78,11 @@ P95_LIMIT="${P95_LIMIT:-15}"; DRAIN_LIMIT="${DRAIN_LIMIT:-15}"; DRAIN_TIMEOUT="$
 REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
 TOKEN_MAX_S=$((55 * 60))   # 토큰 만료 1시간보다 5분 일찍 끊는다
 STATS_INTERVAL="${STATS_INTERVAL:-5}"
+RESTORE="${RESTORE:-1}"; DB_DUMP="${DB_DUMP:-1}"
 K6_CPUS=2; K6_MEMORY=1g    # k6 컨테이너 상한 (모든 실행 같음. env.txt에 기록)
 
 BATCH=""; OUT=""; LOG=""; MANIFEST=""; PLAN=""; LOCK="$DIR/results/.official.lock"; LOCK_OWNED=""
-PY=""; COMPOSE=(); K6_NET=""; TOKEN_AT=0; TOKEN_N=0; S0_IPOS=(); S0_NEXT=0; LAST_AVG=""; USERS=0; STATS_PID=""; SLOWQ_FAILS=0
+PY=""; COMPOSE=(); K6_NET=""; TOKEN_AT=0; TOKEN_N=0; S0_IPOS=(); S0_NEXT=0; WARM_IPOS=""; LAST_AVG=""; USERS=0; STATS_PID=""; SLOWQ_FAILS=0
 
 # ---------- 공통 ----------
 say() { local line; line="$(date '+%F %T') $*"; printf '%s\n' "$line" >&2; [ -n "$LOG" ] && printf '%s\n' "$line" >> "$LOG"; return 0; }
@@ -293,15 +303,6 @@ k6_run() { # 인자: 시나리오, 첫 공모주, run_id, -e 인자들...
   return 0
 }
 
-stable_check() { # 인자: 기준 %, 평균 응답 목록. 마지막 3개가 각각 그 평균의 +-기준% 이내면 0
-  py - "$@" <<'PYEOF'
-import sys
-pct = float(sys.argv[1]); a = [float(x) for x in sys.argv[2:]]
-w = a[-3:]
-m = sum(w) / 3 if len(w) == 3 else 0
-sys.exit(0 if len(a) >= 3 and m > 0 and all(abs(x - m) / m <= pct / 100 for x in w) else 1)
-PYEOF
-}
 
 # ---------- 자원 기록 (docker stats) ----------
 # 간격마다 모든 컨테이너를 한 번 조회해 "<epoch>\t<json>" 줄로 덧붙인다. 조회 실패는 "<epoch>\tERROR\t<메시지>"로 남기고 계속한다
@@ -395,16 +396,52 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
     else echo "jar $mod 로컬=$local_sha 컨테이너=${cont_sha:-조회 실패} (다름)" >> "$OUT/env.txt"; mismatch=$((mismatch + 1)); fi
   done
   {
-    echo "설정 WCAP=$WCAP STABLE_PCT=$STABLE_PCT GAP=$GAP STAGES=$STAGES DUR=$DUR S1_REPEAT=$S1_REPEAT S0_VUS=$S0_VUS S0_ITERS=$S0_ITERS S0_PRICE=$S0_PRICE S1_PRICE=$S1_PRICE QUANTITY=$QUANTITY PRE_VUS=$PRE_VUS MAX_VUS=$MAX_VUS"
+    echo "설정 WARM_RATE=$WARM_RATE WARM_BUCKET=$WARM_BUCKET WARM_WINDOW=$WARM_WINDOW WARM_SLOPE_PCT=$WARM_SLOPE_PCT WARM_CONSEC=$WARM_CONSEC WARM_MIN=$WARM_MIN WARM_MAX=$WARM_MAX"
+    echo "설정 GAP=$GAP STAGES=$STAGES DUR=$DUR S1_REPEAT=$S1_REPEAT S0_VUS=$S0_VUS S0_ITERS=$S0_ITERS S0_PRICE=$S0_PRICE S1_PRICE=$S1_PRICE QUANTITY=$QUANTITY PRE_VUS=$PRE_VUS MAX_VUS=$MAX_VUS"
     echo "설정 PG_CONTAINER=$PG_CONTAINER KAFKA_CONTAINER=$KAFKA_CONTAINER EUREKA_URL=$EUREKA_URL"
     echo "설정 P95_LIMIT=$P95_LIMIT DRAIN_LIMIT=$DRAIN_LIMIT DRAIN_TIMEOUT=$DRAIN_TIMEOUT SKIP_BUILD=${SKIP_BUILD:-0} ALLOW_DIRTY=${ALLOW_DIRTY:-0}"
     echo "설정 REQUIRED_GROUPS=$REQUIRED_GROUPS"
-    echo "설정 STATS_INTERVAL=$STATS_INTERVAL K6_CPUS=$K6_CPUS K6_MEMORY=$K6_MEMORY"
+    echo "설정 STATS_INTERVAL=$STATS_INTERVAL K6_CPUS=$K6_CPUS K6_MEMORY=$K6_MEMORY RESTORE=$RESTORE DB_DUMP=$DB_DUMP"
   } >> "$OUT/env.txt"
   return "$mismatch"
 }
 
 # ---------- 회차 ----------
+# 워밍업: 측정 앞의 독립 단계. WARM_RATE로 일정한 부하를 걸고(모든 요청이 확정되게 공모주를 돌림),
+# verify/warmup.py가 응답 시간 추세가 평평해졌다고 판정하면 k6를 멈춘다. 그 뒤 소진을 확인하고 쉰다
+run_warmup() {
+  local run="$BATCH-W" first t0 t1 d drc kpid wrc krc
+  first="${WARM_IPOS%%,*}"
+  ensure_token $((WARM_MAX + 300))
+  mkdir -p "$DIR/results/$run"
+  say "워밍업 시작: ${WARM_RATE}건/초 일정 부하, ${WARM_BUCKET}초 구간 ${WARM_WINDOW}개 창의 기울기가 분당 +-${WARM_SLOPE_PCT}% 이내 연속 ${WARM_CONSEC}번이면 끝 (최소 ${WARM_MIN}초, 최대 ${WARM_MAX}초)"
+  t0="$(date +%s)"
+  (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_LABEL="$BATCH" K6_NAME="k6-$run" K6_NETWORK="$K6_NET"      bash run-k6.sh s1 --ipo "$first" --run-id "$run" -e "IPO_IDS=$WARM_IPOS" -e "RATE=$WARM_RATE" -e "DURATION=$((WARM_MAX + 60))s"        -e "PRE_VUS=$PRE_VUS" -e "MAX_VUS=$MAX_VUS" -e "QUANTITY=$QUANTITY") > "$DIR/results/$run/k6-console.out" 2>&1 &
+  kpid=$!
+  # k6가 인자 오류 등으로 바로 끝났으면 기다리지 않고 멈춘다
+  sleep 12
+  kill -0 "$kpid" 2>/dev/null || { wait "$kpid"; die 8 "$run k6가 시작하자마자 끝남 (종료 코드 $?, results/$run/k6-console.out)"; }
+  # 가상 사용자 준비(약 8초)가 끝난 뒤부터 구간을 센다
+  py "$(pypath "$DIR/verify/warmup.py")" --since $((t0 + 10)) --csv "$(pypath "$OUT/warmup.csv")" --prometheus "${PROMETHEUS_URL:-http://127.0.0.1:9090}"     --bucket "$WARM_BUCKET" --window "$WARM_WINDOW" --slope-pct "$WARM_SLOPE_PCT" --consecutive "$WARM_CONSEC" --min "$WARM_MIN" --max "$WARM_MAX"     >> "$LOG" 2>&1; wrc=$?
+  docker stop -t 30 "k6-$run" > /dev/null 2>&1
+  wait "$kpid"; krc=$?
+  t1="$(date +%s)"
+  case "$wrc" in
+    0) ;;
+    2) die 2 "워밍업 ${WARM_MAX}초 안에 정상 상태에 닿지 않음 (warmup.csv)" ;;
+    *) die 2 "워밍업 판정 실패 (warmup.py 종료 코드 $wrc, 진행.log, warmup.csv)" ;;
+  esac
+  # 멈춘 k6는 종료 코드 105(terminated)로 끝나고 summary.json은 남는다. 그 밖의 종료 코드는 실패
+  case "$krc" in 0|99|105) ;; *) die 8 "$run k6 종료 코드 $krc (results/$run/k6-console.out)" ;; esac
+  [ -f "$DIR/results/$run/summary.json" ] || die 8 "$run summary.json 없음"
+  d="$(drain "$WARM_IPOS" "$DRAIN_TIMEOUT")"; drc=$?
+  [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
+  echo "$run,W,warmup,,$WARM_RATE,$((t1 - t0)),,$(printf '%s' "$WARM_IPOS" | tr ',' ';'),$t0,$t1,$d" >> "$MANIFEST"
+  slowq_run "$run"
+  say "워밍업 끝: $((t1 - t0))초, 요청 $(json_metric "$DIR/results/$run/summary.json" http_reqs count 2>/dev/null)건, $(tail -1 "$OUT/warmup.csv" | cut -d, -f4)ms (warmup.csv). 소진 대기=${d}초. ${GAP}초 대기 (요청 없음)"
+  sleep "$GAP"
+}
+
 run_s0() { # 인자: run_id, phase(warmup|measure)
   local run="$1" phase="$2" ipo t0 t1 d drc rate
   ensure_token 300
@@ -494,15 +531,17 @@ post_process() {
 }
 
 main() {
-  local dirty need minbal accounts s1_cost r n k l ids dlt0 dlt1 avgs stable_at i rep last
+  local dirty need minbal accounts s1_cost warm_cost r n k l ids dlt0 dlt1 i rep last pp
   while [ $# -gt 0 ]; do
     case "$1" in --batch) BATCH="${2:-}"; shift 2 ;; *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;; esac
   done
   case "$BATCH" in ''|*[!A-Za-z0-9._-]*) echo "사용: $0 --batch <이름> (영문, 숫자, . _ - 만)" >&2; exit 1 ;; esac
-  for v in WCAP STABLE_PCT GAP DUR S1_REPEAT S0_PRICE S1_PRICE QUANTITY PRE_VUS MAX_VUS DRAIN_TIMEOUT STATS_INTERVAL; do
+  for v in WARM_RATE WARM_BUCKET WARM_WINDOW WARM_CONSEC WARM_MIN WARM_MAX GAP DUR S1_REPEAT S0_PRICE S1_PRICE QUANTITY PRE_VUS MAX_VUS DRAIN_TIMEOUT STATS_INTERVAL; do
     is_uint "${!v}" || { echo "$v가 0 이상의 정수가 아님: ${!v}" >&2; exit 1; }
   done
   [ "$S1_REPEAT" -ge 1 ] || { echo "S1_REPEAT는 1 이상 (팀 규칙은 3)" >&2; exit 1; }
+  case "$WARM_SLOPE_PCT" in ""|*[!0-9.]*|*.*.*) echo "WARM_SLOPE_PCT는 0보다 큰 숫자: $WARM_SLOPE_PCT" >&2; exit 1 ;; esac
+  case "$RESTORE$DB_DUMP" in 00|01|10|11) ;; *) echo "RESTORE, DB_DUMP는 0 또는 1: RESTORE=$RESTORE DB_DUMP=$DB_DUMP" >&2; exit 1 ;; esac
   IFS=',' read -ra ST <<< "$STAGES"
   for r in "${ST[@]}"; do is_uint "$r" && [ "$r" -gt 0 ] || { echo "STAGES 값이 올바르지 않음: $STAGES" >&2; exit 1; }; done
 
@@ -533,6 +572,14 @@ main() {
     say "컨테이너 배포 (compose up -d --build)"
     compose up -d --build >> "$LOG" 2>&1 || die 7 "compose up 실패 (진행.log)"
   fi
+  # 기준 상태로 되돌린다: 측정마다 같은 DB 크기, 같은 데이터(회원, 계좌, 예수금만), 빈 Kafka에서 시작한다
+  if [ "$RESTORE" = 1 ]; then
+    say "기준 스냅샷으로 DB, Kafka 되돌리기 (baseline.sh restore)"
+    (cd "$DIR" && bash baseline.sh restore) >> "$LOG" 2>&1 || die 14 "기준 상태 복원 실패 (진행.log)"
+    awk '$1 == "sha256" { print "기준 스냅샷 sha256=" $2 } $1 == "state" { sub(/^state /, ""); print "기준 스냅샷 상태 " $0 } $1 == "created_at" { print "기준 스냅샷 생성 " $2 " " $3 }'       "${BASELINE_DIR:-$DIR/data/baseline}/ipo-baseline.meta" >> "$OUT/env.txt"
+  else
+    say "기준 상태로 되돌리지 않음 (RESTORE=0, 정식 결과로 쓰지 않는다)"
+  fi
   # shellcheck disable=SC2086  # 컨테이너 목록을 나눠서 넘긴다
   wait_healthy 600 $ALL_CONTAINERS || die 7 "컨테이너가 healthy가 아니거나 Eureka UP이 4개 미만"
   record_versions || die 5 "컨테이너 안 jar가 빌드한 jar와 다름 (env.txt). 이 커밋으로 다시 빌드, 배포한다"
@@ -541,17 +588,18 @@ main() {
   [ -n "$K6_NET" ] || die 13 "게이트웨이 컨테이너의 네트워크를 찾지 못함"
   echo "k6_network=$K6_NET" >> "$OUT/env.txt"
   record_limits
-  say "버전 기록: $(head -1 "$OUT/env.txt")"
+  say "버전 기록: $(grep -m1 "^git=" "$OUT/env.txt")"
   stats_start
 
   # 1. 토큰 (회원 수 확인 포함) → 예수금
   refresh_tokens || die 3 "토큰 재발급 실패"
   s1_cost=0
   for r in "${ST[@]}"; do s1_cost=$(( s1_cost + $(ceil_div $((r * DUR)) "$USERS") * S1_REPEAT )); done
-  need=$(( S0_PRICE * QUANTITY * (WCAP + 3) + S1_PRICE * QUANTITY * s1_cost ))
+  warm_cost=$(( $(ceil_div $((WARM_RATE * (WARM_MAX + 60))) "$USERS") + 1 ))   # 워밍업 최대 시간 동안 회원 1명이 보내는 요청 수
+  need=$(( S0_PRICE * QUANTITY * 3 + S1_PRICE * QUANTITY * (s1_cost + warm_cost) ))
   minbal="$(pg_int "select coalesce(min(a.cash_balance), 0) from account.account a join account.users u on u.user_id = a.user_id where u.login_id like 'lt%'")" || die 4 "예수금 조회 실패"
   accounts="$(pg_int "select count(*) from account.account a join account.users u on u.user_id = a.user_id where u.login_id like 'lt%'")" || die 4 "계좌 수 조회 실패"
-  say "회원 계좌 ${accounts}개, 회원당 예수금 최소 ${minbal}원, 최대로 필요한 금액 ${need}원 (S0 최대 $((WCAP + 3))회차 + S1 최대 ${s1_cost}건)"
+  say "회원 계좌 ${accounts}개, 회원당 예수금 최소 ${minbal}원, 최대로 필요한 금액 ${need}원 (워밍업 최대 ${warm_cost}건 + S0 3회차 + S1 최대 ${s1_cost}건)"
   [ "$accounts" -ge "$USERS" ] || die 4 "계좌 수(${accounts})가 회원 수(${USERS})보다 적음"
   [ "$minbal" -ge "$need" ] || die 4 "예수금 부족. 입금 API로 넣는다: python loadtest/seed/seed_users.py --run-id deposit-<이름> --amount <금액>"
 
@@ -571,7 +619,8 @@ main() {
   slowq "$OUT/slow-queries-before.txt" || die 9 "쿼리 통계(pg_stat_statements) 조회 실패. compose.perf.yml로 띄웠는지 확인 (slow-queries-before.txt)"
 
   # 3. 공모주 미리 생성 (부하 중에는 만들지 않는다)
-  l="$(new_ipos "$BATCH-S0" $((WCAP + 3)) "$S0_PRICE")" || die 11 "S0 공모주 생성 실패"
+  WARM_IPOS="$(new_ipos "$BATCH-W" "$warm_cost" "$S1_PRICE")" || die 11 "워밍업 공모주 생성 실패"
+  l="$(new_ipos "$BATCH-S0" 3 "$S0_PRICE")" || die 11 "S0 공모주 생성 실패"
   IFS=',' read -ra S0_IPOS <<< "$l"
   : > "$PLAN"
   for r in "${ST[@]}"; do
@@ -581,19 +630,13 @@ main() {
       echo "$r $rep $l" >> "$PLAN"
     done
   done
-  say "공모주 생성: S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 $(wc -l < "$PLAN" | tr -d ' ')묶음(단계 ${#ST[@]}개 x ${S1_REPEAT}회, 묶음당 $(awk 'NR == 1 {print gsub(/,/, ",") + 1}' "$PLAN")~$(awk 'END {print gsub(/,/, ",") + 1}' "$PLAN")개, 공모가 $S1_PRICE)"
+  say "공모주 생성: 워밍업 ${warm_cost}개(공모가 $S1_PRICE), S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 $(wc -l < "$PLAN" | tr -d ' ')묶음(단계 ${#ST[@]}개 x ${S1_REPEAT}회, 묶음당 $(awk 'NR == 1 {print gsub(/,/, ",") + 1}' "$PLAN")~$(awk 'END {print gsub(/,/, ",") + 1}' "$PLAN")개, 공모가 $S1_PRICE)"
   echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s" > "$MANIFEST"
   # 첫 실행의 쿼리 통계에 준비 단계(공모주 생성 등)가 섞이지 않게 비운다. 이후 실행마다 slowq_run이 남기고 비운다
   slowq "$OUT/.slow-queries-reset.out" 1 || die 9 "쿼리 통계 초기화 실패 (.slow-queries-reset.out)"
 
-  # 4. S0: 워밍업 → 안정 판정 → 측정 3회
-  avgs=(); stable_at=0
-  for i in $(seq 1 "$WCAP"); do
-    run_s0 "$BATCH-S0-n$i" warmup
-    avgs+=("$LAST_AVG")
-    if stable_check "$STABLE_PCT" "${avgs[@]}"; then stable_at=$((i - 2)); say "안정 판정: n${stable_at}~n$i (평균 응답 연속 3회차가 각각 그 평균의 +-${STABLE_PCT}% 이내)"; break; fi
-  done
-  [ "$stable_at" -gt 0 ] || die 2 "워밍업 ${WCAP}회차 안에 안정 판정 기준에 닿지 않음"
+  # 4. 워밍업(독립 단계, 시간 기준) → S0 측정 3회
+  run_warmup
   for i in 1 2 3; do run_s0 "$BATCH-S0-r$i" measure; done
 
   # 5. S1: 토큰을 새로 받고 쉰 뒤 속도 단계마다 독립 실행
@@ -613,7 +656,13 @@ main() {
   say "== 부하 종료. 후처리 시작"
 
   # 6. 후처리와 판정
-  if post_process; then say "== 후처리 완료. 판정: $OUT/판정.md"; return 0; fi
+  pp=0; post_process || pp=1
+  # 측정이 끝난 DB를 남긴다 (다음 측정은 기준 스냅샷으로 되돌리므로 원본 행은 여기에만 남는다)
+  if [ "$DB_DUMP" = 1 ]; then
+    say "측정 뒤 DB 덤프 (db-after.dump)"
+    (cd "$DIR" && bash baseline.sh dump "$OUT/db-after.dump") >> "$LOG" 2>&1 || { say "후처리: DB 덤프 실패 (진행.log)"; pp=1; }
+  fi
+  if [ "$pp" = 0 ]; then say "== 후처리 완료. 판정: $OUT/판정.md"; return 0; fi
   say "== 후처리 일부 실패 (위 로그). 부하 결과는 그대로 있다. 판정: $OUT/판정.md"
   return 10
 }

@@ -7,7 +7,8 @@
 # GC도 G1로 명시했다. CPU 상한이 2 미만이면 JVM이 기본으로 SerialGC를 골라서, 상한을 바꿀 때 GC 방식까지 같이 바뀌기 때문이다.
 #
 # | 컨테이너 | CPU | 메모리 상한 | JVM 힙 |
-# | api-gateway, subscription, account | 1.0 | 1g | 512m |
+# | api-gateway, account | 1.0 | 1g | 512m |
+# | subscription-service | 2.0 | 1g | 512m |
 # | allocation-service | 0.5 | 1g | 512m |
 # | eureka-server | 0.5 | 512m | 192m |
 # | postgres | 1.0 | 1g | - |
@@ -59,7 +60,7 @@ services:
       JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
 
   subscription-service:
-    cpus: 1.0
+    cpus: 2.0
     mem_limit: 1g
     environment:
       JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"

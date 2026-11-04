@@ -8,9 +8,23 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.UUID;
 
-// margin.reserve-requested 메시지 본문 (이벤트 명세 1장 공통 필드 + 2-1). 공통 필드와 도메인 필드를 한 단계로 펼친다
-// 필수 값 누락, eventType과 토픽 불일치, 금액 1 미만, ISO-8601이 아닌 시각은 재처리해도 결과가 같아서 InvalidEventException (바로 DLT)
-// UUID 형식 오류는 역직렬화에서 걸리고, amount가 없으면 0으로 읽혀 여기서 걸린다
+/**
+ * Kafka로 수신한 증거금 인출 요청 메시지 본문. (margin.reserve-requested)
+ * <p>
+ * 필수 필드와 이벤트 형식을 검증한 후 ReserveMarginCommand로 변환한다.
+ * 검증 실패 시 InvalidEventException을 발생, Kafka 오류 처리기가 재시도 없이 DLT로 전송된다.
+ * <p>
+ * amount값이 없으면 0으로 읽혀 금액 검사에서 걸려 DLT로 간다.
+ *
+ * @param eventId        이벤트 고유 ID
+ * @param eventType      이벤트 유형
+ * @param occurredAt     이벤트 발생 시각 (ISO 8601)
+ * @param subscriptionId 인출 대상 청약 ID
+ * @param userId         요청자 ID
+ * @param accountId      인출 대상 계좌 ID
+ * @param ipoId          청약 대상 공모주 ID
+ * @param amount         인출할 금액 (원, 1 이상)
+ */
 record MarginReserveRequestedMessage(
         UUID eventId,
         String eventType,

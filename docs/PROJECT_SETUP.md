@@ -54,7 +54,9 @@ ipo-subscription/
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
 ├── docker-compose.yml      로컬 인프라(PostgreSQL, Kafka, Kafka-UI), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
-├── compose.perf.yml        부하 테스트용 자원 고정 ([부하 테스트 가이드](./LOADTEST.md))
+├── compose.perf.yml        부하 테스트용 자원 고정 ([부하 테스트 가이드](./LOADTEST.md)). 배포 환경도 같은 값을 쓴다
+├── compose.prod.yml        배포 환경(EC2)용 (ECR 이미지, 게이트웨이 80번 공개, 자동 재시작)
+├── deploy/                 서버 배포 스크립트, 배포 후 스모크 ([배포](#배포-aws))
 ├── loadtest/               부하 테스트 스크립트 (시드, k6 시나리오, 검증)
 ├── docker/postgres/        서비스별 스키마, DB 계정 생성 스크립트
 ├── common/                 공통 라이브러리 (실행 X)
@@ -263,6 +265,97 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 - 포크에서 올린 PR은 본문 표시가 갱신되지 않는다 (빌드, 테스트는 실행됨)
 - 머지 차단: `build`를 필수 체크로 지정하기 전에는 CI가 실패해도 머지 버튼은 눌린다. 지정되면 통과해야 머지할 수 있다
 - `develop → main` PR에 대한 CI는 아직 없다 (첫 릴리스 때 추가)
+- develop에는 `build` 통과가 머지 조건으로 걸려 있다 (Ruleset). 실패하면 머지할 수 없다
+
+### 배포 (AWS)
+
+EC2 한 대(서울 리전)에 PostgreSQL, Kafka, 서비스 5개, 모니터링을 모두 컨테이너로 띄운다. 로컬 Docker 실행과 같은 `docker-compose.yml`에 `compose.perf.yml`(자원 상한, JVM 힙), `compose.prod.yml`(배포용)을 겹쳐 쓴다.
+
+#### 흐름
+
+```
+develop 머지 → CI(build) 성공 → Deploy 워크플로
+  → jar 빌드 → 이미지 5개 빌드, ECR 푸시 (태그 = 커밋 SHA)
+  → SSM Run Command로 서버에서 deploy/deploy.sh 실행
+      (레포를 그 커밋으로 맞춤 → Parameter Store 값으로 .env 생성 → 이미지 받기 → up -d → 서비스 5개 healthy 대기)
+  → 스모크 (deploy/smoke.sh: 공개 주소로 가입 → 로그인 → 계좌 개설 → 입금)
+```
+
+- 설정: `.github/workflows/deploy.yml`. CI가 실패한 커밋, PR에서 돈 CI로는 배포하지 않는다
+- 배포는 한 번에 하나만 실행된다. 머지가 겹치면 앞 배포가 끝난 뒤 다음 배포가 실행된다
+- 배포 중에는 서비스가 1~2분 다시 뜬다. 첫 요청이 503일 수 있다 (Eureka 등록 대기, 최대 30초)
+- AWS 권한은 GitHub OIDC로 받는다. GitHub에 AWS 액세스 키를 두지 않는다
+- 서버 SSH(22번)는 열지 않는다. 서버 접속은 AWS 콘솔 → EC2 → 인스턴스 → 연결 → Session Manager
+
+#### 접속 주소
+
+- 서비스: `http://{고정 IP}/` (게이트웨이만 80번으로 공개). 통합 Swagger는 `http://{고정 IP}/swagger-ui/index.html`
+- 📌 HTTPS가 아니라 로그인 비밀번호와 토큰이 암호화되지 않고 오간다. **시연용 테스트 계정만 쓴다**
+- 서비스 포트(8081~8083), Eureka, PostgreSQL, Kafka, Prometheus, Grafana는 외부에 열지 않는다 (서비스 포트를 열면 `X-User-Id` 헤더만으로 게이트웨이 인증을 우회할 수 있다)
+
+#### 수동 실행, 롤백
+
+- GitHub → Actions → Deploy → **Run workflow**. `sha`를 비우면 선택한 브랜치의 최신 커밋, 넣으면 그 커밋을 배포한다
+- 롤백은 이전 커밋 SHA를 넣어 실행한다. ECR에 이미지가 있으면 빌드 없이 바로 배포한다 (ECR에는 서비스마다 최근 이미지 5개만 남고, 그보다 오래된 커밋은 다시 빌드한다)
+- 서버에는 마지막 성공 배포 SHA가 `/opt/ipo/.last-tag`, 그 전 SHA가 `/opt/ipo/.prev-tag`에 남는다
+- DB 스키마는 되돌리지 않는다 (`ddl-auto: update`는 컬럼 추가만 반영). 스키마를 바꾸는 변경은 시연 직전에 넣지 않는다
+
+#### 비밀값
+
+- AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택)
+- 배포할 때마다 서버의 `/opt/ipo/.env`(권한 600)를 다시 만든다. 서버의 `.env`를 손으로 고치지 않는다 (다음 배포 때 덮어쓴다)
+- ⚠️ DB 비밀번호 4개는 첫 배포 뒤 바꾸지 않는다. PostgreSQL 볼륨이 처음 만들어질 때 한 번만 계정을 만들어서, 바꾸면 서비스가 DB에 접속하지 못한다
+- ⚠️ `GRAFANA_ADMIN_PASSWORD`도 Grafana가 처음 뜰 때 한 번만 쓴다. 바꾸려면 Grafana 화면에서 바꾸고 파라미터도 같은 값으로 맞춘다
+- 로컬 `.env`와 운영 값은 서로 관계없다. 로컬은 지금 값을 그대로 쓴다
+
+#### 저장소 변수 (Settings → Secrets and variables → Actions → Variables)
+
+| 이름 | 값 |
+| --- | --- |
+| `AWS_REGION` | `ap-northeast-2` |
+| `AWS_DEPLOY_ROLE_ARN` | 배포용 IAM 역할 ARN |
+| `ECR_REGISTRY` | `{계정 ID}.dkr.ecr.ap-northeast-2.amazonaws.com` |
+| `EC2_INSTANCE_ID` | 배포 서버 인스턴스 ID |
+| `DEPLOY_BASE_URL` | `http://{고정 IP}` (스모크가 사용) |
+
+- 인스턴스를 새로 만들면 `EC2_INSTANCE_ID`와 배포 역할의 SSM 권한 대상 인스턴스를 같이 바꾼다
+
+#### 서버에서 직접 확인
+
+Session Manager 터미널은 `sh`로 열린다. `sudo -i`로 root가 된 뒤 확인한다 (명령은 한 줄씩 붙여 넣는다. 여러 줄을 한꺼번에 붙이면 줄바꿈이 빠질 수 있다)
+
+```bash
+cd /opt/ipo
+docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml ps
+docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml logs --tail 100 {서비스 이름}
+```
+
+- ⚠️ `down -v`는 쓰지 않는다. DB, Kafka 데이터가 지워진다
+- ⚠️ 서버의 `/opt/ipo` 파일을 직접 고치지 않는다. 배포 스크립트가 레포를 배포 커밋으로 바꿀 때 실패한다
+
+#### Grafana, Eureka 화면 (포트 포워딩)
+
+내 PC에 [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)와 [Session Manager 플러그인](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)을 설치하고 `aws login`으로 로그인한 뒤
+
+```bash
+aws ssm start-session --region ap-northeast-2 --target {인스턴스 ID} --document-name AWS-StartPortForwardingSession --parameters portNumber="3000",localPortNumber="13000"
+```
+
+- `http://localhost:13000` → Grafana (계정 `admin`, 비밀번호는 Parameter Store의 `GRAFANA_ADMIN_PASSWORD`)
+- Eureka는 `portNumber="8761"`, `localPortNumber="18761"`
+- 창을 닫으면 연결이 끊긴다
+
+#### 비용, 중지
+
+- 쓰지 않을 때는 EC2를 **중지**한다 (콘솔 → 인스턴스 상태 → 인스턴스 중지). **종료**는 서버와 디스크를 지운다
+- 중지 중에도 디스크와 고정 IP 요금은 나온다. 다시 시작하면 컨테이너는 `restart: unless-stopped`로 자동으로 뜬다
+- 중지 중에 develop에 머지되면 Deploy가 실패한다. 서버를 켠 뒤 Run workflow로 다시 배포한다
+- 배포 환경에서는 부하 테스트를 하지 않는다 (시연 데이터, 장애 알림이 섞인다)
+
+#### 배포 브랜치를 main으로 바꿀 때
+
+- `.github/workflows/deploy.yml`의 `branches: [develop]`을 `[main]`으로 바꾸고, `.github/workflows/ci.yml`의 `push` 대상에도 `main`을 추가한다 (CI가 성공해야 배포되므로)
+- AWS 쪽 권한은 `main`, `develop` 모두 허용되어 있어 바꿀 것이 없다
 
 ---
 

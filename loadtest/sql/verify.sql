@@ -43,6 +43,9 @@ SELECT MIN(received_at), MAX(confirmed_at), MAX(confirmed_at) - MIN(received_at)
 -- 11~15: 배정, 정산 뒤 정합성 (G4). 모두 위반만 행으로 나온다 (기대 0행). 배정 전이면 대상이 없어 0행
 --   [계좌 단독] account 스키마만 읽는다 → 계좌 서비스 대사 배치로 그대로 옮길 수 있다
 --   [서비스 간] subscription, allocation 스키마도 읽는다 → 배치에서는 서비스 계정 권한이 없어 이벤트나 API로 받은 값과 비교해야 한다
+--   배정 라운드가 DONE이 아니면 대상이 없어 0행이 나와 통과로 오해할 수 있으므로 건너뛴다고 출력한다
+SELECT EXISTS (SELECT 1 FROM allocation.allocation_round WHERE ipo_id = :ipo AND status = 'DONE') AS alloc_done \gset
+\if :alloc_done
 \echo '== 11. [계좌 단독] 모든 증거금에 인출 원장이 정확히 1줄, 금액 = 증거금 (기대: 0행. 중복 인출, 원장 누락)'
 SELECT m.subscription_id FROM account.margin m LEFT JOIN account.ledger_entry l ON l.margin_id = m.margin_id AND l.type = 'MARGIN_PENDING' WHERE m.ipo_id = :ipo GROUP BY m.subscription_id, m.amount HAVING count(l.ledger_entry_id) <> 1 OR COALESCE(SUM(l.amount), 0) <> m.amount;
 
@@ -57,3 +60,6 @@ WITH req AS (SELECT COALESCE(SUM(requested_quantity), 0) AS requested FROM subsc
 
 \echo '== 15. [서비스 간] 배정이 끝난 공모주에 남은 PENDING 증거금 (기대: 0행. 정산 메시지 처리 중이면 잠깐 나올 수 있다)'
 SELECT m.subscription_id FROM account.margin m JOIN subscription.ipo i ON i.ipo_id = m.ipo_id WHERE m.ipo_id = :ipo AND i.status = 'ALLOCATED' AND m.status = 'PENDING';
+\else
+\echo '== 11~15. (건너뜀: 이 공모주의 배정 라운드가 DONE이 아니다. 배정, 정산이 끝난 뒤 다시 실행한다)'
+\endif

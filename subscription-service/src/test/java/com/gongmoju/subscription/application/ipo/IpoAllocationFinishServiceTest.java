@@ -121,18 +121,35 @@ class IpoAllocationFinishServiceTest {
     }
 
     @Test
-    @DisplayName("OPEN 공모주면 상태를 바꾸지 않고 UNEXPECTED_STATE_IGNORED로 끝나며 에러 로그를 남긴다")
-    void finish_ignores_whenOpen(CapturedOutput output) {
+    @DisplayName("OPEN 공모주면 InvalidEventException이 나고 상태는 바뀌지 않으며 처리 기록도 남지 않고 에러 로그를 남긴다 (재시도 없이 DLT 대상)")
+    void finish_throwsAndKeepsState_whenOpen(CapturedOutput output) {
         // given
         jdbcTemplate.update("UPDATE ipo SET status = 'OPEN' WHERE ipo_id = ?", ipoId);
+        AllocationFinished event = event(UUID.randomUUID(), 0, 0);
+
+        // when, then
+        assertThatThrownBy(() -> allocationFinishService.finish(event)).isInstanceOf(InvalidEventException.class);
+        assertThat(ipoStatus()).isEqualTo("OPEN");
+        assertThat(processedCount(event.eventId())).isZero();
+        assertThat(output.getOut()).contains("정상적으로는 오지 않는 배정 완료 이벤트");
+    }
+
+    @Test
+    @DisplayName("OPEN이라 DLT에 갔던 메시지를 같은 eventId로 다시 처리해도 처리 기록이 남지 않았으므로 공모주가 CLOSED가 된 뒤에는 ALLOCATED가 된다")
+    void finish_allocates_whenSameEventIsRedeliveredAfterClosed() {
+        // given
+        jdbcTemplate.update("UPDATE ipo SET status = 'OPEN' WHERE ipo_id = ?", ipoId);
+        AllocationFinished event = event(UUID.randomUUID(), 0, 0);
+        assertThatThrownBy(() -> allocationFinishService.finish(event)).isInstanceOf(InvalidEventException.class);
+        jdbcTemplate.update("UPDATE ipo SET status = 'CLOSED' WHERE ipo_id = ?", ipoId);
 
         // when
-        AllocationFinishedResult result = allocationFinishService.finish(event(UUID.randomUUID(), 0, 0));
+        AllocationFinishedResult result = allocationFinishService.finish(event);
 
         // then
-        assertThat(result).isEqualTo(AllocationFinishedResult.UNEXPECTED_STATE_IGNORED);
-        assertThat(ipoStatus()).isEqualTo("OPEN");
-        assertThat(output.getOut()).contains("정상적으로는 오지 않는 배정 완료 이벤트");
+        assertThat(result).isEqualTo(AllocationFinishedResult.ALLOCATED);
+        assertThat(ipoStatus()).isEqualTo("ALLOCATED");
+        assertThat(processedCount(event.eventId())).isEqualTo(1);
     }
 
     @Test

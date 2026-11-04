@@ -155,6 +155,24 @@ class AllocationFinishedConsumerKafkaTest {
         assertThat(status()).isEqualTo("CLOSED");
     }
 
+    @Test
+    @DisplayName("OPEN 공모주면 재시도 없이 바로 DLT로 가고 원본 JSON이 그대로 쌓이며, 공모주는 OPEN으로 남고 처리 기록도 남지 않는다")
+    void consume_sendsToDltWithoutRetry_whenIpoIsOpen() {
+        // given
+        jdbcTemplate.update("UPDATE ipo SET status = 'OPEN' WHERE ipo_id = ?", ipoId);
+        UUID eventId = UUID.randomUUID();
+        String payload = validJson(ipoId, eventId);
+
+        // when
+        long startedAt = System.nanoTime();
+        send(payload);
+
+        // then
+        assertArrivesInDltQuickly(ipoId, payload, startedAt);
+        assertThat(status()).isEqualTo("OPEN");
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isZero();
+    }
+
     private void assertArrivesInDltQuickly(UUID key, String originalPayload, long startedAtNanos) {
         List<ConsumerRecord<String, String>> dlt = readDlt(key, NO_RETRY_LIMIT, 1);
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);

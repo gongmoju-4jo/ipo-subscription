@@ -9,7 +9,5 @@ public enum AllocationFinishedResult {
     // 같은 `eventId`를 이미 처리해서(`processed_event`) 아무것도 바꾸지 않음
     DUPLICATE_EVENT_IGNORED,
     // 이미 `ALLOCATED`라 중복 완료 이벤트로 보고 아무것도 바꾸지 않음
-    ALREADY_ALLOCATED_IGNORED,
-    // `CLOSED`, `ALLOCATED` 외 상태(`OPEN`)에서 받음. 정상적으로는 오지 않는 이벤트라 에러 로그만 남기고 상태는 바꾸지 않음
-    UNEXPECTED_STATE_IGNORED
+    ALREADY_ALLOCATED_IGNORED
 }

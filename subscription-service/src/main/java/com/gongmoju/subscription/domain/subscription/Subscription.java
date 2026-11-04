@@ -255,6 +255,42 @@ public class Subscription extends BaseEntity {
         return attempts >= maxAttempts;
     }
 
+    /**
+     * 배정 결과({@code allocation.result})로 {@code CONFIRMED}를 {@code ALLOCATED}로 전환함. 배정 수량과 배정 대금을 저장함 (0주 배정 포함).
+     * 배정 대금은 배정 수량 × 공모가와 같아야 함 (테이블 명세 {@code allocated_amount}).
+     *
+     * @param allocatedQuantity 배정 수량. 0 이상, 청약 수량 이하
+     * @param allocatedAmount   배정 대금 (원)
+     * @throws IllegalStateException    {@code CONFIRMED}가 아닌 상태에서 호출한 경우
+     * @throws IllegalArgumentException 배정 수량이 범위를 벗어났거나 배정 대금이 배정 수량 × 공모가와 다른 경우
+     */
+    public void allocate(long allocatedQuantity, long allocatedAmount) {
+        if (status != SubscriptionStatus.CONFIRMED) {
+            throw new IllegalStateException("CONFIRMED 상태에서만 배정할 수 있습니다: " + status);
+        }
+        if (allocatedQuantity < 0 || allocatedQuantity > requestedQuantity) {
+            throw new IllegalArgumentException("배정 수량은 0 이상 청약 수량 이하여야 합니다: allocatedQuantity="
+                    + allocatedQuantity + ", requestedQuantity=" + requestedQuantity);
+        }
+        if (allocatedAmount != Math.multiplyExact(allocatedQuantity, ipo.getOfferPrice())) {
+            throw new IllegalArgumentException("배정 대금이 배정 수량 × 공모가와 다릅니다: allocatedQuantity="
+                    + allocatedQuantity + ", allocatedAmount=" + allocatedAmount + ", offerPrice=" + ipo.getOfferPrice());
+        }
+        this.status = SubscriptionStatus.ALLOCATED;
+        this.allocatedQuantity = allocatedQuantity;
+        this.allocatedAmount = allocatedAmount;
+    }
+
+    /**
+     * 이미 저장한 배정 결과와 같은지 비교함. 배정 전이면 항상 {@code false}.
+     *
+     * @return 배정 수량과 배정 대금이 모두 같으면 {@code true}
+     */
+    public boolean hasSameAllocation(long allocatedQuantity, long allocatedAmount) {
+        return this.allocatedQuantity != null && this.allocatedQuantity == allocatedQuantity
+                && this.allocatedAmount != null && this.allocatedAmount == allocatedAmount;
+    }
+
     private static Subscription create(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                        long requestedQuantity, long marginAmount, Instant receivedAt) {
         if (requestedQuantity < 1) {

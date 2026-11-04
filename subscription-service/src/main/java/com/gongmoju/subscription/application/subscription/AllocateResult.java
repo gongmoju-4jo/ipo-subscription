@@ -11,7 +11,5 @@ public enum AllocateResult {
     // 같은 `eventId`를 이미 처리해서(`processed_event`) 아무것도 바꾸지 않음
     DUPLICATE_EVENT_IGNORED,
     // 이미 `ALLOCATED` 또는 `REFUNDED`이고 저장한 배정 결과와 같아 중복으로 보고 아무것도 바꾸지 않음
-    ALREADY_ALLOCATED_IGNORED,
-    // `CONFIRMED`, `ALLOCATED`, `REFUNDED` 외 상태에서 받음. 정상적으로는 오지 않는 결과라 에러 로그만 남기고 상태는 바꾸지 않음
-    UNEXPECTED_STATE_IGNORED
+    ALREADY_ALLOCATED_IGNORED
 }

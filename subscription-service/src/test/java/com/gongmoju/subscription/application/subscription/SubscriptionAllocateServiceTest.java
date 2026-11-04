@@ -214,24 +214,43 @@ class SubscriptionAllocateServiceTest {
             "CANCEL_REQUESTED, USER_CANCEL",
             "CANCELLED, TIMEOUT"
     }, nullValues = "NULL")
-    @DisplayName("CONFIRMED, ALLOCATED, REFUNDED 외 상태면 UNEXPECTED_STATE_IGNORED로 끝나고 상태는 바뀌지 않으며 처리 기록은 남는다")
-    void allocate_ignores_whenStatusIsUnexpected(String status, String cancelReason) {
+    @DisplayName("CONFIRMED, ALLOCATED, REFUNDED 외 상태면 InvalidEventException이 나고 상태는 바뀌지 않으며 처리 기록도 남지 않는다 (재시도 없이 DLT 대상)")
+    void allocate_throwsAndKeepsState_whenStatusIsUnexpected(String status, String cancelReason) {
         // given
-        String rejectReason = "REJECTED".equals(status) ? "INSUFFICIENT_BALANCE" : null;
-        jdbcTemplate.update("UPDATE subscription SET status = ?, cancel_reason = ?, reject_reason = ? WHERE subscription_id = ?",
-                status, cancelReason, rejectReason, subscriptionId);
+        changeStatus(status, cancelReason);
         AllocationResult event = event(UUID.randomUUID(), 3, 45_000);
+
+        // when, then
+        assertThatThrownBy(() -> allocateService.allocate(event)).isInstanceOf(InvalidEventException.class);
+        Map<String, Object> row = subscription();
+        assertThat(row.get("status")).isEqualTo(status);
+        assertThat(row.get("allocated_quantity")).isNull();
+        assertThat(row.get("version")).isEqualTo(0L);
+        assertThat(processedCount(event.eventId())).isZero();
+    }
+
+    @Test
+    @DisplayName("상태 문제로 DLT에 갔던 메시지를 같은 eventId로 다시 처리해도 처리 기록이 남지 않았으므로 청약을 고친 뒤에는 ALLOCATED가 된다")
+    void allocate_allocates_whenSameEventIsRedeliveredAfterStateIsFixed() {
+        // given
+        changeStatus("COMPENSATING", "CONFIRM_FAILED");
+        AllocationResult event = event(UUID.randomUUID(), 3, 45_000);
+        assertThatThrownBy(() -> allocateService.allocate(event)).isInstanceOf(InvalidEventException.class);
+        changeStatus("CONFIRMED", null);
 
         // when
         AllocateResult result = allocateService.allocate(event);
 
         // then
-        assertThat(result).isEqualTo(AllocateResult.UNEXPECTED_STATE_IGNORED);
-        Map<String, Object> row = subscription();
-        assertThat(row.get("status")).isEqualTo(status);
-        assertThat(row.get("allocated_quantity")).isNull();
-        assertThat(row.get("version")).isEqualTo(0L);
+        assertThat(result).isEqualTo(AllocateResult.ALLOCATED);
+        assertThat(subscription().get("status")).isEqualTo("ALLOCATED");
         assertThat(processedCount(event.eventId())).isEqualTo(1);
+    }
+
+    private void changeStatus(String status, String cancelReason) {
+        String rejectReason = "REJECTED".equals(status) ? "INSUFFICIENT_BALANCE" : null;
+        jdbcTemplate.update("UPDATE subscription SET status = ?, cancel_reason = ?, reject_reason = ? WHERE subscription_id = ?",
+                status, cancelReason, rejectReason, subscriptionId);
     }
 
     private void assertConfirmedWithoutRecord(UUID eventId) {

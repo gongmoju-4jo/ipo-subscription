@@ -335,15 +335,41 @@ docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml log
 
 #### Grafana, Eureka 화면 (포트 포워딩)
 
-내 PC에 [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)와 [Session Manager 플러그인](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)을 설치하고 `aws login`으로 로그인한 뒤
+Grafana, Eureka, Prometheus는 외부에 열지 않는다. 팀원은 본인 IAM 사용자로 AWS에 로그인한 뒤 SSM 터널을 열어 내 PC 주소(`localhost`)로 본다.
+
+1. 처음 한 번 설치 (AWS CLI 2.32.0 이상, Session Manager 플러그인)
+
+| OS | AWS CLI | Session Manager 플러그인 |
+| --- | --- | --- |
+| Windows | `msiexec.exe /i https://awscli.amazonaws.com/AWSCLIV2.msi` (관리자 권한) | [설치 파일](https://s3.amazonaws.com/session-manager-downloads/plugin/latest/windows/SessionManagerPluginSetup.exe) 실행 (관리자 권한) |
+| macOS | `curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg" && sudo installer -pkg AWSCLIV2.pkg -target /` | Apple 칩: `curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/mac_arm64/session-manager-plugin.pkg" -o "session-manager-plugin.pkg"` (Intel은 경로의 `mac_arm64`를 `mac`으로)<br>`sudo installer -pkg session-manager-plugin.pkg -target /`<br>`sudo ln -s /usr/local/sessionmanagerplugin/bin/session-manager-plugin /usr/local/bin/session-manager-plugin` |
+
+   - 새 터미널에서 `aws --version`(2.32.0 이상), `session-manager-plugin`(설치 확인 메시지)으로 확인한다
+   - Windows는 설치 후 터미널을 다시 열어야 명령이 잡힌다
+
+2. 로그인: `aws login --region ap-northeast-2` → 브라우저에서 본인 IAM 사용자로 로그인 (MFA 포함). 최대 12시간 유지되고, 끝나면 다시 `aws login`
+   - 액세스 키를 만들지 않는다. `aws configure`도 쓰지 않는다
+   - IAM 사용자에게 `AdministratorAccess`가 없으면 `SignInLocalDevelopmentAccess` 정책이 있어야 `aws login`이 된다
+3. 터널 열기 (창을 열어 둔 동안만 연결된다)
 
 ```bash
 aws ssm start-session --region ap-northeast-2 --target {인스턴스 ID} --document-name AWS-StartPortForwardingSession --parameters portNumber="3000",localPortNumber="13000"
 ```
 
-- `http://localhost:13000` → Grafana (계정 `admin`, 비밀번호는 Parameter Store의 `GRAFANA_ADMIN_PASSWORD`)
-- Eureka는 `portNumber="8761"`, `localPortNumber="18761"`
-- 창을 닫으면 연결이 끊긴다
+- `{인스턴스 ID}`: 저장소 변수 `EC2_INSTANCE_ID` 값 (AWS 콘솔 → EC2 → 인스턴스의 `i-`로 시작하는 ID와 같다)
+- Windows PowerShell, macOS 터미널 모두 위 명령 그대로 쓴다. 서버가 중지돼 있으면 연결되지 않는다
+
+4. 브라우저로 열기
+
+| 화면 | 터널의 `portNumber` → `localPortNumber` | 주소 | 로그인 |
+| --- | --- | --- | --- |
+| Grafana | `3000` → `13000` | `http://localhost:13000` | `admin` / Parameter Store의 `GRAFANA_ADMIN_PASSWORD` (콘솔 → Systems Manager → Parameter Store → 값 표시) |
+| Eureka | `8761` → `18761` | `http://localhost:18761` | 없음 |
+| Prometheus | `9090` → `19090` | `http://localhost:19090` | 없음 |
+
+- 화면마다 터널 창을 하나씩 연다 (명령의 두 숫자만 바꾼다)
+- 로컬 포트를 `13000`처럼 바꾸는 이유: 내 PC에서 로컬 Docker의 Grafana(3000) 등이 떠 있어도 겹치지 않게
+- 연결이 안 되면: `aws login`이 만료됐는지(`aws sts get-caller-identity`), 서버가 실행 중인지, 플러그인이 설치됐는지(`session-manager-plugin`) 순서로 확인한다
 
 #### 비용, 중지
 

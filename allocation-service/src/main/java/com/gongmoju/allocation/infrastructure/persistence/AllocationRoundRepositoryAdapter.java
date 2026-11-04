@@ -18,4 +18,14 @@ class AllocationRoundRepositoryAdapter implements AllocationRoundRepository {
     public Optional<AllocationRound> findById(UUID allocationRoundId) {
         return jpaRepository.findById(allocationRoundId);
     }
+
+    @Override
+    public Optional<AllocationRound> findByIpoId(UUID ipoId) {
+        return jpaRepository.findByIpoId(ipoId);
+    }
+
+    @Override
+    public AllocationRound save(AllocationRound round) {
+        return jpaRepository.save(round);
+    }
 }

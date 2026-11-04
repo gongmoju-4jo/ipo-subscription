@@ -14,12 +14,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Optional;
 import java.util.UUID;
 
-// F-14 가상 입금. 계좌 락 → 본인 확인 → 중복 확인 → 잔고 변경 → 원장 저장을 한 트랜잭션에서 처리한다
-
 /**
  * 가상 입금 서비스.
- * 계좌 잠금, 본인 확인, 중복 입금 검사, 잔고 변경 및 원장 저장을
- * 하나의 트랜잭션에서 처리한다.
+ * 계좌 락 → 본인 확인 → 중복 확인 → 잔고 변경 → 원장 저장을 한 트랜잭션에서 처리한다.
  */
 @Slf4j
 @Service
@@ -57,17 +54,19 @@ public class DepositService {
                         CommonErrorCode.RESOURCE_NOT_FOUND, "계좌를 찾을 수 없습니다.", "accountId"
                 ));
 
-        // 같은 요청 ID로 이미 처리한 입금이 있다면 기존 결과를 반환한다.
+        // 같은 requestId로 이미 처리한 입금이 있다면 기존 결과를 반환한다.
         Optional<LedgerEntry> existing = ledgerEntryRepository.findByRequestId(requestId);
         if (existing.isPresent()) { // 처리한 적 있는 경우
             DepositResult replayed = replay(existing.get(), accountId, amount);
+
             log.info("[입금] 재요청, 기존 결과 반환. accountId={}, requestId={}", accountId, requestId);
             return replayed;
         }
 
-        // 입금: 예수금 잔고 증가. 입금 후 예수금이 long 범위(약 922경 원)를 넘으면 500이 아니라 400으로 거절한다
-        // 실제 돈이라면 닿을 수 없는 값이지만, 가상 입금은 사용자가 금액을 직접 정하므로 서버 오류로 새지 않게 막는다
-        // (1회 상한이 정해지지 않아 @Max를 두지 않았고, 잔고를 알아야 알 수 있어서 요청 검증 다음 단계인 여기서 막는다)
+        // 입금: 예수금 잔고 증가.
+        //   - 입금 후 예수금이 long 범위(약 922경 원)를 넘으면 500이 아니라 400으로 거절한다
+        //   - 실제 돈이라면 닿을 수 없는 값이지만, 가상 입금은 사용자가 금액을 직접 정하므로 서버 오류로 새지 않게 막는다
+        //   - (1회 상한이 정해지지 않아 @Max를 두지 않았고, 잔고를 알아야 알 수 있어서 요청 검증 다음 단계인 여기서 막는다)
         try {
             account.deposit(amount);
         } catch (ArithmeticException e) {
@@ -76,11 +75,14 @@ public class DepositService {
                     CommonErrorCode.VALIDATION_ERROR, "입금 후 예수금이 허용 범위를 넘습니다.", "amount"
             );
         }
+
         // 변경된 잔고 기준으로 입금 원장 생성 후 저장
         LedgerEntry entry = ledgerEntryRepository.save(LedgerEntry.deposit(account, amount, requestId));
+
         // 트랜잭션 커밋 전 로그. 커밋이 실패하면 예외 응답과 에러 로그가 따로 남는다
         log.info("[입금] 원장 저장 (커밋 전). accountId={}, amount={}, cashBalanceAfter={}, requestId={}",
                 accountId, amount, entry.getCashBalanceAfter(), requestId);
+
         // 신규 입금 처리 결과 반환
         return DepositResult.of(entry, true);
     }
@@ -98,7 +100,9 @@ public class DepositService {
         if (!entry.getAccount().getId().equals(accountId) ||
                 entry.getAmount() != amount) {
             log.warn("[입금] 같은 requestId로 다른 요청이라 거절. requestId={}, 기존(accountId={}, amount={}), 요청(accountId={}, amount={})",
+
                     entry.getRequestId(), entry.getAccount().getId(), entry.getAmount(), accountId, amount);
+
             throw new BusinessException(
                     CommonErrorCode.DUPLICATE_RESOURCE, "같은 requestId로 다른 입금 요청이 있습니다.", "requestId"
             );

@@ -1,10 +1,15 @@
 package com.gongmoju.account.domain.margin;
 
-// 증거금 응답 이벤트 발행. 구현은 infrastructure/messaging (Outbox에 저장, Kafka 전송은 OutboxPublisher)
-// 업무 변경과 같은 트랜잭션에서 호출한다
+/**
+ * 증거금 인출 및 반환 처리 결과 이벤트를 발행하는 인터페이스.
+ */
 public interface MarginEventPublisher {
 
     void publishReserved(MarginReserved event);
 
     void publishReserveFailed(MarginReserveFailed event);
+
+    void publishVoided(MarginVoided event);
+
+    void publishSettled(MarginSettled event);
 }

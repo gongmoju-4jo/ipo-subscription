@@ -4,9 +4,6 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
-// 증거금 인출 성공 내용. margin.reserved로 발행한다 (필드는 이벤트 형식 v1.1)
-// accountId는 본문이 아니라 메시지 키로 쓴다
-
 /**
  * 도메인 계층에서 인출 성공 결과를 표현하는 객체.
  * <p>
@@ -15,7 +12,7 @@ import java.util.UUID;
  *
  * @param subscriptionId 청약 ID
  * @param marginId       생성된 증거금 ID
- * @param accountId      인출된 예수금 게좌 ID
+ * @param accountId      인출된 예수금 게좌 ID, 메시지 키로 사용
  * @param amount         인출된 증거금 금액
  * @param reservedAt     최초 증거금 인출 시각 (Instant)
  */

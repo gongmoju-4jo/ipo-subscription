@@ -21,12 +21,12 @@ import lombok.NoArgsConstructor;
 import java.time.Instant;
 import java.util.UUID;
 
-// 청약 1건당 증거금 기록 1개를 생성한다.
-// 증거금률은 100% 고정 (D-19), 정산 시 환불액은 최초 인출액에서 실제 배정 대금을 뺀 금액이다.
-// 환불액 = amount - postedAmount
-
 /**
  * 청약별 증거금 인출 기록과 상태를 관리한다.
+ * <p>
+ * 청약 1건당 증거금 기록 1개를 생성한다.
+ * <p>
+ * 환불액 = 최초 인출액 - 배정 대금 (amount - postedAmount)
  */
 @Getter
 @Entity
@@ -67,10 +67,17 @@ public class Margin extends BaseEntity {
     @Column(nullable = false, length = 20)
     private MarginStatus status = MarginStatus.PENDING;
 
-    // 정산 완료 시각
+    // 정산 완료 또는 반환된 시각
     private Instant settledAt;
 
-    // 같은 청약의 재요청이 처음 인출과 같은 계좌, 금액, 종목인지 확인한다
+    /**
+     * 동일 청약의 재요청이 처음 인출과 동일한지 확인한다.
+     *
+     * @param accountId 요청에 포함된 예수금 계좌 ID
+     * @param amount    요청에 포함된 금액
+     * @param ipoId     요청에 포함된 공모주 ID
+     * @return 일치하면 true, 다르면 false
+     */
     public boolean matches(UUID accountId, long amount, UUID ipoId) {
         return account.getId().equals(accountId)
                 && this.amount == amount
@@ -97,5 +104,35 @@ public class Margin extends BaseEntity {
         margin.ipoId = ipoId;
         margin.amount = amount;
         return margin;
+    }
+
+    /**
+     * 증거금 상태를 PENDING → VOIDED 으로 변경. (청약 취소, 실패 경우)
+     */
+    public void voidPending() {
+        if (status != MarginStatus.PENDING) {
+            throw new IllegalStateException("PENDING만 반환할 수 있습니다. marginId=" + id + ", status=" + status);
+        }
+        this.status = MarginStatus.VOIDED;
+        this.settledAt = Instant.now();
+    }
+
+    /**
+     * 증거금 상태를 PENDING → POSTED 으로 변경. (정상 배정, 정산 완료 처리 경우)
+     *
+     * @param postedAmount 배정 대금
+     */
+    public void postPending(long postedAmount) {
+        if (status != MarginStatus.PENDING) {
+            throw new IllegalStateException("PENDING만 정산할 수 있습니다. marginId=" + id + ", status=" + status);
+        }
+        // 0주는 정산이 아니라 반환(voidPending)이라 1 이상만 받는다. 증거금률 100%라 증거금을 넘을 수 없다
+        if (postedAmount <= 0 || postedAmount > amount) {
+            throw new IllegalArgumentException(
+                    "배정 대금은 1 이상, 증거금 이하여야 합니다. marginId=" + id + ", postedAmount=" + postedAmount + ", amount=" + amount);
+        }
+        this.postedAmount = postedAmount;
+        this.status = MarginStatus.POSTED;
+        this.settledAt = Instant.now();
     }
 }

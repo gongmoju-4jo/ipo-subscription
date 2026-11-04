@@ -198,6 +198,7 @@ python loadtest/report.py --run-id $RUN                                         
 - 3번에서 시나리오(`s0`~`s4`)와 회원 CSV를 바꿉니다: `--users data/users-s4.csv`, 값 조정은 `-e KEY=VALUE` (예: `-e RATE=300 -e DURATION=60s`).
 - 3번 종료 코드가 99이면 합격 기준을 어긴 것입니다 (7장).
 - 5번의 정합성 SQL 대부분은 Consumer가 구현된 뒤에야 의미 있는 값이 나옵니다. 그 전에는 청약 행이 생기지 않습니다.
+- 5번의 11~15번(배정, 정산 검사)은 배정 라운드가 `DONE`, 공모주가 `ALLOCATED`이고 정산 대기(`PENDING`) 증거금이 없을 때 다시 실행해야 의미가 있습니다. 배정 전에 나온 0행은 대상이 없어서 나온 것이라 통과로 보지 않습니다.
 - 5번 전에 Kafka Consumer lag이 0이고 `PENDING`이 0건인지 확인합니다 (Kafka-UI Consumers 탭 또는 `kafka-consumer-groups.sh --describe`).
 - 7번은 `results/$RUN/report.md`를 만듭니다 (k6 요약, 결과 분류, 서비스별 서버 지표). Prometheus가 구간 끝 이후의 수집을 마칠 때까지 몇 초 기다립니다. 5, 6번까지 끝낸 뒤에 실행하면 `precheck.txt`, `sql_result.txt`도 원본 목록에 들어갑니다. 컨테이너에서 실행하면 `PROMETHEUS_URL=http://prometheus:9090`을 줍니다.
 - 측정 후 Grafana "측정 대시보드"에서 측정 구간을 캡처합니다.

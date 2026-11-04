@@ -43,6 +43,7 @@ public class SubscriptionRefundService {
      * @return 처리 결과
      * @throws InvalidEventException 존재하지 않는 {@code subscriptionId}, 정산 금액이나 환불액이 저장한 청약과 맞지 않음,
      *                               이미 저장한 정산 결과와 다름, {@code CONFIRMED}, {@code ALLOCATED}, {@code REFUNDED} 외 상태인 경우
+     * @throws IllegalStateException {@code ALLOCATED}인데 배정 대금이 없는 경우 (데이터 문제). 재시도 대상이라 재시도를 모두 소진한 뒤 DLT로 보냄
      */
     @Transactional
     public RefundResult refund(MarginSettled event) {

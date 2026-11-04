@@ -233,8 +233,19 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 - 토픽 생성: 토픽 **자동 생성은 꺼져 있고**, `kafka-init`이 Kafka 기동 후 한 번 만들고 종료한다 (`docker/kafka/create-topics.sh`, 종료 상태가 정상)
   - 토픽 목록, 파티션 수는 `docker/kafka/create-topics.sh` **한 곳에서 관리**한다
   - 토픽 10개 + `{토픽}.DLT` 10개 = 20개: `subscription.requested`, `margin.reserve-requested`, `margin.reserved`, `margin.reserve-failed`, `margin.void-requested`, `margin.voided`, `ipo.closed`, `allocation.result`, `margin.settled`, `allocation.finished`
-  - 파티션 수 기본 3 (`.env`의 `KAFKA_TOPIC_PARTITIONS`), 복제 1 (단일 브로커)
+  - 파티션 수 기본 6 (`.env`의 `KAFKA_TOPIC_PARTITIONS`로 바꿀 수 있음), 복제 1 (단일 브로커)
+  - 📌 파티션 수는 계좌, 청약 서비스의 Consumer 수(`application.yml`의 `spring.kafka.listener.concurrency`, 6)와 같게 둔다. 바꾸면 청약 서비스 테스트의 `KafkaTestSupport.PARTITIONS`도 같이 바꾼다
+    - Consumer가 파티션보다 많으면 남는 Consumer는 일하지 않고, 적으면 동시 처리 수가 Consumer 수에 묶인다
+    - 같은 메시지 키(사람, 계좌, 공모주)는 늘 같은 파티션으로 가서 키 단위 순서는 파티션 수와 관계없이 지켜진다
   - 이미 있는 토픽은 건너뛴다 (여러 번 실행해도 됨). 파티션 수를 바꿔도 기존 토픽에는 적용되지 않는다
+    - ⚠️ 파티션 수가 다른 기존 토픽이 있으면 Kafka 데이터를 지우고 다시 만든다. Kafka에 쌓인 메시지가 지워진다 (DB는 유지)
+      ```bash
+      docker-compose stop kafka && docker-compose rm -f kafka
+      docker volume rm ipo-subscription_kafka-data   # 이름은 {프로젝트 폴더명}_kafka-data, `docker volume ls`로 확인
+      docker-compose up -d kafka kafka-init          # 서비스까지 띄울 때는 평소 실행 명령
+      ```
+    - 토픽 파티션 수 확인: `docker exec ipo-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --describe`의 `PartitionCount`
+    - 실행 중인 토픽을 `kafka-topics.sh --alter --partitions`로 늘리지 않는다. 늘린 순간부터 같은 키가 다른 파티션으로 가서 순서가 잠깐 뒤집힐 수 있고, 실패 메시지는 원래 토픽과 같은 파티션 번호의 `{토픽}.DLT`로 보내므로 DLT도 같은 수여야 한다. 파티션은 줄일 수 없다
   - 새 토픽 → 이벤트 명세 문서 먼저 수정한 뒤 스크립트의 `TOPICS`에 추가
 - 호스트 포트 변경: `.env`의 `KAFKA_PORT`(기본 29092), `KAFKA_UI_PORT`(기본 8989)
   - `KAFKA_PORT`를 바꾸면 서비스 실행 시 `KAFKA_BOOTSTRAP_SERVERS`도 `localhost:{바꾼 포트}`로 맞춘다

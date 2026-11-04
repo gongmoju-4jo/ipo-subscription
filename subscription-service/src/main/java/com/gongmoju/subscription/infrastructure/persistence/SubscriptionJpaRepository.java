@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -53,6 +54,27 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
                        @Param("attempts") int attempts, @Param("lastRequestedAt") Instant lastRequestedAt,
                        @Param("receivedAt") Instant receivedAt, @Param("now") Instant now,
                        @Param("auditor") String auditor);
+
+    /**
+    * 마지막 요청 시각이 기준 시각보다 이른 {@code PENDING}청약의 {@code subscription_id}를 오래된 순으로 최대 limit건 조회함.
+    * 미발행 증거금 인출 요청(margin.reserve-requested)이 있는 청약은 제외함.
+    */
+    @Query(value = """
+            SELECT s.subscription_id FROM subscription s
+            WHERE s.status = 'PENDING'
+              AND s.last_requested_at < :lastRequestedBefore
+              AND NOT EXISTS (SELECT 1 FROM outbox o
+                              WHERE o.aggregate_id = s.subscription_id
+                                AND o.topic = 'margin.reserve-requested'
+                                AND o.published_at IS NULL)
+            ORDER BY s.last_requested_at ASC
+            LIMIT :limit""", nativeQuery = true)
+    List<UUID> findStalePendingIds(@Param("lastRequestedBefore") Instant lastRequestedBefore, @Param("limit") int limit);
+
+    // 발행된 증거금 인출 요청 Outbox 중 가장 늦은 발행 시각. 없으면 null
+    @Query("select max(o.publishedAt) from Outbox o where o.aggregateId = :subscriptionId "
+            + "and o.topic = 'margin.reserve-requested' and o.publishedAt is not null")
+    Instant findLastReserveRequestPublishedAt(@Param("subscriptionId") UUID subscriptionId);
 
     // 응답에 공모주 정보가 없어서 공모주를 읽지 않는다.
     // 메서드 이름 쿼리(findByIpoIdAndStatus)는 ipo 테이블을 조인해 조건을 걸어서, s.ipo.id로 subscription.ipo_id 컬럼에 직접 건다

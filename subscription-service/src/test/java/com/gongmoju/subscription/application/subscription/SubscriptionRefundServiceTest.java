@@ -13,13 +13,22 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -236,6 +245,104 @@ class SubscriptionRefundServiceTest {
         // when, then
         assertThatThrownBy(() -> refundService.refund(event)).isInstanceOf(InvalidEventException.class);
         assertConfirmedWithoutRecord(event.eventId());
+    }
+
+    @Test
+    @DisplayName("배정 대금이 없는 ALLOCATED 청약이면 IllegalStateException이 나고 ALLOCATED로 남으며 처리 기록도 남지 않는다 (재시도 대상)")
+    void refund_throwsAndRollsBackProcessedEvent_whenAllocatedAmountIsMissing() {
+        // given
+        jdbcTemplate.update("UPDATE subscription SET status = 'ALLOCATED' WHERE subscription_id = ?", subscriptionId);
+        MarginSettled event = event(UUID.randomUUID(), 45_000, MARGIN_AMOUNT - 45_000);
+
+        // when, then
+        assertThatThrownBy(() -> refundService.refund(event)).isInstanceOf(IllegalStateException.class);
+        Map<String, Object> row = subscription();
+        assertThat(row.get("status")).isEqualTo("ALLOCATED");
+        assertThat(row.get("refund_amount")).isNull();
+        assertThat(processedCount(event.eventId())).isZero();
+    }
+
+    @Test
+    @DisplayName("같은 청약에 서로 다른 eventId의 정산 결과가 동시에 오면 한 번만 환불 완료되고 나머지는 무시되거나 재시도 대상 예외로 끝난다")
+    void refund_refundsOnce_whenConcurrent() throws Exception {
+        // given
+        storeAllocation("ALLOCATED", 3, 45_000, null);
+        int threads = 4;
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+
+        try {
+            // when
+            List<Future<RefundResult>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                MarginSettled event = event(UUID.randomUUID(), 45_000, MARGIN_AMOUNT - 45_000);
+                futures.add(executor.submit(() -> {
+                    barrier.await(10, TimeUnit.SECONDS);
+                    return refundService.refund(event);
+                }));
+            }
+            int refunded = 0;
+            for (Future<RefundResult> future : futures) {
+                try {
+                    RefundResult result = future.get(30, TimeUnit.SECONDS);
+                    if (result == RefundResult.REFUNDED) {
+                        refunded++;
+                    } else {
+                        assertThat(result).isEqualTo(RefundResult.ALREADY_REFUNDED_IGNORED);
+                    }
+                } catch (ExecutionException e) {
+                    // 낙관적 락 충돌은 Consumer의 에러 핸들러가 재시도하는 예외라 허용함 (재시도하면 REFUNDED 이후로 무시됨)
+                    assertThat(e.getCause()).isInstanceOf(OptimisticLockingFailureException.class);
+                }
+            }
+
+            // then
+            assertThat(refunded).isEqualTo(1);
+            Map<String, Object> row = subscription();
+            assertThat(row.get("status")).isEqualTo("REFUNDED");
+            assertThat(row.get("refund_amount")).isEqualTo(MARGIN_AMOUNT - 45_000);
+            assertThat(row.get("version")).isEqualTo(1L);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("같은 eventId의 정산 결과를 동시에 처리해도 청약 전환과 처리 기록은 한 번만 남는다")
+    void refund_refundsOnce_whenSameEventIsConcurrent() throws Exception {
+        // given
+        storeAllocation("ALLOCATED", 3, 45_000, null);
+        UUID eventId = UUID.randomUUID();
+        int threads = 4;
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+
+        try {
+            // when
+            List<Future<RefundResult>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(executor.submit(() -> {
+                    barrier.await(10, TimeUnit.SECONDS);
+                    return refundService.refund(event(eventId, 45_000, MARGIN_AMOUNT - 45_000));
+                }));
+            }
+            List<RefundResult> results = new ArrayList<>();
+            for (Future<RefundResult> future : futures) {
+                results.add(future.get(30, TimeUnit.SECONDS));
+            }
+
+            // then
+            assertThat(results).containsExactlyInAnyOrder(
+                    RefundResult.REFUNDED,
+                    RefundResult.DUPLICATE_EVENT_IGNORED,
+                    RefundResult.DUPLICATE_EVENT_IGNORED,
+                    RefundResult.DUPLICATE_EVENT_IGNORED);
+            assertThat(subscription().get("status")).isEqualTo("REFUNDED");
+            assertThat(subscription().get("version")).isEqualTo(1L);
+            assertThat(processedCount(eventId)).isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test

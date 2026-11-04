@@ -68,7 +68,12 @@ public class SubscriptionRefundService {
     }
 
     private RefundResult refundAllocated(Subscription subscription, MarginSettled event) {
-        long allocatedAmount = subscription.getAllocatedAmount();
+        Long storedAllocatedAmount = subscription.getAllocatedAmount();
+        if (storedAllocatedAmount == null) {
+            // 정상 흐름에서는 ALLOCATED면 배정 대금이 항상 있음 (데이터 문제). margin.voided의 해제 사유 누락과 같이 재시도 대상 예외로 두고, 재시도 후 DLT로 보냄
+            throw new IllegalStateException("ALLOCATED인데 배정 대금이 없는 청약은 환불을 완료할 수 없습니다: subscriptionId=" + subscription.getId());
+        }
+        long allocatedAmount = storedAllocatedAmount;
         if (event.postedAmount() != allocatedAmount || event.refundAmount() != subscription.getMarginAmount() - allocatedAmount) {
             // 저장한 배정 결과를 덮어쓰지 않음. 운영자가 계좌 서비스의 정산 값과 대조해 보정함 (이벤트 명세 margin.settled 절, 3-5)
             log.error("정산 결과가 배정 대금이나 증거금과 맞지 않음. 덮어쓰지 않고 DLT로 보냄. subscriptionId={}, marginAmount={}, allocatedAmount={}, postedAmount={}, refundAmount={}",

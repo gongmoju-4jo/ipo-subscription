@@ -76,6 +76,18 @@ class SubscriptionRefundTest {
     }
 
     @Test
+    @DisplayName("ALLOCATED인데 배정 대금이 없으면 IllegalStateException이 나고 ALLOCATED로 남는다 (데이터 문제, 재시도 대상)")
+    void completeRefund_throws_whenAllocatedAmountIsMissing() {
+        // given
+        Subscription subscription = inStatus(SubscriptionStatus.ALLOCATED);
+
+        // when, then
+        assertThatThrownBy(() -> subscription.completeRefund(MARGIN_AMOUNT)).isInstanceOf(IllegalStateException.class);
+        assertThat(subscription.getStatus()).isEqualTo(SubscriptionStatus.ALLOCATED);
+        assertThat(subscription.getRefundAmount()).isNull();
+    }
+
+    @Test
     @DisplayName("배정 대금과 정산 금액, 저장한 환불액과 환불액이 모두 같을 때만 같은 정산 결과로 본다")
     void hasSameRefund_comparesPostedAndRefundAmount() {
         // given

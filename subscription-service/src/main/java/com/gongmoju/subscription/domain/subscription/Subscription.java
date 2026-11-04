@@ -277,12 +277,15 @@ public class Subscription extends BaseEntity {
      * 환불액은 증거금 − 배정 대금과 같아야 함 (이벤트 명세 {@code margin.settled} 절).
      *
      * @param refundAmount 환불액 (원)
-     * @throws IllegalStateException    {@code ALLOCATED}가 아닌 상태에서 호출한 경우
+     * @throws IllegalStateException    {@code ALLOCATED}가 아닌 상태에서 호출했거나, 배정 대금이 없는 경우
      * @throws IllegalArgumentException 환불액이 증거금 − 배정 대금과 다른 경우
      */
     public void completeRefund(long refundAmount) {
         if (status != SubscriptionStatus.ALLOCATED) {
             throw new IllegalStateException("ALLOCATED 상태에서만 환불을 완료할 수 있습니다: " + status);
+        }
+        if (allocatedAmount == null) {
+            throw new IllegalStateException("배정 대금이 없는 청약은 환불을 완료할 수 없습니다: " + status);
         }
         if (refundAmount < 0 || refundAmount != marginAmount - allocatedAmount) {
             throw new IllegalArgumentException("환불액이 증거금 − 배정 대금과 다릅니다: refundAmount=" + refundAmount

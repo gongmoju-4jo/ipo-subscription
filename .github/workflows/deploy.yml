@@ -78,7 +78,11 @@ jobs:
       MODULES: eureka-server api-gateway account-service subscription-service allocation-service
 
     steps:
-      - name: 입력, 변수 확인
+      # 스모크 시크릿도 여기서 검사한다. 배포가 끝난 뒤 스모크에서야 실패하면 검증 안 된 새 버전이 떠 있게 되므로
+      - name: 입력, 변수, 시크릿 확인
+        env:
+          SMOKE_LOGIN_ID: ${{ secrets.SMOKE_LOGIN_ID }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
         run: |
           [[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]] || { echo "커밋 SHA 형식이 아닙니다: $SHA"; exit 1; }
           for v in AWS_REGION ECR_REGISTRY EC2_INSTANCE_ID; do
@@ -86,6 +90,9 @@ jobs:
           done
           [[ -n "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ]] || { echo "저장소 변수 AWS_DEPLOY_ROLE_ARN이 비어 있습니다"; exit 1; }
           [[ -n "${{ vars.DEPLOY_BASE_URL }}" ]] || { echo "저장소 변수 DEPLOY_BASE_URL이 비어 있습니다"; exit 1; }
+          # 값은 출력하지 않고 어느 시크릿이 틀렸는지만 알린다 (규칙은 회원가입과 같다)
+          [[ "$SMOKE_LOGIN_ID" =~ ^[a-z0-9]{4,20}$ ]] || { echo "저장소 시크릿 SMOKE_LOGIN_ID가 비어 있거나 형식이 틀립니다 (영문 소문자, 숫자 4~20자)"; exit 1; }
+          (( ${#SMOKE_PASSWORD} >= 8 && ${#SMOKE_PASSWORD} <= 20 )) || { echo "저장소 시크릿 SMOKE_PASSWORD가 비어 있거나 길이가 틀립니다 (8~20자)"; exit 1; }
 
       - name: 코드 가져오기
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

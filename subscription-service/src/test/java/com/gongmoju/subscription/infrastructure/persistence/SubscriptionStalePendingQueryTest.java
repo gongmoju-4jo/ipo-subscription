@@ -205,6 +205,20 @@ class SubscriptionStalePendingQueryTest {
         assertThat(count).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("응답 시간 초과 대상 조회용 PENDING 부분 인덱스(last_requested_at)가 만들어져 있다")
+    void pendingLastRequestedIndexExists() {
+        // given, when
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM pg_indexes WHERE schemaname = 'subscription' AND tablename = 'subscription' "
+                        + "AND indexname = 'ix_subscription_pending_last_requested' "
+                        + "AND indexdef LIKE '%(last_requested_at)%' AND indexdef LIKE '%PENDING%'",
+                Integer.class);
+
+        // then
+        assertThat(count).isEqualTo(1);
+    }
+
     private UUID insert(String status, Instant lastRequestedAt) {
         UUID id = UUID.randomUUID();
         jdbcTemplate.update("""

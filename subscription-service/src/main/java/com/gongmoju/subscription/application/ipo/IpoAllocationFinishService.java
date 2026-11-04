@@ -39,12 +39,14 @@ public class IpoAllocationFinishService {
      * <ul>
      *   <li>{@code CLOSED}: 배정 결과 합계를 확인한 뒤 {@code ALLOCATED}로 전환함. 합계가 맞지 않아도 에러 로그만 남기고 전환함</li>
      *   <li>{@code ALLOCATED}: 중복 완료 이벤트이므로 로그만 남기고 정상 종료함</li>
-     *   <li>{@code OPEN}: 정상적으로는 오지 않는 이벤트이므로 에러 로그를 남기고 상태는 바꾸지 않음</li>
+     *   <li>{@code OPEN}: 정상적으로는 오지 않는 이벤트이므로 상태를 바꾸지 않고 예외를 던짐. 배정은 {@code CLOSED} 이후의 {@code ipo.closed}로만 시작해서, 오면 배정 서비스나 데이터 문제임</li>
      * </ul>
+     * 예외는 다시 처리해도 결과가 같으므로 재시도 없이 DLT로 보냄 (이벤트 명세 3-3). 처리 기록도 함께 롤백되므로,
+     * 원인을 확인하고 공모주가 {@code CLOSED}가 된 뒤 DLT 메시지를 재발행하면 다시 처리됨 (이벤트 명세 3-5).
      *
      * @param event 배정 완료 내용 (필수 필드와 형식 검증을 통과한 값)
      * @return 처리 결과
-     * @throws InvalidEventException 존재하지 않는 {@code ipoId}
+     * @throws InvalidEventException 존재하지 않는 {@code ipoId}, 공모주가 {@code OPEN}인 경우
      */
     @Transactional
     public AllocationFinishedResult finish(AllocationFinished event) {
@@ -62,9 +64,11 @@ public class IpoAllocationFinishService {
                 yield AllocationFinishedResult.ALREADY_ALLOCATED_IGNORED;
             }
             case OPEN -> {
-                log.error("정상적으로는 오지 않는 배정 완료 이벤트를 받음. 상태를 바꾸지 않음. ipoId={}, status={}",
+                // 처리 기록을 남기고 끝내면 원인을 고친 뒤 재발행해도 중복으로 무시되므로, 예외로 롤백하고 DLT에 메시지를 남김
+                log.error("정상적으로는 오지 않는 배정 완료 이벤트를 받음. 상태를 바꾸지 않고 DLT로 보냄. ipoId={}, status={}",
                         ipo.getId(), ipo.getStatus());
-                yield AllocationFinishedResult.UNEXPECTED_STATE_IGNORED;
+                throw new InvalidEventException("배정 완료 이벤트를 받을 수 없는 공모주 상태입니다: ipoId=" + ipo.getId()
+                        + ", status=" + ipo.getStatus());
             }
         };
     }

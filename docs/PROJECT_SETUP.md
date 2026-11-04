@@ -278,7 +278,7 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
   → jar 빌드 → 이미지 5개 빌드, ECR 푸시 (태그 = 커밋 SHA)
   → SSM Run Command로 서버에서 deploy/deploy.sh 실행
       (레포를 그 커밋으로 맞춤 → Parameter Store 값으로 .env 생성 → 이미지 받기 → up -d → 서비스 5개 healthy 대기)
-  → 스모크 (deploy/smoke.sh: 공개 주소로 가입 → 로그인 → 계좌 개설 → 입금)
+  → 스모크 (deploy/smoke.sh: 공개 주소로 스모크 전용 계정 로그인 → 계좌 → 입금)
 ```
 
 - 설정: `.github/workflows/deploy.yml`. CI가 실패한 커밋, PR에서 돈 CI로는 배포하지 않는다
@@ -320,6 +320,16 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 | `ECR_REGISTRY` | `{계정 ID}.dkr.ecr.ap-northeast-2.amazonaws.com` |
 | `EC2_INSTANCE_ID` | 배포 서버 인스턴스 ID |
 | `DEPLOY_BASE_URL` | `http://{고정 IP}` (스모크가 사용) |
+
+저장소 시크릿 (같은 화면의 Secrets 탭)
+
+| 이름 | 값 |
+| --- | --- |
+| `SMOKE_LOGIN_ID` | 스모크 전용 계정 아이디 (영문 소문자, 숫자 4~20자) |
+| `SMOKE_PASSWORD` | 스모크 전용 계정 비밀번호 (8~20자) |
+
+- 스모크는 이 계정 하나를 계속 쓴다. 처음 배포 때 가입하고 계좌를 하나 연 뒤로는 로그인과 입금(1,000원)만 한다. 배포마다 운영 DB에 회원이 늘지 않는다
+- 이 계정은 시연에 쓰지 않는다 (배포마다 잔고가 늘어난다)
 
 - 인스턴스를 새로 만들면 `EC2_INSTANCE_ID`와 배포 역할의 SSM 권한 대상 인스턴스를 같이 바꾼다
 

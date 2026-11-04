@@ -6,6 +6,7 @@ name: Deploy
 #
 # 저장소 변수(Settings → Secrets and variables → Actions → Variables)
 #   AWS_REGION, AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY, EC2_INSTANCE_ID, DEPLOY_BASE_URL(예: http://{고정 IP})
+# 저장소 시크릿: SMOKE_LOGIN_ID, SMOKE_PASSWORD (배포 후 스모크 전용 계정)
 # AWS 권한은 OIDC로 받는다 (장기 액세스 키를 GitHub에 두지 않는다)
 on:
   workflow_run:
@@ -189,5 +190,9 @@ jobs:
           echo "결과: $status"
           [[ "$status" == "Success" ]]
 
-      - name: 스모크 (가입 → 로그인 → 계좌 개설 → 입금)
+      # 스모크 전용 고정 계정 (저장소 시크릿). 회원, 계좌는 처음 한 번만 생기고 입금만 쌓인다
+      - name: 스모크 (로그인 → 계좌 → 입금)
+        env:
+          SMOKE_LOGIN_ID: ${{ secrets.SMOKE_LOGIN_ID }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
         run: bash deploy/smoke.sh "${{ vars.DEPLOY_BASE_URL }}"

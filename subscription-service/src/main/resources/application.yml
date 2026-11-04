@@ -61,7 +61,7 @@ spring:
       enable-auto-commit: false         # 처리가 끝난 레코드만 커밋함 (리스너 ack-mode: record)
     listener:
       ack-mode: record
-      concurrency: 3                    # 파티션 3개(.env의 KAFKA_TOPIC_PARTITIONS 기본값)와 같은 수. 초기값이며 부하 테스트 결과로 조정함
+      concurrency: 6                    # 토픽 파티션 수(docker/kafka/create-topics.sh 기본값 6)와 같은 수. 파티션보다 많으면 남는 Consumer는 일하지 않음
 
 outbox:  # Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks, 멱등, max.block.ms)은 위 spring.kafka.producer를 함께 쓴다
   publisher:
@@ -77,6 +77,14 @@ ipo:
     interval: PT5S        # 이전 실행이 끝난 뒤 다시 확인하기까지 쉬는 시간
     grace-period: PT20S   # 마감 시각 뒤 대기 시간. 마감 전에 받은 요청의 발행이 끝나기를 기다린다 (max.block.ms 5초 + delivery.timeout.ms 10초 + 여유)
     alert-after: PT5M     # 대기 시간 뒤 이 시간 동안 마감하지 못하면 ERROR 로그. 이후 같은 간격으로 반복하고, 강제로 마감하지는 않는다
+
+saga:
+  timeout:  # PENDING 응답 시간 초과 처리 (이벤트 명세 3-5, 4장 위험 4). 응답이 없는 PENDING은 인출을 재요청하고, 최대 횟수에 도달하면 COMPENSATING(TIMEOUT)으로 보상
+    enabled: true            # false면 스케줄 실행을 끔
+    interval: PT5S           # 이전 실행이 끝난 뒤 재확인까지 쉬는 시간 (Outbox 발행기와 같은 임시값, 부하 테스트 뒤 조정)
+    response-timeout: PT30S  # 마지막 요청 시각에서 설정 시간이 지나면 응답이 없음으로 판정 (이벤트 명세에서 30초 확정. 같은 Consumer 재시도 합계 7초보다 길어야 함)
+    max-attempts: 3          # 총 인출 요청 횟수. 접수 90초 뒤 시간 초과 보상 (임시값, 부하 테스트 뒤 조정)
+    batch-size: 100          # 한 번에 처리하는 최대 건수 (오래된 순)
 
 eureka:
   client:

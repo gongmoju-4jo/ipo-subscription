@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# 배포 후 스모크: 게이트웨이(외부 주소)를 거쳐 가입(처음 한 번) → 로그인 → 계좌(없으면 개설) → 입금을 실행한다
-#   SMOKE_LOGIN_ID=... SMOKE_PASSWORD=... bash deploy/smoke.sh http://{고정 IP}
-# 스모크 전용 계정 하나를 계속 쓴다 (배포 워크플로는 저장소 시크릿에서 받는다). 회원과 계좌는 처음 한 번만 생기고 입금만 쌓인다
-# 비밀번호는 출력하지 않는다
+# 배포 후 스모크: 게이트웨이를 거쳐 가입(처음 한 번) → 로그인 → 계좌(없으면 개설) → 입금을 실행한다
+#   SMOKE_LOGIN_ID=... SMOKE_PASSWORD=... bash deploy/smoke.sh http://127.0.0.1:80
+# 배포 서버에서 deploy.sh가 실행한다 (계정은 Parameter Store). 비밀번호가 HTTP로 인터넷에 나가지 않도록 서버 안의 게이트웨이로 보낸다
+# 스모크 전용 계정 하나를 계속 쓴다. 회원과 계좌는 처음 한 번만 생기고 입금만 쌓인다
+# 비밀번호는 출력하지 않고 프로세스 인자에도 넣지 않는다 (요청 본문은 표준 입력으로 curl에 넘긴다)
 # 서비스가 Eureka에 등록되기 전에는 게이트웨이가 503을 줄 수 있어 첫 요청은 최대 SMOKE_WAIT초 동안 다시 시도한다
 set -euo pipefail
 
@@ -28,8 +29,8 @@ fi
 py=python3
 "$py" -c '' 2>/dev/null || py=python
 uuid() { "$py" -c 'import uuid; print(uuid.uuid4())'; }
-# JSON 문자열 값으로 안전하게 넣는다 (따옴표, 역슬래시가 든 비밀번호)
-jstr() { "$py" -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+# JSON 문자열 값으로 안전하게 넣는다 (따옴표, 역슬래시가 든 비밀번호). 값은 표준 입력으로 넘긴다 (printf는 셸 내장이라 프로세스 인자에 남지 않는다)
+jstr() { printf '%s' "$1" | "$py" -c 'import json,sys; print(json.dumps(sys.stdin.read()))'; }
 
 body_file="$(mktemp)"
 trap 'rm -f "$body_file"' EXIT
@@ -38,8 +39,8 @@ trap 'rm -f "$body_file"' EXIT
 call() {
   local opts=(-sS -o "$body_file" -w '%{http_code}' --max-time 15 -X "$1" "${base}$2")
   [[ -n "${4:-}" ]] && opts+=(-H "Authorization: Bearer $4")
-  [[ -n "${3:-}" ]] && opts+=(-H 'Content-Type: application/json' -d "$3")
-  curl "${opts[@]}" || true   # 연결 실패면 curl이 000을 출력한다
+  [[ -n "${3:-}" ]] && opts+=(-H 'Content-Type: application/json' --data-binary @-)
+  printf '%s' "${3:-}" | curl "${opts[@]}" || true   # 연결 실패면 curl이 000을 출력한다
 }
 
 expect() { # $1 단계 이름, $2 실제 상태, $3.. 허용 상태

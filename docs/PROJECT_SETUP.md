@@ -277,9 +277,12 @@ EC2 한 대(서울 리전)에 PostgreSQL, Kafka, 서비스 5개, 모니터링을
 develop 머지 → CI(build) 성공 → Deploy 워크플로
   → jar 빌드 → 이미지 5개 빌드, ECR 푸시 (태그 = 커밋 SHA)
   → SSM Run Command로 서버에서 deploy/deploy.sh 실행
-      (레포를 그 커밋으로 맞춤 → Parameter Store 값으로 .env 생성 → 이미지 받기 → up -d → 서비스 5개 healthy 대기)
-  → 스모크 (deploy/smoke.sh: 공개 주소로 스모크 전용 계정 로그인 → 계좌 → 입금)
+      (레포를 그 커밋으로 맞춤 → Parameter Store 값으로 .env 생성 → 이미지 받기 → up -d → 서비스 5개 healthy 대기
+       → 서버 안에서 스모크: deploy/smoke.sh로 스모크 전용 계정 로그인 → 계좌 → 입금)
+  → 공개 주소 확인 (Swagger 200, 토큰 없는 API 401. 자격 증명은 보내지 않음)
 ```
+
+- 비밀번호가 담긴 스모크는 서버 안에서 게이트웨이(`127.0.0.1:80`)로 보낸다. 배포 주소가 HTTP라 비밀번호를 인터넷으로 보내지 않기 위해서다. 서버 밖과는 SSM의 암호화된 채널로만 오간다
 
 - 설정: `.github/workflows/deploy.yml`. CI가 실패한 커밋, PR에서 돈 CI로는 배포하지 않는다
 - 배포는 한 번에 하나만 실행된다. 머지가 겹치면 앞 배포가 끝난 뒤 다음 배포가 실행된다
@@ -300,12 +303,13 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 - GitHub → Actions → Deploy → **Run workflow**. `sha`를 비우면 선택한 브랜치의 최신 커밋, 넣으면 그 커밋을 배포한다
 - develop에 머지되어 CI가 성공한 커밋만 배포할 수 있다. 작업 브랜치의 커밋을 넣으면 AWS에 접근하기 전에 멈춘다
 - 롤백은 이전 커밋 SHA를 넣어 실행한다. ECR에 이미지가 있으면 빌드 없이 바로 배포한다 (ECR에는 서비스마다 최근 이미지 5개만 남고, 그보다 오래된 커밋은 다시 빌드한다)
-- 서버에는 서비스 5개가 healthy까지 간 마지막 배포 SHA가 `/opt/ipo/.last-tag`, 그 전 SHA가 `/opt/ipo/.prev-tag`에 남는다. 그 뒤 스모크의 성공 여부는 Actions 실행 결과로 본다
+- 서버에는 healthy와 스모크까지 통과한 마지막 배포 SHA가 `/opt/ipo/.last-tag`, 그 전 SHA가 `/opt/ipo/.prev-tag`에 남는다
 - DB 스키마는 되돌리지 않는다 (`ddl-auto: update`는 컬럼 추가만 반영). 스키마를 바꾸는 변경은 시연 직전에 넣지 않는다
 
 #### 비밀값
 
-- AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택)
+- AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택), `SMOKE_LOGIN_ID`, `SMOKE_PASSWORD`
+- `SMOKE_LOGIN_ID`(영문 소문자, 숫자 4~20자), `SMOKE_PASSWORD`(8~20자)는 배포 후 스모크 전용 계정이다. 이 계정 하나를 계속 쓴다: 처음 배포 때 가입하고 계좌를 하나 연 뒤로는 로그인과 입금(1,000원)만 해서 배포마다 회원이 늘지 않는다. 시연에는 쓰지 않는다 (배포마다 잔고가 늘어난다). `.env`에는 넣지 않는다
 - 배포할 때마다 서버의 `/opt/ipo/.env`(권한 600)를 다시 만든다. 서버의 `.env`를 손으로 고치지 않는다 (다음 배포 때 덮어쓴다)
 - ⚠️ DB 비밀번호 4개는 첫 배포 뒤 바꾸지 않는다. PostgreSQL 볼륨이 처음 만들어질 때 한 번만 계정을 만들어서, 바꾸면 서비스가 DB에 접속하지 못한다
 - ⚠️ `GRAFANA_ADMIN_PASSWORD`도 Grafana가 처음 뜰 때 한 번만 쓴다. 바꾸려면 Grafana 화면에서 바꾸고 파라미터도 같은 값으로 맞춘다
@@ -319,17 +323,7 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 | `AWS_DEPLOY_ROLE_ARN` | 배포용 IAM 역할 ARN |
 | `ECR_REGISTRY` | `{계정 ID}.dkr.ecr.ap-northeast-2.amazonaws.com` |
 | `EC2_INSTANCE_ID` | 배포 서버 인스턴스 ID |
-| `DEPLOY_BASE_URL` | `http://{고정 IP}` (스모크가 사용) |
-
-저장소 시크릿 (같은 화면의 Secrets 탭)
-
-| 이름 | 값 |
-| --- | --- |
-| `SMOKE_LOGIN_ID` | 스모크 전용 계정 아이디 (영문 소문자, 숫자 4~20자) |
-| `SMOKE_PASSWORD` | 스모크 전용 계정 비밀번호 (8~20자) |
-
-- 스모크는 이 계정 하나를 계속 쓴다. 처음 배포 때 가입하고 계좌를 하나 연 뒤로는 로그인과 입금(1,000원)만 한다. 배포마다 운영 DB에 회원이 늘지 않는다
-- 이 계정은 시연에 쓰지 않는다 (배포마다 잔고가 늘어난다)
+| `DEPLOY_BASE_URL` | `http://{고정 IP}` (공개 주소 확인이 사용) |
 
 - 인스턴스를 새로 만들면 `EC2_INSTANCE_ID`와 배포 역할의 SSM 권한 대상 인스턴스를 같이 바꾼다
 

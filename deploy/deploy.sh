@@ -43,16 +43,28 @@ main() {
   local tmp
   tmp="$(mktemp "${app_dir}/.env.XXXXXX")"
   chmod 600 "$tmp"
-  # 값은 화면에 출력하지 않는다. 이름=값 형식으로만 파일에 쓴다
-  aws ssm get-parameters-by-path --region "$region" --path "$param_path" --with-decryption \
-    --query 'Parameters[].[Name,Value]' --output text \
-    | while IFS=$'\t' read -r name value; do
-        printf '%s=%s\n' "${name##*/}" "$value"
-      done > "$tmp"
+  # 값은 화면에 출력하지 않는다
+  # Compose는 따옴표 없는 .env 값의 $를 변수로 바꾼다. 작은따옴표로 감싸 값을 그대로 넘기고, 작은따옴표가 든 값은 받지 않는다
+  local params name value invalid=()
+  params="$(aws ssm get-parameters-by-path --region "$region" --path "$param_path" --with-decryption \
+    --query 'Parameters[].[Name,Value]' --output text)"
+  while IFS=$'\t' read -r name value; do
+    [[ -z "$name" ]] && continue
+    if [[ "$value" == *"'"* ]]; then
+      invalid+=("${name##*/}")
+      continue
+    fi
+    printf "%s='%s'\n" "${name##*/}" "$value"
+  done <<< "$params" > "$tmp"
+  if (( ${#invalid[@]} > 0 )); then
+    rm -f "$tmp"
+    echo "작은따옴표(')가 든 값은 쓸 수 없습니다: ${invalid[*]} (경로 ${param_path})" >&2
+    exit 1
+  fi
 
   local key missing=()
   for key in "${required[@]}"; do
-    grep -q "^${key}=." "$tmp" || missing+=("$key")
+    grep -q "^${key}='[^']" "$tmp" || missing+=("$key")
   done
   if (( ${#missing[@]} > 0 )); then
     rm -f "$tmp"
@@ -61,11 +73,11 @@ main() {
   fi
 
   {
-    echo "ALERT_ENV=prod"
-    echo "GF_SERVER_ROOT_URL=http://localhost:3000"
+    echo "ALERT_ENV='prod'"
+    echo "GF_SERVER_ROOT_URL='http://localhost:3000'"
     # docker compose ps, logs를 손으로 칠 때도 같은 이미지를 가리키도록 남긴다
-    echo "ECR_REGISTRY=${registry}"
-    echo "IMAGE_TAG=${tag}"
+    echo "ECR_REGISTRY='${registry}'"
+    echo "IMAGE_TAG='${tag}'"
   } >> "$tmp"
   mv -f "$tmp" "${app_dir}/.env"
 

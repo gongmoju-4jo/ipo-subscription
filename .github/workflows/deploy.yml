@@ -1,7 +1,7 @@
 name: Deploy
 
 # develop에 머지되어 CI(빌드, 테스트)가 성공한 커밋만 EC2에 배포한다. CI가 실패한 커밋은 배포하지 않는다
-# 수동 실행(Run workflow): 재배포, 롤백. sha를 비우면 선택한 브랜치의 최신 커밋을 배포한다
+# 수동 실행(Run workflow): 재배포, 롤백. sha를 비우면 선택한 브랜치의 최신 커밋을 배포한다. develop CI가 성공한 커밋만 받는다
 # 배포 브랜치를 main으로 바꿀 때는 branches를 main으로 바꾸고, ci.yml의 push 대상에도 main을 추가한다
 #
 # 저장소 변수(Settings → Secrets and variables → Actions → Variables)
@@ -22,6 +22,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  actions: read   # 수동 실행 때 CI 실행 결과 조회
 
 # 배포는 한 번에 하나만. 진행 중인 배포를 취소하지 않고 끝난 뒤 다음 배포를 실행한다
 concurrency:
@@ -64,6 +65,21 @@ jobs:
       # 이미지 태그는 전체 SHA로 통일한다 (짧은 SHA로 수동 실행해도 같은 태그가 되게)
       - name: 전체 SHA
         run: echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      # 수동 실행은 develop에 머지되어 CI가 성공한 커밋만 받는다 (리뷰, CI를 거치지 않은 커밋 배포 방지)
+      # AWS 자격 증명을 받기 전에 확인한다. 확인되지 않은 커밋의 빌드 스크립트가 자격 증명에 닿지 않게
+      - name: CI 통과 확인 (수동 실행)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count="$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&status=success" --jq '.total_count')"
+          if [[ "${count:-0}" -lt 1 ]]; then
+            echo "이 커밋은 develop push로 실행된 CI 성공 기록이 없어 배포하지 않습니다: $SHA"
+            echo "develop에 머지되어 CI가 성공한 커밋(또는 이전에 배포된 커밋)을 지정하세요"
+            exit 1
+          fi
+          echo "CI 성공 기록 확인: $SHA"
 
       - name: AWS 자격 증명 (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

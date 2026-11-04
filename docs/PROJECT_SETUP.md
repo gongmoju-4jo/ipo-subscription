@@ -296,8 +296,9 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 #### 수동 실행, 롤백
 
 - GitHub → Actions → Deploy → **Run workflow**. `sha`를 비우면 선택한 브랜치의 최신 커밋, 넣으면 그 커밋을 배포한다
+- develop에 머지되어 CI가 성공한 커밋만 배포할 수 있다. 작업 브랜치의 커밋을 넣으면 AWS에 접근하기 전에 멈춘다
 - 롤백은 이전 커밋 SHA를 넣어 실행한다. ECR에 이미지가 있으면 빌드 없이 바로 배포한다 (ECR에는 서비스마다 최근 이미지 5개만 남고, 그보다 오래된 커밋은 다시 빌드한다)
-- 서버에는 마지막 성공 배포 SHA가 `/opt/ipo/.last-tag`, 그 전 SHA가 `/opt/ipo/.prev-tag`에 남는다
+- 서버에는 서비스 5개가 healthy까지 간 마지막 배포 SHA가 `/opt/ipo/.last-tag`, 그 전 SHA가 `/opt/ipo/.prev-tag`에 남는다. 그 뒤 스모크의 성공 여부는 Actions 실행 결과로 본다
 - DB 스키마는 되돌리지 않는다 (`ddl-auto: update`는 컬럼 추가만 반영). 스키마를 바꾸는 변경은 시연 직전에 넣지 않는다
 
 #### 비밀값

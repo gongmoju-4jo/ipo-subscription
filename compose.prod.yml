@@ -1,0 +1,46 @@
+# 배포 환경(EC2)용. docker-compose.yml, compose.perf.yml 위에 겹쳐 쓴다 (자원 상한, JVM 힙은 compose.perf.yml 값을 그대로 쓴다)
+#   docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml up -d
+# ECR_REGISTRY, IMAGE_TAG는 배포 스크립트가 넣는다. 비어 있으면 실행하지 않는다
+# 서비스 이미지는 서버에서 빌드하지 않고 ECR에서 받는다 (build를 지워 실수로 서버 빌드가 일어나지 않게 한다)
+# 외부에 여는 포트는 게이트웨이 하나(80 → 8080)뿐이다. 나머지는 docker-compose.yml대로 127.0.0.1에만 열린다
+# Compose는 여러 파일의 ports를 합치므로 게이트웨이 포트는 !override로 교체한다 (그대로 두면 127.0.0.1:8080 바인딩이 함께 남는다)
+# 서버가 재부팅되거나 컨테이너가 죽으면 다시 띄운다 (kafka-init은 토픽을 만들고 끝나는 컨테이너라 제외)
+services:
+  postgres:
+    restart: unless-stopped
+
+  kafka:
+    restart: unless-stopped
+
+  eureka-server:
+    build: !reset null
+    image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/eureka-server:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
+    restart: unless-stopped
+
+  api-gateway:
+    build: !reset null
+    image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/api-gateway:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
+    restart: unless-stopped
+    ports: !override
+      - "80:8080"
+
+  account-service:
+    build: !reset null
+    image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/account-service:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
+    restart: unless-stopped
+
+  subscription-service:
+    build: !reset null
+    image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/subscription-service:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
+    restart: unless-stopped
+
+  allocation-service:
+    build: !reset null
+    image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/allocation-service:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
+    restart: unless-stopped
+
+  prometheus:
+    restart: unless-stopped
+
+  grafana:
+    restart: unless-stopped

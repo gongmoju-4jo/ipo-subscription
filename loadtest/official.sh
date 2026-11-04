@@ -269,7 +269,7 @@ PYEOF
 )" || { say "토큰 CSV 확인 실패"; return 1; }
   is_uint "$USERS" && [ "$USERS" -ge 1000 ] || { say "회원 수가 1,000명 미만: $USERS"; return 1; }
   TOKEN_AT="$t0"
-  say "토큰 재발급 #$TOKEN_N 완료 ($(( $(date +%s) - t0 ))초, 회원 $USERS명)"
+  say "토큰 재발급 #$TOKEN_N 완료 ($(( $(date +%s) - t0 ))초, 회원 ${USERS}명)"
 }
 # 다음 실행(need초) 동안 토큰이 유효한지 보고, 모자라면 요청 없는 지금 재발급하고 GAP초 쉰다
 ensure_token() {
@@ -538,7 +538,7 @@ main() {
   done
   case "$BATCH" in ''|*[!A-Za-z0-9._-]*) echo "사용: $0 --batch <이름> (영문, 숫자, . _ - 만)" >&2; exit 1 ;; esac
   for v in WARM_RATE WARM_BUCKET WARM_WINDOW WARM_CONSEC WARM_MIN WARM_MAX GAP DUR S1_REPEAT S0_PRICE S1_PRICE QUANTITY PRE_VUS MAX_VUS DRAIN_TIMEOUT STATS_INTERVAL; do
-    is_uint "${!v}" || { echo "$v가 0 이상의 정수가 아님: ${!v}" >&2; exit 1; }
+    is_uint "${!v}" || { echo "${v}가 0 이상의 정수가 아님: ${!v}" >&2; exit 1; }
   done
   [ "$S1_REPEAT" -ge 1 ] || { echo "S1_REPEAT는 1 이상 (팀 규칙은 3)" >&2; exit 1; }
   # 워밍업 인자는 warmup.py와 같은 범위로 여기서 먼저 막는다 (빌드, 복원, 토큰 발급 뒤에야 드러나지 않게)

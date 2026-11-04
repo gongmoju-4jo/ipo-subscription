@@ -60,7 +60,7 @@ expect_out "parse_offsets 합계 5" 0 5 parse_offsets subscription.requested.DLT
 expect_out "parse_offsets 다른 토픽 → 실패" 1 "" parse_offsets margin.voided.DLT < "$T.7"
 expect_out "parse_offsets 빈 출력 → 실패" 1 "" parse_offsets subscription.requested.DLT < "$T.3"
 topics_n="$(kafka_topics | wc -l | tr -d ' ')"
-[ "$topics_n" = 10 ] && ok "kafka_topics: create-topics.sh에서 토픽 10개" || bad "kafka_topics" "$topics_n개"
+[ "$topics_n" = 10 ] && ok "kafka_topics: create-topics.sh에서 토픽 10개" || bad "kafka_topics" "${topics_n}개"
 # kafka_dlt_total은 아래 "DLT 토픽을 한 번에 조회"에서 확인한다
 
 # ---- sql_in, is_uuid, ceil_div ----
@@ -186,7 +186,7 @@ ST="$(mktemp -d)"; OUT_SAVE="${OUT:-}"; OUT="$ST"
 docker() { [ "$1" = stats ] && printf '{"Name":"ipo-kafka","CPUPerc":"12.5%%"}\r\n{"Name":"k6-b-S1-100-r1","CPUPerc":"80%%"}\n'; }
 STATS_INTERVAL=1; stats_start 2>/dev/null; sleep 3; stats_stop 2>/dev/null
 n="$(grep -c . "$ST/docker-stats.raw" 2>/dev/null || echo 0)"
-[ "$n" -ge 4 ] && ok "stats: 1초 간격 3초 동안 샘플 2번 이상 (컨테이너 2개 x 2 이상 = $n줄)" || bad "stats 줄 수" "$n"
+[ "$n" -ge 4 ] && ok "stats: 1초 간격 3초 동안 샘플 2번 이상 (컨테이너 2개 x 2 이상 = ${n}줄)" || bad "stats 줄 수" "$n"
 awk -F'\t' '$1 !~ /^[0-9]+$/ || $2 !~ /^\{/ { bad = 1 } END { exit bad }' "$ST/docker-stats.raw" && ok "stats: 모든 줄이 '<epoch>\\t<json>' 형식" || bad "stats 형식" "$(head -2 "$ST/docker-stats.raw")"
 grep -q $'\r' "$ST/docker-stats.raw" && bad "stats CR" "CR이 남음" || ok "stats: docker 출력의 CR을 지운다 (Windows)"
 [ -z "$STATS_PID" ] && ok "stats_stop: 기록 프로세스를 멈추고 PID를 비운다" || bad "stats_stop PID" "$STATS_PID"

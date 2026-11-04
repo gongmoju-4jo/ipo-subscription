@@ -21,8 +21,8 @@ import static org.awaitility.Awaitility.await;
  */
 final class KafkaTestSupport {
 
-    // 운영 기본값 (.env의 KAFKA_TOPIC_PARTITIONS). 리스너 동시 처리 수도 같은 값
-    static final int PARTITIONS = 3;
+    // 운영 기본값 (docker/kafka/create-topics.sh). 리스너 동시 처리 수(application.yml concurrency)도 같은 값
+    static final int PARTITIONS = 6;
 
     private KafkaTestSupport() {
     }

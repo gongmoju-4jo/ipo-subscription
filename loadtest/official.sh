@@ -22,6 +22,7 @@
 #   WARM_BUCKET=15    구간 길이(초). 구간마다 게이트웨이 평균 응답 시간을 Prometheus에서 읽는다
 #   WARM_WINDOW=8     추세를 볼 구간 수 (15초 x 8 = 최근 2분)
 #   WARM_SLOPE_PCT=5  기울기 허용 범위: 최근 창에 맞춘 직선의 기울기가 분당 창 평균의 +-5% 이내면 통과
+#   WARM_SLOPE_MS=1   또는 기울기가 분당 +-1ms 이내면 통과 (응답이 수 ms일 때 %로 본 허용 폭이 너무 좁아지는 것을 막는다. 0이면 보지 않음)
 #   WARM_CONSEC=2     연속 통과 횟수 (한 번 우연히 평평하게 나온 것으로 끝내지 않는다)
 #   WARM_MIN=180 WARM_MAX=900  최소, 최대 시간(초). 최대까지 정상 상태에 닿지 않으면 중단 (종료 코드 2)
 #   GAP=30          실행 사이 대기(초). 앞 실행의 처리 대기는 소진 확인으로 없애고, 이 대기는 보고서의 서버 지표 구간
@@ -68,7 +69,7 @@ COLD_CONTAINERS="ipo-api-gateway ipo-subscription-service ipo-account-service"
 JAR_TARGETS="ipo-api-gateway:api-gateway ipo-account-service:account-service ipo-subscription-service:subscription-service ipo-allocation-service:allocation-service ipo-eureka-server:eureka-server"
 ALL_CONTAINERS="ipo-postgres ipo-kafka ipo-eureka-server ipo-api-gateway ipo-account-service ipo-subscription-service ipo-allocation-service"
 
-WARM_RATE="${WARM_RATE:-200}"; WARM_BUCKET="${WARM_BUCKET:-15}"; WARM_WINDOW="${WARM_WINDOW:-8}"; WARM_SLOPE_PCT="${WARM_SLOPE_PCT:-5}"
+WARM_RATE="${WARM_RATE:-200}"; WARM_BUCKET="${WARM_BUCKET:-15}"; WARM_WINDOW="${WARM_WINDOW:-8}"; WARM_SLOPE_PCT="${WARM_SLOPE_PCT:-5}"; WARM_SLOPE_MS="${WARM_SLOPE_MS:-1}"
 WARM_CONSEC="${WARM_CONSEC:-2}"; WARM_MIN="${WARM_MIN:-180}"; WARM_MAX="${WARM_MAX:-900}"; GAP="${GAP:-30}"
 STAGES="${STAGES:-100,200,300,433,600}"; DUR="${DUR:-90}"; S1_REPEAT="${S1_REPEAT:-3}"
 S0_PRICE="${S0_PRICE:-15000}"; S1_PRICE="${S1_PRICE:-1000}"; QUANTITY="${QUANTITY:-10}"
@@ -396,7 +397,7 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
     else echo "jar $mod 로컬=$local_sha 컨테이너=${cont_sha:-조회 실패} (다름)" >> "$OUT/env.txt"; mismatch=$((mismatch + 1)); fi
   done
   {
-    echo "설정 WARM_RATE=$WARM_RATE WARM_BUCKET=$WARM_BUCKET WARM_WINDOW=$WARM_WINDOW WARM_SLOPE_PCT=$WARM_SLOPE_PCT WARM_CONSEC=$WARM_CONSEC WARM_MIN=$WARM_MIN WARM_MAX=$WARM_MAX"
+    echo "설정 WARM_RATE=$WARM_RATE WARM_BUCKET=$WARM_BUCKET WARM_WINDOW=$WARM_WINDOW WARM_SLOPE_PCT=$WARM_SLOPE_PCT WARM_SLOPE_MS=$WARM_SLOPE_MS WARM_CONSEC=$WARM_CONSEC WARM_MIN=$WARM_MIN WARM_MAX=$WARM_MAX"
     echo "설정 GAP=$GAP STAGES=$STAGES DUR=$DUR S1_REPEAT=$S1_REPEAT S0_VUS=$S0_VUS S0_ITERS=$S0_ITERS S0_PRICE=$S0_PRICE S1_PRICE=$S1_PRICE QUANTITY=$QUANTITY PRE_VUS=$PRE_VUS MAX_VUS=$MAX_VUS"
     echo "설정 PG_CONTAINER=$PG_CONTAINER KAFKA_CONTAINER=$KAFKA_CONTAINER EUREKA_URL=$EUREKA_URL"
     echo "설정 P95_LIMIT=$P95_LIMIT DRAIN_LIMIT=$DRAIN_LIMIT DRAIN_TIMEOUT=$DRAIN_TIMEOUT SKIP_BUILD=${SKIP_BUILD:-0} ALLOW_DIRTY=${ALLOW_DIRTY:-0}"
@@ -414,7 +415,7 @@ run_warmup() {
   first="${WARM_IPOS%%,*}"
   ensure_token $((WARM_MAX + 300))
   mkdir -p "$DIR/results/$run"
-  say "워밍업 시작: ${WARM_RATE}건/초 일정 부하, ${WARM_BUCKET}초 구간 ${WARM_WINDOW}개 창의 기울기가 분당 +-${WARM_SLOPE_PCT}% 이내 연속 ${WARM_CONSEC}번이면 끝 (최소 ${WARM_MIN}초, 최대 ${WARM_MAX}초)"
+  say "워밍업 시작: ${WARM_RATE}건/초 일정 부하, ${WARM_BUCKET}초 구간 ${WARM_WINDOW}개 창의 기울기가 분당 +-${WARM_SLOPE_PCT}% 또는 +-${WARM_SLOPE_MS}ms 이내 연속 ${WARM_CONSEC}번이면 끝 (최소 ${WARM_MIN}초, 최대 ${WARM_MAX}초)"
   t0="$(date +%s)"
   (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_LABEL="$BATCH" K6_NAME="k6-$run" K6_NETWORK="$K6_NET"      bash run-k6.sh s1 --ipo "$first" --run-id "$run" -e "IPO_IDS=$WARM_IPOS" -e "RATE=$WARM_RATE" -e "DURATION=$((WARM_MAX + 60))s"        -e "PRE_VUS=$PRE_VUS" -e "MAX_VUS=$MAX_VUS" -e "QUANTITY=$QUANTITY") > "$DIR/results/$run/k6-console.out" 2>&1 &
   kpid=$!
@@ -422,7 +423,7 @@ run_warmup() {
   sleep 12
   kill -0 "$kpid" 2>/dev/null || { wait "$kpid"; die 8 "$run k6가 시작하자마자 끝남 (종료 코드 $?, results/$run/k6-console.out)"; }
   # 가상 사용자 준비(약 8초)가 끝난 뒤부터 구간을 센다
-  py "$(pypath "$DIR/verify/warmup.py")" --since $((t0 + 10)) --csv "$(pypath "$OUT/warmup.csv")" --prometheus "${PROMETHEUS_URL:-http://127.0.0.1:9090}"     --bucket "$WARM_BUCKET" --window "$WARM_WINDOW" --slope-pct "$WARM_SLOPE_PCT" --consecutive "$WARM_CONSEC" --min "$WARM_MIN" --max "$WARM_MAX"     >> "$LOG" 2>&1; wrc=$?
+  py "$(pypath "$DIR/verify/warmup.py")" --since $((t0 + 10)) --csv "$(pypath "$OUT/warmup.csv")" --prometheus "${PROMETHEUS_URL:-http://127.0.0.1:9090}"     --bucket "$WARM_BUCKET" --window "$WARM_WINDOW" --slope-pct "$WARM_SLOPE_PCT" --slope-ms "$WARM_SLOPE_MS" --consecutive "$WARM_CONSEC" --min "$WARM_MIN" --max "$WARM_MAX"     >> "$LOG" 2>&1; wrc=$?
   docker stop -t 30 "k6-$run" > /dev/null 2>&1
   wait "$kpid"; krc=$?
   t1="$(date +%s)"
@@ -544,6 +545,7 @@ main() {
   # 워밍업 인자는 warmup.py와 같은 범위로 여기서 먼저 막는다 (빌드, 복원, 토큰 발급 뒤에야 드러나지 않게)
   case "$WARM_SLOPE_PCT" in ""|*[!0-9.]*|*.*.*) echo "WARM_SLOPE_PCT는 0보다 큰 숫자: $WARM_SLOPE_PCT" >&2; exit 1 ;; esac
   awk -v s="$WARM_SLOPE_PCT" 'BEGIN { exit !(s + 0 > 0) }' || { echo "WARM_SLOPE_PCT는 0보다 큰 숫자: $WARM_SLOPE_PCT" >&2; exit 1; }
+  case "$WARM_SLOPE_MS" in ""|*[!0-9.]*|*.*.*|.) echo "WARM_SLOPE_MS는 0 이상의 숫자: $WARM_SLOPE_MS" >&2; exit 1 ;; esac
   [ "$WARM_BUCKET" -ge 5 ] && [ "$WARM_WINDOW" -ge 3 ] && [ "$WARM_CONSEC" -ge 1 ] && [ "$WARM_MAX" -ge "$WARM_MIN" ] \
     || { echo "워밍업 인자 범위: WARM_BUCKET>=5, WARM_WINDOW>=3, WARM_CONSEC>=1, WARM_MAX>=WARM_MIN (지금 $WARM_BUCKET, $WARM_WINDOW, $WARM_CONSEC, $WARM_MIN~$WARM_MAX)" >&2; exit 1; }
   case "$RESTORE$DB_DUMP" in 00|01|10|11) ;; *) echo "RESTORE, DB_DUMP는 0 또는 1: RESTORE=$RESTORE DB_DUMP=$DB_DUMP" >&2; exit 1 ;; esac

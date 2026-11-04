@@ -144,9 +144,9 @@ bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results
 2. 토큰을 새로 받고(회원 수 확인), 예수금이 최대로 필요한 금액 이상인지 확인합니다.
 3. gateway, subscription, account를 재시작(콜드 상태)하고, healthy와 Eureka UP을 기다린 뒤 45초 쉬고 사전 점검(`precheck.sh`)을 합니다.
 4. 회차에 쓸 공모주를 모두 미리 만듭니다 (부하 중에는 만들지 않습니다).
-5. 워밍업: 측정 앞의 독립 단계입니다. `WARM_RATE`(기본 200건/초)로 일정한 부하를 걸고(모든 요청이 확정되게 공모주를 돌림), `WARM_BUCKET`(15초)마다 게이트웨이 평균 응답 시간을 Prometheus에서 읽습니다. 최근 `WARM_WINDOW`개 구간(2분)에 직선을 맞춰 기울기가 분당 창 평균의 ±`WARM_SLOPE_PCT`%(5%) 이내인 판정이 `WARM_CONSEC`번(2번) 연속이면 정상 상태로 보고 끝냅니다. 최소 `WARM_MIN`(180초), 최대 `WARM_MAX`(900초)이고, 최대까지 닿지 않으면 중단합니다. 구간마다 `warmup.csv`에 남고, 끝나면 소진을 확인하고 쉽니다.
+5. 워밍업: 측정 앞의 독립 단계입니다. `WARM_RATE`(기본 200건/초)로 일정한 부하를 걸고(모든 요청이 확정되게 공모주를 돌림), `WARM_BUCKET`(15초)마다 게이트웨이 평균 응답 시간을 Prometheus에서 읽습니다. 최근 `WARM_WINDOW`개 구간(2분)에 직선을 맞춰, 기울기가 분당 창 평균의 ±`WARM_SLOPE_PCT`%(5%) 이내이거나 분당 ±`WARM_SLOPE_MS`ms(1ms) 이내인 판정이 `WARM_CONSEC`번(2번) 연속이면 정상 상태로 보고 끝냅니다. 최소 `WARM_MIN`(180초), 최대 `WARM_MAX`(900초)이고, 최대까지 닿지 않으면 중단합니다. 구간마다 `warmup.csv`에 남고, 끝나면 소진을 확인하고 쉽니다.
    - 회차마다 흔들림으로 판정하던 방식(연속 3회차 ±20%)은 아직 빨라지는 중이어도 통과할 수 있어서, 워밍업이 끝나는 시점이 실행마다 달라지고 측정값에 섞였습니다. 시간 구간의 추세(기울기)로 보면 내려가는 중에는 통과하지 않습니다.
-   - 데워진 뒤 응답이 수 ms로 작으면 1~2ms 흔들림도 상대 기울기로는 크게 보여 최대 시간에 닿을 수 있습니다. 그때는 `warmup.csv`를 보고 판단합니다.
+   - 절대 기울기(분당 ±1ms)를 함께 보는 이유: 데워진 뒤 응답이 2~7ms로 작으면 ±5%의 허용 폭이 분당 약 0.25ms까지 좁아져, 평평한 상태의 작은 흔들림도 통과하지 못하고 최대 시간에 닿습니다. 분당 1ms는 2분 창 전체로 2ms 차이라 G1(평균 500ms), G2(15초) 판정에 영향이 없는 크기이고, 응답이 아직 내려가는 중(분당 1ms보다 빠르게 감소)이면 통과하지 않습니다. `WARM_SLOPE_MS=0`이면 상대 기울기만 봅니다.
 6. S0: 1,000건(100명 x 10회) 측정 3회를 실행합니다.
 7. S1: 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
 8. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다. docker stats 기록은 `docker-stats.csv`와 `자원.md`(실행마다 k6 구간의 컨테이너별 CPU, 메모리 최대)로 정리합니다. 어떤 실행의 k6 구간에 샘플이 없으면 후처리 실패(종료 코드 10)로 셉니다. 기록 간격(5초)의 2배보다 짧은 실행은 샘플이 빠질 수 있어 경고로만 남깁니다.
@@ -257,7 +257,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `진행.log` | 진행 기록 (재시작 시각, 토큰 재발급 시점, 회차별 처리량, 소진 대기 시간) |
 | `env.txt` | 커밋, dirty 여부, 서비스별 jar sha256, OS, bash, Python, Docker, compose 버전, 설정값 전부 |
 | `manifest.csv` | 실행 목록 (워밍업은 시나리오 `W`, 구간 `warmup`으로 판정에 쓰지 않음. run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
-| `warmup.csv` | 워밍업 구간마다 끝 시각, 경과 초, 요청 수, 평균 응답 ms, 분당 기울기 %, 연속 통과 수, 판정 |
+| `warmup.csv` | 워밍업 구간마다 끝 시각, 경과 초, 요청 수, 평균 응답 ms, 분당 기울기 %, 분당 기울기 ms, 연속 통과 수, 판정 |
 | `db-after.dump` | 측정이 끝난 DB 덤프 (`pg_dump -Fc --create`. `pg_restore --create -d postgres`로 되살린다) |
 | `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |
 | `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점) |
@@ -288,7 +288,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | 변수 | 기본값 | 쓰는 곳 |
 | --- | --- | --- |
 | `WARM_RATE`, `WARM_MIN`, `WARM_MAX` | `200`, `180`, `900` | `official.sh` (워밍업 도착률 건/초, 최소, 최대 초) |
-| `WARM_BUCKET`, `WARM_WINDOW`, `WARM_SLOPE_PCT`, `WARM_CONSEC` | `15`, `8`, `5`, `2` | `official.sh` → `warmup.py` (구간 초, 추세 창 구간 수, 분당 기울기 허용 %, 연속 통과 수) |
+| `WARM_BUCKET`, `WARM_WINDOW`, `WARM_SLOPE_PCT`, `WARM_SLOPE_MS`, `WARM_CONSEC` | `15`, `8`, `5`, `1`, `2` | `official.sh` → `warmup.py` (구간 초, 추세 창 구간 수, 분당 기울기 허용 %, 분당 기울기 허용 ms(0이면 보지 않음), 연속 통과 수) |
 | `RESTORE`, `DB_DUMP` | `1`, `1` | `official.sh` (시작할 때 기준 스냅샷 복원, 끝난 뒤 DB 덤프. `RESTORE=0`은 `env.txt`에 남고 정식 결과로 쓰지 않음) |
 | `BASELINE_DIR` | `loadtest/data/baseline` | `baseline.sh`, `official.sh` (기준 스냅샷 위치) |
 | `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |

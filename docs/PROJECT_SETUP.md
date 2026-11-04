@@ -234,7 +234,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
   - 토픽 목록, 파티션 수는 `docker/kafka/create-topics.sh` **한 곳에서 관리**한다
   - 토픽 10개 + `{토픽}.DLT` 10개 = 20개: `subscription.requested`, `margin.reserve-requested`, `margin.reserved`, `margin.reserve-failed`, `margin.void-requested`, `margin.voided`, `ipo.closed`, `allocation.result`, `margin.settled`, `allocation.finished`
   - 파티션 수 기본 6 (`.env`의 `KAFKA_TOPIC_PARTITIONS`로 바꿀 수 있음), 복제 1 (단일 브로커)
-  - 📌 파티션 수는 계좌, 청약 서비스의 Consumer 수(`application.yml`의 `spring.kafka.listener.concurrency`, 6)와 같게 둔다. 바꾸면 청약 서비스 테스트의 `KafkaTestSupport.PARTITIONS`도 같이 바꾼다
+  - 📌 파티션 수는 계좌, 청약, 배정 서비스의 Consumer 수(`application.yml`의 `spring.kafka.listener.concurrency`, 6)와 같게 둔다. 바꾸면 청약 서비스 테스트의 `KafkaTestSupport.PARTITIONS`도 같이 바꾼다
     - Consumer가 파티션보다 많으면 남는 Consumer는 일하지 않고, 적으면 동시 처리 수가 Consumer 수에 묶인다
     - 같은 메시지 키(사람, 계좌, 공모주)는 늘 같은 파티션으로 가서 키 단위 순서는 파티션 수와 관계없이 지켜진다
   - 이미 있는 토픽은 건너뛴다 (여러 번 실행해도 됨). 파티션 수를 바꿔도 기존 토픽에는 적용되지 않는다

@@ -61,7 +61,7 @@ spring:
       enable-auto-commit: false         # 처리가 끝난 레코드만 커밋함 (리스너 ack-mode: record)
     listener:
       ack-mode: record
-      concurrency: 3                    # 파티션 3개(.env의 KAFKA_TOPIC_PARTITIONS 기본값)와 같은 수. 초기값이며 부하 테스트 결과로 조정함
+      concurrency: 6                    # 토픽 파티션 수(docker/kafka/create-topics.sh 기본값 6)와 같은 수. 파티션보다 많으면 남는 Consumer는 일하지 않음
 
 outbox:  # Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks, 멱등, max.block.ms)은 위 spring.kafka.producer를 함께 쓴다
   publisher:

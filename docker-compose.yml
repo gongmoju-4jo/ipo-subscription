@@ -67,7 +67,7 @@ services:
       timeout: 10s
       retries: 10
 
-  # 토픽을 만들고 종료하는 일회성 컨테이너. 토픽 목록, 파티션 수(기본 3)는 docker/kafka/create-topics.sh
+  # 토픽을 만들고 종료하는 일회성 컨테이너. 토픽 목록, 파티션 수(기본 6)는 docker/kafka/create-topics.sh
   kafka-init:
     image: apache/kafka:4.3.1
     container_name: ipo-kafka-init

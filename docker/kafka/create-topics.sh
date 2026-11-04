@@ -5,7 +5,7 @@ set -euo pipefail
 
 BOOTSTRAP_SERVER="kafka:29092"
 # 파티션 수는 여기 한 곳에서 관리한다 (환경변수 KAFKA_TOPIC_PARTITIONS가 있으면 그 값)
-PARTITIONS="${KAFKA_TOPIC_PARTITIONS:-3}"
+PARTITIONS="${KAFKA_TOPIC_PARTITIONS:-6}"
 # 단일 브로커라 복제본은 1
 REPLICATION_FACTOR=1
 

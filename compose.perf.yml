@@ -16,7 +16,6 @@
 # | prometheus, grafana | 0.5 | 512m | - |
 #
 # JVM은 CPU 상한을 보고 가용 프로세서 수(스레드 풀, GC 스레드)를 정한다. 상한을 바꾸면 그 영향도 같이 바뀐다.
-# Kafka 토픽 파티션 6개, 계좌, 청약 서비스 Consumer concurrency 6 (기본 3).
 # PostgreSQL은 pg_stat_statements와 슬로우 쿼리 로그(100ms 이상)를 켠다 (loadtest/sql/slow-queries.sql).
 # kafka-ui는 측정 중 자원을 쓰지 않도록 기본 실행에서 뺀다 (필요하면 `docker-compose -f docker-compose.yml -f compose.perf.yml up -d kafka-ui`).
 # 이 파일 없이 먼저 띄운 kafka-ui는 전환 후에도 계속 떠 있으니 `docker-compose stop kafka-ui`로 멈춘다.
@@ -39,11 +38,6 @@ services:
     environment:
       KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
 
-  # 토픽 파티션 수. Consumer concurrency(아래 서비스 환경변수)와 같은 수로 맞춘다
-  kafka-init:
-    environment:
-      KAFKA_TOPIC_PARTITIONS: "6"
-
   kafka-ui:
     profiles: ["tools"]
 
@@ -64,14 +58,12 @@ services:
     mem_limit: 1g
     environment:
       JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
-      SPRING_KAFKA_LISTENER_CONCURRENCY: "6"
 
   subscription-service:
     cpus: 2.0
     mem_limit: 1g
     environment:
       JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
-      SPRING_KAFKA_LISTENER_CONCURRENCY: "6"
 
   allocation-service:
     cpus: 0.5

@@ -62,8 +62,8 @@ spring:
       enable-auto-commit: false
     listener:
       ack-mode: record
-      # 파티션 3개(.env의 KAFKA_TOPIC_PARTITIONS 기본값)와 같은 수. 초기값이며 부하 테스트 결과로 조정한다
-      concurrency: 3
+      # 토픽 파티션 수(docker/kafka/create-topics.sh 기본값 6)와 같은 수. 파티션보다 많으면 남는 Consumer는 일하지 않는다
+      concurrency: 6
 
 # Outbox 발행기 (서비스 3개가 같은 키)
 outbox:

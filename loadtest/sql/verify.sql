@@ -1,4 +1,4 @@
--- 정합성 검증 SQL 10종. 슈퍼유저로 접속해서 실행한다.
+-- 정합성 검증 SQL 15종 (11~15는 배정, 정산 뒤 검사). 슈퍼유저로 접속해서 실행한다.
 -- 사용: psql -v ipo="'<이번 회차 공모주 ID>'" -f verify.sql    (verify.sh가 대신 실행한다)
 -- skip_global 변수를 주면 전체 계좌 기준인 2, 3번을 건너뛴다 (verify.sh가 공모주 여러 개를 한 번에 검사할 때 두 번째 공모주부터)
 \pset pager off
@@ -39,3 +39,27 @@ SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM confirmed_
 
 \echo '== 10. 전체 소진 시간 (기대: 기록)'
 SELECT MIN(received_at), MAX(confirmed_at), MAX(confirmed_at) - MIN(received_at) FROM subscription.subscription WHERE ipo_id = :ipo AND status = 'CONFIRMED';
+
+-- 11~15: 배정, 정산 뒤 정합성 (G4). 모두 위반만 행으로 나온다 (기대 0행). 배정 전이면 대상이 없어 0행
+--   [계좌 단독] account 스키마만 읽는다 → 계좌 서비스 대사 배치로 그대로 옮길 수 있다
+--   [서비스 간] subscription, allocation 스키마도 읽는다 → 배치에서는 서비스 계정 권한이 없어 이벤트나 API로 받은 값과 비교해야 한다
+--   배정 라운드가 DONE이고 공모주가 ALLOCATED가 아니면 대상이 없어 0행이 나와 통과로 오해할 수 있으므로 건너뛴다고 출력한다
+SELECT EXISTS (SELECT 1 FROM allocation.allocation_round WHERE ipo_id = :ipo AND status = 'DONE') AND EXISTS (SELECT 1 FROM subscription.ipo WHERE ipo_id = :ipo AND status = 'ALLOCATED') AS alloc_done \gset
+\if :alloc_done
+\echo '== 11. [계좌 단독] 모든 증거금에 인출 원장이 정확히 1줄, 금액 = 증거금 (기대: 0행. 중복 인출, 원장 누락)'
+SELECT m.subscription_id FROM account.margin m LEFT JOIN account.ledger_entry l ON l.margin_id = m.margin_id AND l.type = 'MARGIN_PENDING' WHERE m.ipo_id = :ipo GROUP BY m.subscription_id, m.amount HAVING count(l.ledger_entry_id) <> 1 OR COALESCE(SUM(l.amount), 0) <> m.amount;
+
+\echo '== 12. [계좌 단독] 상태별 원장: PENDING은 정산, 반환 원장 없음 / POSTED는 차감 = posted_amount, 환불 = 증거금 - posted_amount / VOIDED는 반환 = 증거금, 정산 원장 없음 (기대: 0행)'
+WITH l AS (SELECT margin_id, COALESCE(SUM(amount) FILTER (WHERE type = 'MARGIN_POST'), 0) AS post, COALESCE(SUM(amount) FILTER (WHERE type = 'REFUND'), 0) AS refund, COALESCE(SUM(amount) FILTER (WHERE type = 'MARGIN_VOID'), 0) AS void FROM account.ledger_entry WHERE margin_id IS NOT NULL GROUP BY margin_id) SELECT m.subscription_id, m.status, m.amount, m.posted_amount, COALESCE(l.post, 0) AS post, COALESCE(l.refund, 0) AS refund, COALESCE(l.void, 0) AS void FROM account.margin m LEFT JOIN l USING (margin_id) WHERE m.ipo_id = :ipo AND NOT CASE m.status WHEN 'PENDING' THEN COALESCE(l.post, 0) + COALESCE(l.refund, 0) + COALESCE(l.void, 0) = 0 WHEN 'POSTED' THEN COALESCE(l.post, 0) = m.posted_amount AND COALESCE(l.refund, 0) = m.amount - m.posted_amount AND COALESCE(l.void, 0) = 0 WHEN 'VOIDED' THEN COALESCE(l.void, 0) = m.amount AND COALESCE(l.post, 0) + COALESCE(l.refund, 0) = 0 ELSE false END;
+
+\echo '== 13. [서비스 간] 배정 결과와 정산 일치: 0주는 VOIDED, 배정이 있으면 POSTED이고 posted_amount = 배정 대금 (기대: 0행. 정산 대기 중이면 PENDING으로 나온다)'
+SELECT a.subscription_id, a.allocated_amount, m.status, m.posted_amount FROM allocation.allocation a JOIN allocation.allocation_round r ON r.allocation_round_id = a.allocation_round_id AND r.status = 'DONE' LEFT JOIN account.margin m ON m.subscription_id = a.subscription_id WHERE a.ipo_id = :ipo AND (m.margin_id IS NULL OR CASE WHEN a.allocated_amount = 0 THEN m.status <> 'VOIDED' ELSE m.status <> 'POSTED' OR m.posted_amount <> a.allocated_amount END);
+
+\echo '== 14. [서비스 간] 배정 수량 합 = 일반청약 물량과 신청 수량 합 중 작은 값 (기대: 0행. 신청 수량은 배정 대상 청약 전체로 따로 합산해 배정 행이 빠진 청약도 잡는다)'
+WITH req AS (SELECT COALESCE(SUM(requested_quantity), 0) AS requested FROM subscription.subscription WHERE ipo_id = :ipo AND status IN ('CONFIRMED', 'ALLOCATED', 'REFUNDED')), alloc AS (SELECT allocation_round_id, SUM(allocated_quantity) AS allocated FROM allocation.allocation WHERE ipo_id = :ipo GROUP BY allocation_round_id) SELECT r.allocation_round_id, r.retail_quantity, req.requested, COALESCE(a.allocated, 0) AS allocated FROM allocation.allocation_round r CROSS JOIN req LEFT JOIN alloc a ON a.allocation_round_id = r.allocation_round_id WHERE r.ipo_id = :ipo AND r.status = 'DONE' AND COALESCE(a.allocated, 0) <> LEAST(r.retail_quantity, req.requested);
+
+\echo '== 15. [서비스 간] 배정이 끝난 공모주에 남은 PENDING 증거금 (기대: 0행. 정산 메시지 처리 중이면 잠깐 나올 수 있다)'
+SELECT m.subscription_id FROM account.margin m JOIN subscription.ipo i ON i.ipo_id = m.ipo_id WHERE m.ipo_id = :ipo AND i.status = 'ALLOCATED' AND m.status = 'PENDING';
+\else
+\echo '== 11~15. (건너뜀: 이 공모주의 배정 라운드가 DONE이 아니거나 공모주가 ALLOCATED가 아니다. 배정, 정산이 끝난 뒤 다시 실행한다)'
+\endif

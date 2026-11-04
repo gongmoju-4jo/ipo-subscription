@@ -75,11 +75,15 @@ main() {
   for key in "${required[@]}"; do
     grep -q "^${key}='[^']" "$tmp" || missing+=("$key")
   done
-  [[ -n "$smoke_id" ]] || missing+=("SMOKE_LOGIN_ID")
-  [[ -n "$smoke_pw" ]] || missing+=("SMOKE_PASSWORD")
+  # 스모크 계정 형식은 서비스를 바꾸기 전에 검사한다 (smoke.sh, 회원가입과 같은 규칙)
+  # 작은따옴표는 다른 값과 같이 거부한다 (이전 버전 deploy.sh로 롤백할 때도 같은 값으로 배포되도록)
+  [[ "$smoke_id" =~ ^[a-z0-9]{4,20}$ ]] || missing+=("SMOKE_LOGIN_ID(영문 소문자, 숫자 4~20자)")
+  if (( ${#smoke_pw} < 8 || ${#smoke_pw} > 20 )) || [[ "$smoke_pw" == *"'"* ]]; then
+    missing+=("SMOKE_PASSWORD(8~20자, 작은따옴표 불가)")
+  fi
   if (( ${#missing[@]} > 0 )); then
     rm -f "$tmp"
-    echo "Parameter Store에 값이 없습니다: ${missing[*]} (경로 ${param_path})" >&2
+    echo "Parameter Store 값이 없거나 형식이 틀립니다: ${missing[*]} (경로 ${param_path})" >&2
     exit 1
   fi
 

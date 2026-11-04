@@ -75,6 +75,11 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     }
 
     @Override
+    public Optional<Instant> findLastReserveRequestPublishedAt(UUID subscriptionId) {
+        return Optional.ofNullable(jpaRepository.findLastReserveRequestPublishedAt(subscriptionId));
+    }
+
+    @Override
     public Page<Subscription> findByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status, Pageable pageable) {
         return jpaRepository.findByIpoIdAndStatus(ipoId, status, pageable);
     }

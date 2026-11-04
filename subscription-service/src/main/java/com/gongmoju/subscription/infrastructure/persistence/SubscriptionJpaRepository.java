@@ -71,6 +71,11 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
             LIMIT :limit""", nativeQuery = true)
     List<UUID> findStalePendingIds(@Param("lastRequestedBefore") Instant lastRequestedBefore, @Param("limit") int limit);
 
+    // 발행된 증거금 인출 요청 Outbox 중 가장 늦은 발행 시각. 없으면 null
+    @Query("select max(o.publishedAt) from Outbox o where o.aggregateId = :subscriptionId "
+            + "and o.topic = 'margin.reserve-requested' and o.publishedAt is not null")
+    Instant findLastReserveRequestPublishedAt(@Param("subscriptionId") UUID subscriptionId);
+
     // 응답에 공모주 정보가 없어서 공모주를 읽지 않는다.
     // 메서드 이름 쿼리(findByIpoIdAndStatus)는 ipo 테이블을 조인해 조건을 걸어서, s.ipo.id로 subscription.ipo_id 컬럼에 직접 건다
     @Query(value = "select s from Subscription s where s.ipo.id = :ipoId and s.status = :status",

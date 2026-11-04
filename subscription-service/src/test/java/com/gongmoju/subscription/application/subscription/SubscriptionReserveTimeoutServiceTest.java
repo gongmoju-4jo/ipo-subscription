@@ -274,6 +274,60 @@ class SubscriptionReserveTimeoutServiceTest {
     }
 
     @Test
+    @DisplayName("최대 횟수에 이른 PENDING이라도 마지막 인출 요청이 방금 발행되어 응답 시간이 지나지 않았으면 TIMEOUT 보상을 하지 않고 기다린다")
+    void handle_defersTimeoutCompensation_whenLastReserveRequestWasPublishedRecently() {
+        // given
+        // 기록은 60초 전(응답 시간이 지남)이지만 발행이 밀려 5초 전에야 나감
+        jdbcTemplate.update("UPDATE subscription SET attempts = ?, last_requested_at = ? WHERE subscription_id = ?",
+                MAX_ATTEMPTS, Timestamp.from(Instant.now().minusSeconds(60)), subscriptionId);
+        insertReserveRequestOutbox(Instant.now().minusSeconds(5));
+
+        // when
+        ReserveTimeoutResult result = timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+
+        // then
+        assertThat(result).isEqualTo(ReserveTimeoutResult.NOT_TIMED_OUT_IGNORED);
+        Map<String, Object> row = subscription();
+        assertThat(row.get("status")).isEqualTo("PENDING");
+        assertThat(row.get("attempts")).isEqualTo(MAX_ATTEMPTS);
+        assertThat(row.get("version")).isEqualTo(0L);
+        assertThat(outbox("margin.void-requested")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("마지막 인출 요청이 발행된 지 응답 시간이 지났으면 TIMEOUT 보상을 시작한다")
+    void handle_startsTimeoutCompensation_whenLastReserveRequestWasPublishedLongAgo() {
+        // given
+        jdbcTemplate.update("UPDATE subscription SET attempts = ?, last_requested_at = ? WHERE subscription_id = ?",
+                MAX_ATTEMPTS, Timestamp.from(Instant.now().minusSeconds(120)), subscriptionId);
+        insertReserveRequestOutbox(Instant.now().minusSeconds(60));
+
+        // when
+        ReserveTimeoutResult result = timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+
+        // then
+        assertThat(result).isEqualTo(ReserveTimeoutResult.TIMEOUT_COMPENSATION_STARTED);
+        assertThat(subscription().get("status")).isEqualTo("COMPENSATING");
+        assertThat(outbox("margin.void-requested")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("최대 횟수에 이르지 않은 PENDING은 마지막 요청이 방금 발행됐어도 재요청한다 (계좌가 같은 subscriptionId의 재요청을 멱등 처리하므로 해가 없음)")
+    void handle_retriesReserve_evenWhenLastReserveRequestWasPublishedRecently() {
+        // given
+        jdbcTemplate.update("UPDATE subscription SET last_requested_at = ? WHERE subscription_id = ?",
+                Timestamp.from(Instant.now().minusSeconds(60)), subscriptionId);
+        insertReserveRequestOutbox(Instant.now().minusSeconds(5));
+
+        // when
+        ReserveTimeoutResult result = timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+
+        // then
+        assertThat(result).isEqualTo(ReserveTimeoutResult.RETRIED);
+        assertThat(subscription().get("attempts")).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("TIMEOUT 보상 뒤에 같은 청약을 다시 처리해도 인출 요청이나 반환 요청이 더 기록되지 않는다")
     void handle_recordsNothingMore_afterTimeoutCompensation() {
         // given
@@ -337,6 +391,15 @@ class SubscriptionReserveTimeoutServiceTest {
                         0, now(), 'test', now(), 'test')""",
                 subscriptionId, UUID.randomUUID(), ipoId, userId, accountId, MARGIN_AMOUNT, status, attempts,
                 Timestamp.from(lastRequestedAt));
+    }
+
+    // 이미 발행된(published_at이 있는) 인출 요청 Outbox 행을 만든다. 서비스가 만드는 행과 같은 모양
+    private void insertReserveRequestOutbox(Instant publishedAt) {
+        jdbcTemplate.update("""
+                INSERT INTO outbox (outbox_id, aggregate_type, aggregate_id, event_type, topic, message_key,
+                                    payload, created_at, published_at, retry_count)
+                VALUES (?, 'SUBSCRIPTION', ?, 'margin.reserve-requested', 'margin.reserve-requested', ?, CAST('{}' AS JSONB), now(), ?, 0)""",
+                UUID.randomUUID(), subscriptionId, accountId.toString(), Timestamp.from(publishedAt));
     }
 
     private Map<String, Object> subscription() {

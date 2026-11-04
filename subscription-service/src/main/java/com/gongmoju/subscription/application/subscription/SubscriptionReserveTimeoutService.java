@@ -60,6 +60,14 @@ public class SubscriptionReserveTimeoutService {
         }
 
         if (subscription.hasReachedMaxAttempts(maxAttempts)) {
+            // 마지막 요청이 늦게 발행됐다면 계좌가 응답할 시간을 받지 못했으므로 이번 주기에는 보상하지 않고 기다림.
+            // (중간 재요청은 계좌가 같은 subscriptionId를 멱등 처리해서 일찍 나가도 해가 없어 확인하지 않음)
+            Instant publishedAt = subscriptionRepository.findLastReserveRequestPublishedAt(subscriptionId).orElse(null);
+            if (publishedAt != null && !publishedAt.isBefore(lastRequestedBefore)) {
+                log.info("마지막 인출 요청이 발행된 지 응답 시간이 지나지 않아 TIMEOUT 보상을 미룸. subscriptionId={}, publishedAt={}",
+                        subscriptionId, publishedAt);
+                return ReserveTimeoutResult.NOT_TIMED_OUT_IGNORED;
+            }
             compensationService.startTimeoutCompensation(subscriptionId);
             return ReserveTimeoutResult.TIMEOUT_COMPENSATION_STARTED;
         }

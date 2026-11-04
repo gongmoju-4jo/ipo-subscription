@@ -160,6 +160,38 @@ class SubscriptionStalePendingQueryTest {
         assertThat(ids).containsExactly(id);
     }
 
+    @Test
+    @DisplayName("마지막 인출 요청의 발행 시각은 발행된 인출 요청 Outbox 중 가장 늦은 시각이고, 미발행 행과 다른 토픽 행은 무시한다")
+    void findLastReserveRequestPublishedAt_returnsLatestPublishedOfReserveRequests() {
+        // given
+        UUID id = insert("PENDING", threshold.minusSeconds(10));
+        Instant first = Instant.now().minusSeconds(100);
+        Instant last = Instant.now().minusSeconds(20);
+        insertOutbox(id, RESERVE_REQUESTED, first);
+        insertOutbox(id, RESERVE_REQUESTED, last);
+        insertOutbox(id, RESERVE_REQUESTED, null);
+        insertOutbox(id, "margin.void-requested", Instant.now());
+
+        // when
+        java.util.Optional<Instant> publishedAt = subscriptionRepository.findLastReserveRequestPublishedAt(id);
+
+        // then
+        assertThat(publishedAt).isPresent();
+        assertThat(publishedAt.get().truncatedTo(ChronoUnit.MILLIS)).isEqualTo(last.truncatedTo(ChronoUnit.MILLIS));
+    }
+
+    @Test
+    @DisplayName("발행된 인출 요청 Outbox가 없으면 마지막 발행 시각은 비어 있다")
+    void findLastReserveRequestPublishedAt_isEmpty_whenNothingPublished() {
+        // given
+        UUID id = insert("PENDING", threshold.minusSeconds(10));
+        insertOutbox(id, RESERVE_REQUESTED, null);
+
+        // when, then
+        assertThat(subscriptionRepository.findLastReserveRequestPublishedAt(id)).isEmpty();
+        assertThat(subscriptionRepository.findLastReserveRequestPublishedAt(UUID.randomUUID())).isEmpty();
+    }
+
     private UUID insert(String status, Instant lastRequestedAt) {
         UUID id = UUID.randomUUID();
         jdbcTemplate.update("""

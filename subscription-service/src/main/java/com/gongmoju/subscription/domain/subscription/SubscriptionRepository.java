@@ -46,6 +46,12 @@ public interface SubscriptionRepository {
      */
     List<UUID> findStalePendingIds(Instant lastRequestedBefore, int limit);
 
+    /**
+     * 발행된 {@code margin.reserve-requested} Outbox 중 가장 늦은 발행 시각. 발행된 것이 없으면 빈 값.
+     * 마지막 인출 요청이 늦게 발행됐을 때 계좌가 응답할 시간을 받기 전에 TIMEOUT 보상으로 넘어가지 않도록 확인하는 용도.
+     */
+    Optional<Instant> findLastReserveRequestPublishedAt(UUID subscriptionId);
+
     // 공모주의 청약 중 주어진 상태들의 건수 (마감 조건의 진행 중 SAGA 건수, ipo.closed의 confirmedCount, 배정 완료 때 배정 대상 청약 수)
     long countByIpoIdAndStatusIn(UUID ipoId, Collection<SubscriptionStatus> statuses);
 

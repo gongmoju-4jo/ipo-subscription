@@ -1,0 +1,146 @@
+name: Deploy
+
+# develop에 머지되어 CI(빌드, 테스트)가 성공한 커밋만 EC2에 배포한다. CI가 실패한 커밋은 배포하지 않는다
+# 수동 실행(Run workflow): 재배포, 롤백. sha를 비우면 선택한 브랜치의 최신 커밋을 배포한다
+# 배포 브랜치를 main으로 바꿀 때는 branches를 main으로 바꾸고, ci.yml의 push 대상에도 main을 추가한다
+#
+# 저장소 변수(Settings → Secrets and variables → Actions → Variables)
+#   AWS_REGION, AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY, EC2_INSTANCE_ID, DEPLOY_BASE_URL(예: http://{고정 IP})
+# AWS 권한은 OIDC로 받는다 (장기 액세스 키를 GitHub에 두지 않는다)
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 배포할 커밋 SHA (비우면 선택한 브랜치의 최신 커밋)
+        required: false
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+# 배포는 한 번에 하나만. 진행 중인 배포를 취소하지 않고 끝난 뒤 다음 배포를 실행한다
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    # CI가 develop push(머지)로 실행되어 성공한 경우만. PR에서 돈 CI로는 배포하지 않는다
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha || github.sha }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      MODULES: eureka-server api-gateway account-service subscription-service allocation-service
+
+    steps:
+      - name: 입력, 변수 확인
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]] || { echo "커밋 SHA 형식이 아닙니다: $SHA"; exit 1; }
+          for v in AWS_REGION ECR_REGISTRY EC2_INSTANCE_ID; do
+            [[ -n "${!v}" ]] || { echo "저장소 변수 $v가 비어 있습니다"; exit 1; }
+          done
+          [[ -n "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ]] || { echo "저장소 변수 AWS_DEPLOY_ROLE_ARN이 비어 있습니다"; exit 1; }
+          [[ -n "${{ vars.DEPLOY_BASE_URL }}" ]] || { echo "저장소 변수 DEPLOY_BASE_URL이 비어 있습니다"; exit 1; }
+
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # 이미지 태그는 전체 SHA로 통일한다 (짧은 SHA로 수동 실행해도 같은 태그가 되게)
+      - name: 전체 SHA
+        run: echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: AWS 자격 증명 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: ECR 로그인
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ECR 태그는 덮어쓸 수 없다(IMMUTABLE). 이미 올라간 커밋(재배포, 롤백)은 빌드를 건너뛴다
+      - name: 이미지가 이미 있는지 확인
+        id: images
+        run: |
+          missing=""
+          for m in $MODULES; do
+            docker manifest inspect "$ECR_REGISTRY/ipo/$m:$SHA" > /dev/null 2>&1 || missing="$missing $m"
+          done
+          echo "missing=${missing# }" >> "$GITHUB_OUTPUT"
+          echo "새로 빌드할 이미지: ${missing:- 없음}"
+
+      - name: JDK 21 설정
+        if: steps.images.outputs.missing != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Gradle 설정
+        if: steps.images.outputs.missing != ''
+        uses: gradle/actions/setup-gradle@v4
+
+      # 테스트는 CI가 이미 통과시킨 커밋이라 다시 돌리지 않는다
+      - name: jar 빌드
+        if: steps.images.outputs.missing != ''
+        run: ./gradlew build -x test
+
+      - name: 이미지 빌드, 푸시
+        if: steps.images.outputs.missing != ''
+        run: |
+          for m in ${{ steps.images.outputs.missing }}; do
+            image="$ECR_REGISTRY/ipo/$m:$SHA"
+            docker build --build-arg MODULE="$m" -t "$image" .
+            docker push "$image"
+          done
+
+      # 서버의 레포를 먼저 배포 커밋으로 맞춘 뒤 그 커밋의 deploy.sh를 실행한다
+      - name: EC2 배포 (SSM Run Command)
+        run: |
+          # SSM Run Command는 HOME이 비어 있는 환경에서 root로 실행되어 git, docker 설정 위치를 정해 준다
+          cmd="export HOME=/root && cd /opt/ipo && git fetch --quiet origin && git checkout --quiet --detach $SHA && ECR_REGISTRY=$ECR_REGISTRY AWS_REGION=$AWS_REGION bash deploy/deploy.sh $SHA"
+          params="$(jq -cn --arg c "$cmd" '{commands: [$c], executionTimeout: ["900"]}')"
+          command_id="$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${SHA:0:12}" \
+            --parameters "$params" \
+            --query Command.CommandId --output text)"
+          echo "명령 ID: $command_id"
+
+          status=""
+          for _ in $(seq 1 180); do
+            sleep 5
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$EC2_INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)"
+            case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+
+          echo "----- 서버 출력"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$EC2_INSTANCE_ID" \
+            --query StandardOutputContent --output text || true
+          echo "----- 서버 오류 출력"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$EC2_INSTANCE_ID" \
+            --query StandardErrorContent --output text || true
+
+          echo "결과: $status"
+          [[ "$status" == "Success" ]]
+
+      - name: 스모크 (가입 → 로그인 → 계좌 개설 → 입금)
+        run: bash deploy/smoke.sh "${{ vars.DEPLOY_BASE_URL }}"

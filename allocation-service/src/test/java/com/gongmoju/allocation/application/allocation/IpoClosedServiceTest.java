@@ -5,8 +5,16 @@ import com.gongmoju.allocation.domain.allocation.ConfirmedSubscription;
 import com.gongmoju.allocation.domain.allocation.ConfirmedSubscriptionReader;
 import com.gongmoju.allocation.domain.allocation.IpoClosed;
 import com.gongmoju.allocation.domain.event.ProcessedEventRepository;
+import com.gongmoju.common.feign.FeignServerException;
+import feign.Request;
+import feign.RetryableException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -18,11 +26,14 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -163,17 +174,32 @@ class IpoClosedServiceTest {
         assertThat(count("allocation.processed_event")).isEqualTo(2);
     }
 
-    // 목록 조회가 실패하면 회차를 FAILED로 기록하고 예외를 그대로 던진다. 배정 결과, Outbox, 처리 기록은 남지 않는다
-    @Test
-    void marksRoundFailedWhenReadingFails() {
-        when(confirmedSubscriptionReader.readAll(IPO_ID)).thenThrow(new IllegalStateException("청약 서비스 응답 없음"));
+    // 목록 조회가 실패하면(5xx, Circuit Breaker 열림, 타임아웃) 회차를 FAILED로 기록하고 예외를 그대로 던진다. 배정 결과, Outbox, 처리 기록은 남지 않는다
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("readFailures")
+    void marksRoundFailedWhenReadingFails(String situation, RuntimeException failure) {
+        when(confirmedSubscriptionReader.readAll(IPO_ID)).thenThrow(failure);
 
-        assertThatThrownBy(() -> ipoClosedService.handle(event(3))).hasMessage("청약 서비스 응답 없음");
+        assertThatThrownBy(() -> ipoClosedService.handle(event(3))).isSameAs(failure);
 
         Map<String, Object> round = round();
         assertThat(round.get("STATUS")).isEqualTo("FAILED");
         assertThat(round.get("FINISHED_AT")).isNotNull();
         assertNothingRecorded();
+    }
+
+    // 청약 서비스 호출이 실제로 실패할 때 나는 예외 (common Feign 설정, Resilience4j)
+    static Stream<Arguments> readFailures() {
+        Request request = Request.create(Request.HttpMethod.GET, "http://subscription-service/internal/ipos", Map.of(), null,
+                StandardCharsets.UTF_8, null);
+        return Stream.of(
+                Arguments.of("청약 서비스 5xx",
+                        new FeignServerException(503, "SERVICE_UNAVAILABLE", "청약 서비스 오류", "getConfirmedSubscriptions")),
+                Arguments.of("Circuit Breaker 열림",
+                        CallNotPermittedException.createCallNotPermittedException(CircuitBreaker.ofDefaults("subscription-service"))),
+                Arguments.of("타임아웃",
+                        new RetryableException(-1, "Read timed out", Request.HttpMethod.GET,
+                                new SocketTimeoutException("Read timed out"), (Long) null, request)));
     }
 
     // 조회한 건수가 confirmedCount와 다르면 배정하지 않고 회차를 FAILED로 기록한다

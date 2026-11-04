@@ -12,6 +12,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -185,6 +187,33 @@ class AllocationResultConsumerKafkaTest {
         // then
         assertArrivesInDltQuickly(payload, startedAt);
         assertThat(status()).isEqualTo("CONFIRMED");
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isZero();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(value = {
+            "PENDING, NULL",
+            "REJECTED, NULL",
+            "COMPENSATING, CONFIRM_FAILED",
+            "CANCEL_REQUESTED, USER_CANCEL",
+            "CANCELLED, TIMEOUT"
+    }, nullValues = "NULL")
+    @DisplayName("CONFIRMED, ALLOCATED, REFUNDED 외 상태의 청약이면 재시도 없이 바로 DLT로 가고 원본 JSON이 그대로 쌓이며, 상태는 그대로이고 처리 기록도 남지 않는다")
+    void consume_sendsToDltWithoutRetry_whenStatusIsUnexpected(String status, String cancelReason) {
+        // given
+        String rejectReason = "REJECTED".equals(status) ? "INSUFFICIENT_BALANCE" : null;
+        jdbcTemplate.update("UPDATE subscription SET status = ?, cancel_reason = ?, reject_reason = ? WHERE subscription_id = ?",
+                status, cancelReason, rejectReason, subscriptionId);
+        UUID eventId = UUID.randomUUID();
+        String payload = validJson(eventId, 1, 2, 3, 45_000);
+
+        // when
+        long startedAt = System.nanoTime();
+        send(payload);
+
+        // then
+        assertArrivesInDltQuickly(payload, startedAt);
+        assertThat(status()).isEqualTo(status);
         assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isZero();
     }
 

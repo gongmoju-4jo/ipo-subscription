@@ -229,11 +229,18 @@ class SubscriptionAllocateServiceTest {
         assertThat(processedCount(event.eventId())).isZero();
     }
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(value = {
+            "PENDING, NULL",
+            "REJECTED, NULL",
+            "COMPENSATING, CONFIRM_FAILED",
+            "CANCEL_REQUESTED, USER_CANCEL",
+            "CANCELLED, TIMEOUT"
+    }, nullValues = "NULL")
     @DisplayName("상태 문제로 DLT에 갔던 메시지를 같은 eventId로 다시 처리해도 처리 기록이 남지 않았으므로 청약을 고친 뒤에는 ALLOCATED가 된다")
-    void allocate_allocates_whenSameEventIsRedeliveredAfterStateIsFixed() {
+    void allocate_allocates_whenSameEventIsRedeliveredAfterStateIsFixed(String status, String cancelReason) {
         // given
-        changeStatus("COMPENSATING", "CONFIRM_FAILED");
+        changeStatus(status, cancelReason);
         AllocationResult event = event(UUID.randomUUID(), 3, 45_000);
         assertThatThrownBy(() -> allocateService.allocate(event)).isInstanceOf(InvalidEventException.class);
         changeStatus("CONFIRMED", null);

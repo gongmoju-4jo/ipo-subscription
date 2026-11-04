@@ -124,7 +124,16 @@ public class MarginVoidService {
                 // 5-4. 이미 정산됨: 반환하면 같은 계좌의 다른 청약 증거금이 빠지므로 DLT
                 log.error("[증거금 반환] 이미 정산된 증거금이라 DLT 대상. eventId={}, subscriptionId={}, marginId={}",
                         command.eventId(), command.subscriptionId(), margin.getId());
-                throw new InvalidEventException("이미 정산된 증거금입니다. subscriptionId=" + command.subscriptionId());
+                throw new InvalidEventException(
+                        "이미 정산된 증거금입니다. subscriptionId=" + command.subscriptionId());
+            }
+
+            // margin이 존재하지 않는 상태값인 경우도, DLT 처리한다. (분기를 타지 않고 processed_event만 남기 때문)
+            default -> {
+                log.error("[증거금 반환] 처리할 수 없는 증거금 상태라 DLT 대상. eventId={}, subscriptionId={}, marginId={}, status={}",
+                        command.eventId(), command.subscriptionId(), margin.getId(), margin.getStatus());
+                throw new InvalidEventException(
+                        "처리할 수 없는 증거금 상태입니다. status=" + margin.getStatus());
             }
         }
     }

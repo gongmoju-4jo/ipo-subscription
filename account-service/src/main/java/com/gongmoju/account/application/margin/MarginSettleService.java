@@ -103,8 +103,10 @@ public class MarginSettleService {
                         command.eventId(), command.subscriptionId(), margin.getId());
                 marginEventPublisher.publishSettled(settled(margin, 0));
             }
-            // 상태가 추가됐는데 분기가 없으면 응답 없이 처리 기록만 남으므로 막는다
-            default -> throw invalid(command, "처리할 수 없는 증거금 상태입니다. status=" + margin.getStatus());
+
+            // margin이 존재하지 않는 상태값인 경우도, DLT 처리한다. (분기를 타지 않고 processed_event만 남기 때문)
+            default -> throw invalid(command,
+                    "처리할 수 없는 증거금 상태입니다. status=" + margin.getStatus());
         }
     }
 

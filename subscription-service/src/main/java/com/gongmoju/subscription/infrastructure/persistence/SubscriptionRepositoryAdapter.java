@@ -75,6 +75,16 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     }
 
     @Override
+    public List<UUID> findStaleVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit) {
+        return jpaRepository.findStaleVoidIds(lastRequestedBefore, maxAttempts, limit);
+    }
+
+    @Override
+    public List<UUID> findExhaustedVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit) {
+        return jpaRepository.findExhaustedVoidIds(lastRequestedBefore, maxAttempts, limit);
+    }
+
+    @Override
     public Optional<Instant> findLastReserveRequestPublishedAt(UUID subscriptionId) {
         return Optional.ofNullable(jpaRepository.findLastReserveRequestPublishedAt(subscriptionId));
     }

@@ -71,6 +71,35 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
             LIMIT :limit""", nativeQuery = true)
     List<UUID> findStalePendingIds(@Param("lastRequestedBefore") Instant lastRequestedBefore, @Param("limit") int limit);
 
+    /**
+     * 마지막 요청 시각이 기준 시각보다 이르고 요청 횟수가 최대 횟수 미만인 {@code COMPENSATING}, {@code CANCEL_REQUESTED} 청약의 {@code subscription_id}를 오래된 순으로 최대 limit건 조회함.
+     * 미발행 반환 요청(margin.void-requested)이 있는 청약은 제외함.
+     */
+    @Query(value = """
+            SELECT s.subscription_id FROM subscription s
+            WHERE s.status IN ('COMPENSATING', 'CANCEL_REQUESTED')
+              AND s.last_requested_at < :lastRequestedBefore
+              AND s.attempts < :maxAttempts
+              AND NOT EXISTS (SELECT 1 FROM outbox o
+                              WHERE o.aggregate_id = s.subscription_id
+                                AND o.topic = 'margin.void-requested'
+                                AND o.published_at IS NULL)
+            ORDER BY s.last_requested_at ASC
+            LIMIT :limit""", nativeQuery = true)
+    List<UUID> findStaleVoidIds(@Param("lastRequestedBefore") Instant lastRequestedBefore,
+                                @Param("maxAttempts") int maxAttempts, @Param("limit") int limit);
+
+    // 요청 횟수가 최대 횟수 이상인 알림 대상. 재요청 대상 조회와 같은 상태, 시각 조건 (Outbox 확인은 필요 없음)
+    @Query(value = """
+            SELECT s.subscription_id FROM subscription s
+            WHERE s.status IN ('COMPENSATING', 'CANCEL_REQUESTED')
+              AND s.last_requested_at < :lastRequestedBefore
+              AND s.attempts >= :maxAttempts
+            ORDER BY s.last_requested_at ASC
+            LIMIT :limit""", nativeQuery = true)
+    List<UUID> findExhaustedVoidIds(@Param("lastRequestedBefore") Instant lastRequestedBefore,
+                                    @Param("maxAttempts") int maxAttempts, @Param("limit") int limit);
+
     // 발행된 증거금 인출 요청 Outbox 중 가장 늦은 발행 시각. 없으면 null
     @Query("select max(o.publishedAt) from Outbox o where o.aggregateId = :subscriptionId "
             + "and o.topic = 'margin.reserve-requested' and o.publishedAt is not null")

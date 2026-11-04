@@ -61,6 +61,11 @@ CREATE INDEX IF NOT EXISTS ix_subscription_pending_last_requested
     ON subscription (last_requested_at)
     WHERE status = 'PENDING';
 
+-- 반환 재요청 대상 조회 (COMPENSATING, CANCEL_REQUESTED만, 마지막 요청 시각 순). 없으면 (ipo_id, status) 인덱스 전체를 훑음
+CREATE INDEX IF NOT EXISTS ix_subscription_voiding_last_requested
+    ON subscription (last_requested_at)
+    WHERE status IN ('COMPENSATING', 'CANCEL_REQUESTED');
+
 -- 청약별 발행된 인출 요청 조회 (TIMEOUT 보상 직전 마지막 발행 시각 확인). 없으면 Outbox 전체를 훑음
 CREATE INDEX IF NOT EXISTS ix_outbox_aggregate_topic
     ON outbox (aggregate_id, topic);

@@ -192,6 +192,19 @@ class SubscriptionStalePendingQueryTest {
         assertThat(subscriptionRepository.findLastReserveRequestPublishedAt(UUID.randomUUID())).isEmpty();
     }
 
+    @Test
+    @DisplayName("청약별 발행 시각 조회가 Outbox 전체를 훑지 않도록 (aggregate_id, topic) 인덱스가 만들어져 있다")
+    void outboxAggregateTopicIndexExists() {
+        // given, when
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM pg_indexes WHERE schemaname = 'subscription' AND tablename = 'outbox' "
+                        + "AND indexname = 'ix_outbox_aggregate_topic' AND indexdef LIKE '%(aggregate_id, topic)%'",
+                Integer.class);
+
+        // then
+        assertThat(count).isEqualTo(1);
+    }
+
     private UUID insert(String status, Instant lastRequestedAt) {
         UUID id = UUID.randomUUID();
         jdbcTemplate.update("""

@@ -55,3 +55,7 @@ ALTER TABLE outbox
 CREATE INDEX IF NOT EXISTS ix_outbox_unpublished
     ON outbox (created_at)
     WHERE published_at IS NULL;
+
+-- 청약별 발행된 인출 요청 조회 (TIMEOUT 보상 직전 마지막 발행 시각 확인). 없으면 Outbox 전체를 훑음
+CREATE INDEX IF NOT EXISTS ix_outbox_aggregate_topic
+    ON outbox (aggregate_id, topic);

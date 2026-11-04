@@ -280,7 +280,7 @@ class SubscriptionReserveTimeoutServiceTest {
         // 기록은 60초 전(응답 시간이 지남)이지만 발행이 밀려 5초 전에야 나감
         jdbcTemplate.update("UPDATE subscription SET attempts = ?, last_requested_at = ? WHERE subscription_id = ?",
                 MAX_ATTEMPTS, Timestamp.from(Instant.now().minusSeconds(60)), subscriptionId);
-        insertReserveRequestOutbox(Instant.now().minusSeconds(5));
+        insertReserveRequestOutbox(Instant.now().minusSeconds(60), Instant.now().minusSeconds(5));
 
         // when
         ReserveTimeoutResult result = timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
@@ -300,7 +300,7 @@ class SubscriptionReserveTimeoutServiceTest {
         // given
         jdbcTemplate.update("UPDATE subscription SET attempts = ?, last_requested_at = ? WHERE subscription_id = ?",
                 MAX_ATTEMPTS, Timestamp.from(Instant.now().minusSeconds(120)), subscriptionId);
-        insertReserveRequestOutbox(Instant.now().minusSeconds(60));
+        insertReserveRequestOutbox(Instant.now().minusSeconds(120), Instant.now().minusSeconds(60));
 
         // when
         ReserveTimeoutResult result = timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
@@ -317,7 +317,7 @@ class SubscriptionReserveTimeoutServiceTest {
         // given
         jdbcTemplate.update("UPDATE subscription SET last_requested_at = ? WHERE subscription_id = ?",
                 Timestamp.from(Instant.now().minusSeconds(60)), subscriptionId);
-        insertReserveRequestOutbox(Instant.now().minusSeconds(5));
+        insertReserveRequestOutbox(Instant.now().minusSeconds(60), Instant.now().minusSeconds(5));
 
         // when
         ReserveTimeoutResult result = timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
@@ -393,13 +393,13 @@ class SubscriptionReserveTimeoutServiceTest {
                 Timestamp.from(lastRequestedAt));
     }
 
-    // 이미 발행된(published_at이 있는) 인출 요청 Outbox 행을 만든다. 서비스가 만드는 행과 같은 모양
-    private void insertReserveRequestOutbox(Instant publishedAt) {
+    // 이미 발행된 인출 요청 Outbox 행을 만든다. 기록(created_at)이 발행(published_at)보다 앞서는 실제 순서대로 넣음
+    private void insertReserveRequestOutbox(Instant createdAt, Instant publishedAt) {
         jdbcTemplate.update("""
                 INSERT INTO outbox (outbox_id, aggregate_type, aggregate_id, event_type, topic, message_key,
                                     payload, created_at, published_at, retry_count)
-                VALUES (?, 'SUBSCRIPTION', ?, 'margin.reserve-requested', 'margin.reserve-requested', ?, CAST('{}' AS JSONB), now(), ?, 0)""",
-                UUID.randomUUID(), subscriptionId, accountId.toString(), Timestamp.from(publishedAt));
+                VALUES (?, 'SUBSCRIPTION', ?, 'margin.reserve-requested', 'margin.reserve-requested', ?, CAST('{}' AS JSONB), ?, ?, 0)""",
+                UUID.randomUUID(), subscriptionId, accountId.toString(), Timestamp.from(createdAt), Timestamp.from(publishedAt));
     }
 
     private Map<String, Object> subscription() {

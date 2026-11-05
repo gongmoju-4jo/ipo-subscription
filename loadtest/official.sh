@@ -682,6 +682,15 @@ main() {
   if [ "$HAS_S4" = 1 ] && [ $((S0_PRICE * QUANTITY)) -ne "$SYN_AMOUNT" ]; then
     echo "S4 행동 CSV는 청약 금액 ${SYN_AMOUNT}원 기준이다 (S0_PRICE x QUANTITY = $((S0_PRICE * QUANTITY))원). 금액을 바꾸려면 행동 CSV와 judge.py 기대값도 같이 바꾼다" >&2; exit 1
   fi
+  # BASELINE_DIR은 실행한 위치 기준 경로로 받는다. 복원은 loadtest 폴더로 이동해서 부르므로 여기서 절대 경로로 바꾸고,
+  # 스냅샷이 없으면 빌드, 배포 전에 멈춘다
+  if [ -n "${BASELINE_DIR:-}" ]; then
+    case "$BASELINE_DIR" in /*|[A-Za-z]:*) ;; *) BASELINE_DIR="$(pwd)/$BASELINE_DIR" ;; esac
+    export BASELINE_DIR
+  fi
+  if [ "$RESTORE" = 1 ] && [ ! -f "${BASELINE_DIR:-$DIR/data/baseline}/ipo-baseline.dump" ]; then
+    echo "기준 스냅샷이 없음: ${BASELINE_DIR:-$DIR/data/baseline}/ipo-baseline.dump (BASELINE_DIR은 실행한 위치 기준 경로. docs/LOADTEST.md 3-4절)" >&2; exit 1
+  fi
   IFS=',' read -ra ST <<< "$STAGES"
   for r in "${ST[@]}"; do is_uint "$r" && [ "$r" -gt 0 ] || { echo "STAGES 값이 올바르지 않음: $STAGES" >&2; exit 1; }; done
 

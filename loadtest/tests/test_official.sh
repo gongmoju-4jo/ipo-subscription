@@ -22,6 +22,8 @@ expect_out() { # 이름, 기대 rc, 기대 출력, 명령...
 }
 REQ="subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve"
 lag_of() { parse_lag "$REQ" < "$1"; }
+# main 인자 검사용 임시 loadtest 폴더 (기준 스냅샷 파일이 있어야 빌드 전 확인을 통과한다)
+fake_dir() { local d; d="$(mktemp -d)"; mkdir -p "$d/data/baseline"; : > "$d/data/baseline/ipo-baseline.dump"; echo "$d"; }
 
 # ---- parse_lag ----
 expect_out "실제 출력 (모두 0, '-' 포함) → 0" 0 0 lag_of "$REAL_CG"
@@ -95,9 +97,9 @@ for bad_env in "WARM_SLOPE_PCT=0" "WARM_SLOPE_PCT=." "WARM_SLOPE_PCT=-1" "WARM_S
             DIR="$(mktemp -d)"; main --batch zz-args ) 2>&1 )"; rc=$?
   [ "$rc" = 1 ] && [ -n "$out" ] && ok "main: $bad_env → 시작 전에 종료 코드 1" || bad "main 인자 $bad_env" "rc=$rc out=$out"
 done
-out="$( ( WARM_SLOPE_PCT=2.5; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+out="$( ( WARM_SLOPE_PCT=2.5; DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
 [ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: WARM_SLOPE_PCT=2.5는 통과해 결과 폴더 만들기까지 간다" || bad "main 2.5" "rc=$rc out=$out"
-out="$( ( WARM_SLOPE_MS=0; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+out="$( ( WARM_SLOPE_MS=0; DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
 [ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: WARM_SLOPE_MS=0(절대 기울기 끔)은 통과해 결과 폴더 만들기까지 간다" || bad "main slope-ms 0" "rc=$rc out=$out"
 
 # ---- pick_python, pypath (워밍업 판정은 verify/warmup.py, test_warmup.py) ----
@@ -376,13 +378,21 @@ HAS_S1=0; HAS_S3=0; HAS_S4=0
 # main: 잘못된 SCENARIOS, S4_PREFIX, S4 청약 금액은 빌드, 복원 전에 막는다 (결과 폴더도 만들지 않음)
 for bad_env in "SCENARIOS=S1" "SCENARIOS=S0,S9" "S4_PREFIX=LB" "S4_PREFIX=" "SCENARIOS=S0,S4 S0_PRICE=10000"; do
   out="$( ( for kv in $bad_env; do eval "$kv"; done
-            DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+            DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
   [ "$rc" = 1 ] && [[ "$out" != *STOP* ]] && ok "main: $bad_env → 시작 전에 종료 코드 1" || bad "main $bad_env" "rc=$rc out=$out"
 done
-out="$( ( SCENARIOS=S0,S3,S4; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+out="$( ( SCENARIOS=S0,S3,S4; DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
 [ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: SCENARIOS=S0,S3,S4는 통과해 결과 폴더 만들기까지 간다" || bad "main S0,S3,S4" "rc=$rc out=$out"
-out="$( ( SCENARIOS=S0,S3 S0_PRICE=10000; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+out="$( ( SCENARIOS=S0,S3 S0_PRICE=10000; DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
 [ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: S3만이면 청약 금액 제한이 없다 (S4 입금액만 금액에 묶임)" || bad "main S3 금액" "rc=$rc out=$out"
+# BASELINE_DIR: 실행한 위치 기준 상대 경로를 절대 경로로 바꾼다 (복원은 loadtest 폴더로 이동해서 부르므로 상대 경로면 못 찾는다)
+BL="$(mktemp -d)"; mkdir -p "$BL/snap/s34"; : > "$BL/snap/s34/ipo-baseline.dump"
+out="$( ( cd "$BL" && BASELINE_DIR=snap/s34 && DIR="$(fake_dir)" && mkdir() { echo "STOP $BASELINE_DIR"; exit 0; } && main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [ "$out" = "STOP $BL/snap/s34" ] && ok "main: 상대 경로 BASELINE_DIR을 실행 위치 기준 절대 경로로 바꾼다" || bad "main BASELINE_DIR 상대 경로" "rc=$rc out=$out"
+out="$( ( cd "$BL" && BASELINE_DIR=snap/none && DIR="$(fake_dir)" && mkdir() { echo STOP; exit 0; } && main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 1 ] && [[ "$out" == *"기준 스냅샷이 없음: $BL/snap/none/ipo-baseline.dump"* ]] && ok "main: 기준 스냅샷이 없으면 빌드 전에 종료 코드 1" || bad "main 스냅샷 없음" "rc=$rc out=$out"
+out="$( ( RESTORE=0; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: RESTORE=0이면 스냅샷이 없어도 시작한다" || bad "main RESTORE=0" "rc=$rc out=$out"
 
 # synthetic_check: 커밋한 행동 CSV + 가짜 회원 CSV
 # (앞 테스트들이 DIR을 임시 폴더로 바꿔 두므로 테스트 파일 위치 기준의 실제 loadtest 폴더를 쓴다)

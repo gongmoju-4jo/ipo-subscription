@@ -2,7 +2,9 @@
 
 사용: python loadtest/tests/test_consumer_stats.py
 """
+import csv
 import importlib.util
+import io
 import json
 import os
 import tempfile
@@ -276,6 +278,20 @@ class Main(unittest.TestCase):
         self.assertEqual(cs.increase(listener["success"], T0), 1000)
         self.assertEqual(cs.increase(listener["failure"], T0), 2)  # 범위 조회에 없던 실패도 보고
         self.assertGreaterEqual(scrape, run["stop"])
+
+    def test_csv_keeps_listener_end_row(self):
+        # 리스너 마지막 값(랙 평가 시각에 없는 시각)도 인출.csv에 남고, 그 행의 랙은 빈 값. 오류 건수 집계는 그대로
+        def prom(run, base):
+            t_end = run["stop"] + cs.STEP
+            lis = {"success": [(run["start"], 0.0), (t_end, 1010.0)], "failure": [(t_end, 2.0)]}
+            return {}, lag_points((0, 0, 0, 0), run["start"]), lis, 3, run["w1"] + 3
+        self.assertEqual(self.run_main(prom=prom), 0)
+        rows = list(csv.reader(io.StringIO(read(os.path.join(self.out, "인출.csv")))))
+        t_end = T0 + 100 + 16 + cs.STEP  # r1: 시작 T0+100, 소진 확인 T0+115, stop T0+116
+        last = [r for r in rows if r[0] == "b1-S1-100-r1" and r[1] == str(t_end)]
+        self.assertEqual(len(last), 1)
+        self.assertEqual((last[0][3], last[0][4], last[0][5], last[0][6]), ("after", "", "1010", "2"))
+        self.assertIn("| 1012 | 2 |", read(os.path.join(self.out, "인출.md")))  # 전체 수신 = 성공 1010 + 실패 2
 
     def test_time_basis_is_written(self):
         self.assertEqual(self.run_main(), 0)

@@ -4,7 +4,7 @@
 입력: loadtest/results/<batch>/manifest.csv (S1 실행만), env.txt
 출력 (같은 폴더):
   인출.md               실행별 표, 단계별 중앙값, 병목 의심 단계
-  인출.csv              실행별 5초 단위 원본 (랙, 리스너 누적 건수, 그 5초에 생긴 증거금 수)
+  인출.csv              실행별 5초 단위 원본 (랙, 리스너 누적 건수, 그 5초에 생긴 증거금 수). 리스너 마지막 값은 phase=after 행 (랙은 빈 값)
   인출-prometheus.json  Prometheus query_range 응답 원본 (보관 기간이 지나도 다시 볼 수 있게)
 
 측정 구간: 실행마다 k6_start부터 소진 확인 시각(manifest drain_end)까지. "부하 중"은 k6_start부터 k6_end까지
@@ -316,9 +316,11 @@ def write_csv(path, runs, series):
         w = csv.writer(f)
         w.writerow(["run_id", "epoch", "time_kst", "phase", "lag", "listener_success_total", "listener_failure_total", "margin_created_in_5s"])
         for run, (lag, listener, buckets) in zip(runs, series):
-            ok = dict(listener.get("success", [])); fail = dict(listener.get("failure", []))
-            for t, v in lag:
-                w.writerow([run["run"], t, kst(t), "load" if t <= run["end"] else "drain", f"{v:g}",
+            lv = dict(lag); ok = dict(listener.get("success", [])); fail = dict(listener.get("failure", []))
+            # 리스너 마지막 값(소진 확인 뒤 수집 시각)처럼 랙 평가 시각에 없는 시각도 행으로 남긴다. 그 시각의 랙은 빈 값
+            for t in sorted(set(lv) | set(ok) | set(fail)):
+                phase = "load" if t <= run["end"] else "drain" if t <= run["w1"] else "after"
+                w.writerow([run["run"], t, kst(t), phase, f"{lv[t]:g}" if t in lv else "",
                             f"{ok[t]:g}" if t in ok else "", f"{fail[t]:g}" if t in fail else "", buckets.get(t - t % STEP, 0)])
 
 

@@ -20,7 +20,7 @@ export function Layout() {
             <NavLink to="/subscriptions">내 청약</NavLink>
             <NavLink to="/account">계좌</NavLink>
             <NavLink to="/system" className="ops-link">시스템 현황</NavLink>
-            <NavLink to="/goals" className="ops-link">목표 달성</NavLink>
+            <NavLink to="/goals" className="ops-link">성과와 로드맵</NavLink>
           </nav>
           <div className="user-chip">
             <span>{session?.loginId}님</span>

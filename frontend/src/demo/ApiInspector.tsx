@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { exchangeLog, type ExchangeRecord } from '../api/client';
 import { DEMO } from './flag';
+import { describeApi } from './apiCatalog';
 
 // 시연용 API 기록 창. 화면 오른쪽 아래 버튼으로 열고 닫는다. 이 앱이 보낸 모든 API 요청과 응답 원문을 보여준다
 export function ApiInspector() {
@@ -41,7 +42,10 @@ export function ApiInspector() {
                 {rows.map((r) => (
                   <li key={r.id} className={r.id === current?.id ? 'on' : ''} onClick={() => setSelected(r.id)}>
                     <span className={`method m-${r.method}`}>{r.method}</span>
-                    <span className="path">{r.path.replace(/^\/api\/v1/, '')}</span>
+                    <span className="path-wrap">
+                      <span className="title">{describeApi(r.method, r.path)?.title ?? '설명 없음'}</span>
+                      <span className="path">{r.path.replace(/^\/api\/v1/, '')}</span>
+                    </span>
                     <span className={`code c-${Math.floor(r.status / 100)}`}>{r.status || 'ERR'}</span>
                   </li>
                 ))}
@@ -52,6 +56,15 @@ export function ApiInspector() {
                     <span className={`method m-${current.method}`}>{current.method}</span>
                     <code style={{ fontSize: 13 }}>{current.path}</code>
                   </div>
+                  {(() => {
+                    const d = describeApi(current.method, current.path);
+                    return d ? (
+                      <div className="inspector-desc">
+                        <div className="t">{d.title} <span className="svc">{d.service}</span></div>
+                        {d.point && <div className="p">{d.point}</div>}
+                      </div>
+                    ) : null;
+                  })()}
                   <div className="hint" style={{ marginTop: 6 }}>
                     HTTP {current.status || '연결 실패'}, {current.durationMs}ms, {new Date(current.at).toLocaleTimeString('ko-KR')}
                   </div>

@@ -69,7 +69,7 @@ export function AccountPage() {
       <div className="row between wrap">
         <div>
           <div className="page-title">계좌</div>
-          <p className="page-sub">가상 계좌예요. 실제 돈은 움직이지 않아요</p>
+          <p className="page-sub">가상 계좌예요. 실제 금전 거래는 발생하지 않아요</p>
         </div>
         <button className="btn btn-ghost" onClick={open} disabled={busy}>+ 계좌 만들기</button>
       </div>
@@ -113,8 +113,12 @@ export function AccountPage() {
                 <button className="btn btn-primary btn-block" onClick={deposit} disabled={busy || amount <= 0}>{busy ? '처리 중…' : `${formatWon(amount)} 입금하기`}</button>
                 <div className="hint">같은 입금을 두 번 눌러도 요청 ID가 같아서 한 번만 반영돼요</div>
                 <DesignNote title="잔고와 원장이 어긋나지 않는 이유">
-                  잔고를 바꾸는 곳은 계좌 서비스의 정해진 메서드 하나뿐이고, 잔고 변경과 원장 기록을 같은 트랜잭션에 저장해요. 원장은 추가만 하고 고치지 않아요.
-                  그래서 "계좌 잔고 = 마지막 원장의 거래 후 잔고" 검사로 언제든 맞는지 확인할 수 있어요.
+                  <ul className="dots">
+                    <li>잔고를 바꾸는 곳은 계좌 서비스의 정해진 메서드 하나뿐이에요.</li>
+                    <li>잔고 변경과 원장 기록을 같은 트랜잭션에 저장해요.</li>
+                    <li>원장은 추가만 하고 고치지 않아요.</li>
+                    <li>그래서 "계좌 잔고 = 마지막 원장의 거래 후 잔고" 검사로 언제든 맞는지 확인할 수 있어요.</li>
+                  </ul>
                 </DesignNote>
               </div>
             </Card>

@@ -153,8 +153,11 @@ export function SystemPage() {
         {ops.data?.checks.some((c) => c.error) && <ErrorBox error={new Error(ops.data.checks.find((c) => c.error)!.error!)} title="일부 검사를 실행하지 못했어요" />}
         <div style={{ marginTop: 12 }}>
           <DesignNote title="금액이 맞는지 어떻게 증명하나">
-            loadtest/sql/verify.sql의 검사식을 지금 DB에 그대로 실행해요. 위반이 0이면 모든 계좌에서 잔고, 증거금, 원장, 정산 금액이 서로 맞는다는 뜻이에요.
-            부하 테스트 1,000건 뒤에도 같은 검사로 위반 0을 확인했어요 (통합 테스트 E2E-3).
+            <ul className="dots">
+              <li>loadtest/sql/verify.sql의 검사식을 지금 DB에 그대로 실행해요.</li>
+              <li>위반이 0이면 모든 계좌에서 잔고, 증거금, 원장, 정산 금액이 서로 맞는다는 뜻이에요.</li>
+              <li>부하 테스트 1,000건 뒤에도 같은 검사로 위반 0을 확인했어요 (통합 테스트 E2E-3).</li>
+            </ul>
           </DesignNote>
         </div>
       </Card>

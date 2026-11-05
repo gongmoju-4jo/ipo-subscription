@@ -16,6 +16,16 @@ export function ApiInspector() {
     };
   }, []);
 
+  // Esc로 닫기
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
   if (!DEMO) return null;
   const current = rows.find((r) => r.id === selected) ?? rows[0];
 

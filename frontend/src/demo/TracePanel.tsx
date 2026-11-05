@@ -36,7 +36,12 @@ function TraceBody({ subscriptionId, live }: { subscriptionId: string; live: boo
   return (
     <div className="stack">
       <div className="notice gray" style={{ fontSize: 13 }}>
-        청약 접수(<code>subscription.requested</code>)는 Outbox 없이 API가 바로 발행하고 브로커 저장을 확인한 뒤 202를 줘서 이 표에는 없어요. 서로 다른 Kafka 토픽 사이에는 순서가 보장되지 않아요. 아래는 각 서비스 Outbox에 기록된 시각 순서예요. "소비"는 받는 쪽 처리 기록(processed_event)에 같은 이벤트 ID가 있다는 뜻이고, 이 기록 때문에 같은 이벤트가 두 번 와도 한 번만 반영돼요.
+        <ul className="dots">
+          <li>청약 접수(<code>subscription.requested</code>)는 Outbox 없이 API가 바로 발행하고 브로커 저장을 확인한 뒤 202를 줘서 이 표에는 없어요.</li>
+          <li>서로 다른 Kafka 토픽 사이에는 순서가 보장되지 않아요. 아래는 각 서비스 Outbox에 기록된 시각 순서예요.</li>
+          <li>"소비"는 받는 쪽 처리 기록(processed_event)에 같은 이벤트 ID가 있다는 뜻이에요.</li>
+          <li>이 기록 때문에 같은 이벤트가 두 번 와도 한 번만 반영돼요.</li>
+        </ul>
       </div>
       <div className="table-wrap">
         <table className="table">
@@ -117,7 +122,11 @@ function TraceBody({ subscriptionId, live }: { subscriptionId: string; live: boo
         </div>
       </div>
       <DesignNote title="이벤트가 유실되지 않는 이유 (Transactional Outbox)">
-        상태 변경과 보낼 이벤트를 같은 DB 트랜잭션에 저장(Outbox)하고, 발행기가 1초마다 Kafka로 보내요. Kafka가 잠깐 멈춰도 Outbox에 남아 있다가 복구되면 나가요 (통합 테스트에서 Kafka 정지 뒤 0.1초 만에 확정 확인).
+        <ul className="dots">
+          <li>상태 변경과 보낼 이벤트를 같은 DB 트랜잭션에 저장(Outbox)해요.</li>
+          <li>발행기가 1초마다 Kafka로 보내요.</li>
+          <li>Kafka가 잠깐 멈춰도 Outbox에 남아 있다가 복구되면 나가요 (통합 테스트에서 Kafka 정지 뒤 0.1초 만에 확정 확인).</li>
+        </ul>
       </DesignNote>
       <div className="hint">조회 시각 {formatTimeSec(t.checkedAt)}{live ? ', 처리 중이라 2초마다 새로 고침' : ''}</div>
     </div>

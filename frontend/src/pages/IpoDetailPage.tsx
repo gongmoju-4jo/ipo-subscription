@@ -140,11 +140,17 @@ export function IpoDetailPage() {
               </button>
               <div className="hint">신청하면 먼저 "접수"되고, 증거금 인출이 끝나면 "확정"돼요.</div>
               <DesignNote title="몰려도 밀리지 않는 접수">
-                청약 요청은 DB 처리를 기다리지 않고 Kafka에 저장된 것을 확인(acks=all)한 뒤 바로 202로 답해요. 증거금 인출과 확정은 Consumer가 뒤에서 처리해요.
-                정식 측정에서 오픈 직후 피크 433건/초를 평균 8.0ms, 오류 0으로 받았어요 (정식측정-9).
+                <ul className="dots">
+                  <li>청약 요청은 DB 처리를 기다리지 않고 Kafka에 저장된 것을 확인(acks=all)한 뒤 바로 202로 답해요.</li>
+                  <li>증거금 인출과 확정은 Consumer가 뒤에서 처리해요.</li>
+                  <li>정식 측정에서 오픈 직후 피크 433건/초를 평균 8.0ms, 오류 0으로 받았어요 (정식측정-9).</li>
+                </ul>
               </DesignNote>
               <DesignNote title="버튼을 여러 번 눌러도 청약은 1건">
-                이 화면이 만든 요청 ID(requestId)로 청약 ID를 정해서, 같은 요청이 다시 와도 같은 청약으로 처리해요. 계좌 서비스는 처리 기록(processed_event)으로 같은 이벤트를 한 번만 반영해 증거금이 두 번 인출되지 않아요.
+                <ul className="dots">
+                  <li>이 화면이 만든 요청 ID(requestId)로 청약 ID를 정해서, 같은 요청이 다시 와도 같은 청약으로 처리해요.</li>
+                  <li>계좌 서비스는 처리 기록(processed_event)으로 같은 이벤트를 한 번만 반영해 증거금이 두 번 인출되지 않아요.</li>
+                </ul>
               </DesignNote>
             </div>
           )}

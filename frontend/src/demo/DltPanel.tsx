@@ -40,8 +40,12 @@ export function DltPanel() {
           {withMessages.length > 0 && !topic && <div className="hint">빨간 칸을 누르면 메시지 내용과 실패 원인을 볼 수 있어요</div>}
           {topic && <DltMessages topic={topic} />}
           <DesignNote title="실패한 메시지를 잃지 않는 방법">
-            Consumer가 처리하다 실패하면 1초, 2초, 4초 간격으로 다시 시도하고, 그래도 실패하면 원본 그대로 <code>{'{토픽}.DLT'}</code>로 옮겨 다음 메시지가 막히지 않게 해요.
-            원인을 고친 뒤 DLT 메시지를 원래 토픽으로 다시 보내면, 처리 기록(processed_event) 덕분에 한 번만 반영돼요. 잔액 부족 같은 업무 거절은 DLT로 보내지 않고 거절 이벤트로 응답해요.
+            <ul className="dots">
+              <li>Consumer가 처리하다 실패하면 1초, 2초, 4초 간격으로 다시 시도해요.</li>
+              <li>그래도 실패하면 원본 그대로 <code>{'{토픽}.DLT'}</code>로 옮겨 다음 메시지가 막히지 않게 해요.</li>
+              <li>원인을 고친 뒤 DLT 메시지를 원래 토픽으로 다시 보내면, 처리 기록(processed_event) 덕분에 한 번만 반영돼요.</li>
+              <li>잔액 부족 같은 업무 거절은 DLT로 보내지 않고 거절 이벤트로 응답해요.</li>
+            </ul>
           </DesignNote>
         </div>
       )}

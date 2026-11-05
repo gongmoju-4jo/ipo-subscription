@@ -203,3 +203,7 @@ pre.code { background: #0f1720; color: #d6e2f0; padding: 12px; border-radius: 10
 .lines { white-space: pre-line; }
 .grid-wide-left { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
 @media (max-width: 860px) { .grid-wide-left { grid-template-columns: 1fr; } }
+.grid-narrow-left { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+@media (max-width: 860px) { .grid-narrow-left { grid-template-columns: 1fr; } }
+.kv-left { grid-template-columns: 80px auto; justify-content: start; }
+.kv-left dd { text-align: left; }

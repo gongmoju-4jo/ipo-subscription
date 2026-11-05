@@ -27,8 +27,14 @@ export function ApiInspector() {
   }, [open]);
 
   if (!DEMO) return null;
-  // 백엔드 API를 위로, 시연용 운영 조회(/ops)는 아래로. 각 묶음 안에서는 원래 순서(최근 순) 유지
-  const sorted = [...rows.filter((r) => !r.path.startsWith('/ops')), ...rows.filter((r) => r.path.startsWith('/ops'))];
+  // 각 묶음 안에서는 원래 순서(최근 순) 유지
+  // POST(백엔드 쓰기 요청) → 나머지 백엔드 → 운영 조회 순. 운영 조회는 모두 GET
+  const isOps = (r: ExchangeRecord) => r.path.startsWith('/ops');
+  const sorted = [
+    ...rows.filter((r) => !isOps(r) && r.method === 'POST'),
+    ...rows.filter((r) => !isOps(r) && r.method !== 'POST'),
+    ...rows.filter(isOps),
+  ];
   const current = sorted.find((r) => r.id === selected) ?? sorted[0];
 
   return (

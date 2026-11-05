@@ -87,11 +87,11 @@ function TraceBody({ subscriptionId, live }: { subscriptionId: string; live: boo
         </table>
       </div>
 
-      <div className="grid grid-2">
+      <div className="grid grid-narrow-left">
         <div>
           <div className="card-title">증거금</div>
           {t.margin ? (
-            <dl className="kv">
+            <dl className="kv kv-left">
               <dt>상태</dt><dd><code>{String(t.margin.status)}</code></dd>
               <dt>금액</dt><dd className="num">{formatWon(Number(t.margin.amount))}</dd>
               <dt>정산 금액</dt><dd className="num">{t.margin.posted_amount == null ? '-' : formatWon(Number(t.margin.posted_amount))}</dd>

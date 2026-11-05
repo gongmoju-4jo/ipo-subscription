@@ -27,6 +27,7 @@
 | `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). 3-4절 |
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
+| `loadtest/verify/consumer_stats.py` | 정식 측정이 끝난 뒤 따로 실행. S1의 증거금 인출 Consumer 처리량, 랙 추이, 오류율, 병목 의심 단계 (`인출.md`, `인출.csv`, `인출-prometheus.json`). `python loadtest/verify/consumer_stats.py --batch <이름>` |
 | `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 |
 | `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
@@ -198,7 +199,9 @@ python loadtest/report.py --run-id $RUN                                         
 - 3번에서 시나리오(`s0`~`s4`)와 회원 CSV를 바꿉니다: `--users data/users-s4.csv`, 값 조정은 `-e KEY=VALUE` (예: `-e RATE=300 -e DURATION=60s`).
 - 3번 종료 코드가 99이면 합격 기준을 어긴 것입니다 (7장).
 - 5번의 정합성 SQL 대부분은 Consumer가 구현된 뒤에야 의미 있는 값이 나옵니다. 그 전에는 청약 행이 생기지 않습니다.
-- 5번의 11~15번(배정, 정산 검사)은 배정 라운드가 `DONE`, 공모주가 `ALLOCATED`이고 정산 대기(`PENDING`) 증거금이 없을 때 다시 실행해야 의미가 있습니다. 배정 전에 나온 0행은 대상이 없어서 나온 것이라 통과로 보지 않습니다.
+- 5번의 11~15번(배정, 정산 검사)은 배정 라운드가 `DONE`, 공모주가 `ALLOCATED`이고 정산 대기(`PENDING`) 증거금이 없을 때 다시 실행해야 의미가 있습니다. 
+  - 배정 전에 나온 0행은 대상이 없어서 나온 것이라 통과로 보지 않습니다. 
+  - 1~10번은 정산 전 기준이라 다시 실행할 때는 11~15번 결과만 봅니다.
 - 5번 전에 Kafka Consumer lag이 0이고 `PENDING`이 0건인지 확인합니다 (Kafka-UI Consumers 탭 또는 `kafka-consumer-groups.sh --describe`).
 - 7번은 `results/$RUN/report.md`를 만듭니다 (k6 요약, 결과 분류, 서비스별 서버 지표). Prometheus가 구간 끝 이후의 수집을 마칠 때까지 몇 초 기다립니다. 5, 6번까지 끝낸 뒤에 실행하면 `precheck.txt`, `sql_result.txt`도 원본 목록에 들어갑니다. 컨테이너에서 실행하면 `PROMETHEUS_URL=http://prometheus:9090`을 줍니다.
 - 측정 후 Grafana "측정 대시보드"에서 측정 구간을 캡처합니다.
@@ -257,7 +260,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | --- | --- |
 | `진행.log` | 진행 기록 (재시작 시각, 토큰 재발급 시점, 회차별 처리량, 소진 대기 시간) |
 | `env.txt` | 커밋, dirty 여부, 서비스별 jar sha256, OS, bash, Python, Docker, compose 버전, 설정값 전부 |
-| `manifest.csv` | 실행 목록 (워밍업은 시나리오 `W`, 구간 `warmup`으로 판정에 쓰지 않음. run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
+| `manifest.csv` | 실행 목록 (워밍업은 시나리오 `W`, 구간 `warmup`으로 판정에 쓰지 않음. run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기, 소진 확인 시각 `drain_end`). 후처리와 판정은 열 이름으로 읽는다 |
 | `warmup.csv` | 워밍업 구간마다 끝 시각, 경과 초, 요청 수, 평균 응답 ms, 분당 기울기 %, 분당 기울기 ms, 연속 통과 수, 판정 |
 | `db-after.dump` | 측정이 끝난 DB 덤프 (`pg_dump -Fc --create`. `pg_restore --create -d postgres`로 되살린다) |
 | `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |
@@ -326,6 +329,7 @@ bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조�
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
+python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)
 ```
 
 - `loadtest/tests/fixtures/consumer-groups.txt`는 `kafka-consumer-groups.sh --describe --all-groups`의 실제 출력, `docker-stats.raw`는 `docker stats --no-stream --format '{{json .}}'`의 실제 출력입니다. 출력 형식이 바뀌면 새로 받아 바꿉니다.

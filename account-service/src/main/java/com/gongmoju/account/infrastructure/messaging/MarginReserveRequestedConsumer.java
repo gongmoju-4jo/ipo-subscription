@@ -21,7 +21,8 @@ class MarginReserveRequestedConsumer {
     private final ObjectMapper objectMapper;
     private final MarginReserveService marginReserveService;
 
-    @KafkaListener(topics = MarginReserveService.TOPIC, groupId = MarginReserveService.CONSUMER_NAME)
+    // id: 리스너 지표(spring_kafka_listener) name 라벨 고정용. Consumer Group은 groupId가 우선이라 그대로
+    @KafkaListener(id = MarginReserveService.CONSUMER_NAME, topics = MarginReserveService.TOPIC, groupId = MarginReserveService.CONSUMER_NAME)
     void consume(String payload) {
         ReserveMarginCommand command;
         try {

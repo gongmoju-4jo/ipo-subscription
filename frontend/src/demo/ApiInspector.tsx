@@ -27,7 +27,9 @@ export function ApiInspector() {
   }, [open]);
 
   if (!DEMO) return null;
-  const current = rows.find((r) => r.id === selected) ?? rows[0];
+  // 백엔드 API를 위로, 시연용 운영 조회(/ops)는 아래로. 각 묶음 안에서는 원래 순서(최근 순) 유지
+  const sorted = [...rows.filter((r) => !r.path.startsWith('/ops')), ...rows.filter((r) => r.path.startsWith('/ops'))];
+  const current = sorted.find((r) => r.id === selected) ?? sorted[0];
 
   return (
     <>
@@ -49,7 +51,7 @@ export function ApiInspector() {
           ) : (
             <div className="inspector-body">
               <ul className="inspector-list">
-                {rows.map((r) => (
+                {sorted.map((r) => (
                   <li key={r.id} className={r.id === current?.id ? 'on' : ''} onClick={() => setSelected(r.id)}>
                     <span className={`method m-${r.method}`}>{r.method}</span>
                     <span className="path-wrap">

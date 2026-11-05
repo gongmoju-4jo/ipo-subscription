@@ -194,9 +194,14 @@ class Main(unittest.TestCase):
         # 소진 확인 뒤 수집된 누적값까지 읽어야 마지막 처리분이 빠지지 않는다
         seen = {}
         def call(base, path, params):
-            if "listener" in params.get("query", "") and path.endswith("query_range"):
+            q = params.get("query", "")
+            if "listener" in q and path.endswith("query_range"):
                 seen["end"] = params["end"]
-            return prom_resp([{"metric": {"result": "success"}, "values": [[T0, "1"]]}]) if path.endswith("query_range") else prom_resp([{"value": [T0, "3"]}])
+            if path.endswith("query_range"):
+                return prom_resp([{"metric": {"result": "success"}, "values": [[T0, "1"]]}])
+            if "listener" in q and "timestamp" not in q:
+                return prom_resp([{"metric": {"result": "success"}, "value": [T0, "1"]}])
+            return prom_resp([{"value": [T0, "3"]}])
         run = dict(run="r", start=T0, end=T0 + 10, drain=5, w1=T0 + 15, stop=T0 + 16, exact=True)
         cs.query_prom(run, "http://x", get=call)
         self.assertEqual(seen["end"], T0 + 16 + cs.STEP)  # 소진 확인 초(T0+15)가 끝난 뒤 + 수집 1회
@@ -250,6 +255,27 @@ class Main(unittest.TestCase):
     def test_scrape_within_drain_second_fails(self):
         # 소진 확인 초 안의 수집은 확인 시각보다 이를 수 있어 실패
         self.assertEqual(self.run_main(prom=self.fake_prom(scrape_after=0.5)), 1)
+
+    def test_listener_end_matches_scrape_check_time(self):
+        # 시작 T0, stop T0+18 → 범위 평가는 T0+20이 마지막인데 수집 확인은 T0+23. 그 사이(T0+22.5) 수집분도 전체 수신에 들어가야 한다
+        def call(base, path, params):
+            q = params.get("query", "")
+            if path.endswith("query_range"):
+                if "listener" in q:
+                    return prom_resp([{"metric": {"result": "success"}, "values": [[T0, "0"], [T0 + 20, "990"]]}])
+                return prom_resp([{"metric": {}, "values": [[T0, "0"]]}])
+            if "timestamp" in q:
+                return prom_resp([{"value": [T0 + 23, str(T0 + 22.5)]}])
+            if "listener" in q:
+                self.assertEqual(params["time"], T0 + 23)
+                return prom_resp([{"metric": {"result": "success"}, "value": [T0 + 23, "1000"]},
+                                  {"metric": {"result": "failure"}, "value": [T0 + 23, "2"]}])
+            return prom_resp([{"value": [T0, "3"]}])
+        run = dict(run="r", start=T0, end=T0 + 10, drain=7, w1=T0 + 17, stop=T0 + 18, exact=True)
+        _, _, listener, _, scrape = cs.query_prom(run, "http://x", get=call)
+        self.assertEqual(cs.increase(listener["success"], T0), 1000)
+        self.assertEqual(cs.increase(listener["failure"], T0), 2)  # 범위 조회에 없던 실패도 보고
+        self.assertGreaterEqual(scrape, run["stop"])
 
     def test_time_basis_is_written(self):
         self.assertEqual(self.run_main(), 0)

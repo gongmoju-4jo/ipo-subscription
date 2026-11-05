@@ -138,6 +138,8 @@ def query_prom(run, base, get=prom_get):
     raw = {"lag": get(base, "/api/v1/query_range", {"query": LAG_Q, **rng}),
            # 누적값은 5초마다 수집되므로 소진 확인 초가 끝난 뒤 한 번 더 수집된 값(+STEP)까지 읽는다. 실행 사이 GAP 동안 요청이 없어 다음 실행은 섞이지 않는다
            "listener": get(base, "/api/v1/query_range", {"query": LISTENER_Q, **rng, "end": stop + STEP}),
+           # 범위 조회는 시작부터 5초 간격으로만 평가해 마지막 평가가 stop + STEP보다 이를 수 있다. 수집 확인과 같은 시각의 값을 따로 읽어 마지막 값으로 쓴다
+           "listener_end": get(base, "/api/v1/query", {"query": LISTENER_Q, "time": stop + STEP}),
            "listener_scrape": get(base, "/api/v1/query", {"query": LISTENER_SCRAPE_Q, "time": stop + STEP}),
            "lag_samples": get(base, "/api/v1/query", {"query": LAG_SAMPLES_Q.format(d=w1 - w0), "time": w1})}
     lag_res = raw["lag"]["data"]["result"]
@@ -146,6 +148,10 @@ def query_prom(run, base, get=prom_get):
     lag = [(int(float(t)), float(v)) for t, v in lag_res[0]["values"]]
     listener = {s["metric"].get("result", "?"): [(int(float(t)), float(v)) for t, v in s["values"]]
                 for s in raw["listener"]["data"]["result"]}
+    for s in raw["listener_end"]["data"]["result"]:
+        pts = listener.setdefault(s["metric"].get("result", "?"), [])
+        if not pts or pts[-1][0] < stop + STEP:
+            pts.append((stop + STEP, float(s["value"][1])))
     if not listener:
         raise RuntimeError(f"{run['run']}: 리스너 시계열이 없음 ({LISTENER_Q})")
     smp = raw["lag_samples"]["data"]["result"]

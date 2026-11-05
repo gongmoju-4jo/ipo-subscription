@@ -17,7 +17,7 @@ spec.loader.exec_module(judge)
 
 U = ["6f1c3b0e-1111-4a2b-8c3d-%012d" % i for i in range(1, 20)]
 # official.sh가 쓰는 manifest.csv 머리줄과 같아야 한다
-MANIFEST_HEADER = "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s\n"
+MANIFEST_HEADER = "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s,drain_end\n"
 
 
 def summary(requests=1000, rate=500.0, avg=80.0, p95=130.0, fail=0.0, dropped=None):

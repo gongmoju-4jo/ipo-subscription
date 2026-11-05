@@ -140,7 +140,7 @@ class Main(unittest.TestCase):
             lis = {"success": [(run["start"], 0.0), (run["start"] + 15, 1010.0)]} if listener else {}
             if not lis:
                 raise RuntimeError("리스너 시계열이 없음")
-            return {"raw": run["run"]}, pts, lis, samples, run["end"] + run["drain"] + scrape_after
+            return {"raw": run["run"]}, pts, lis, samples, run["w1"] + scrape_after
         return f
 
     def run_main(self, **kw):
@@ -186,7 +186,7 @@ class Main(unittest.TestCase):
     def test_missing_lag_series_fails(self):
         def call(path, params):
             return prom_resp([]) if "records_lag" in params.get("query", "") and path.endswith("query_range") else prom_resp([{"metric": {}, "values": [[T0, "1"]]}])
-        run = dict(run="r", start=T0, end=T0 + 10, drain=5)
+        run = dict(run="r", start=T0, end=T0 + 10, drain=5, w1=T0 + 15, stop=T0 + 16, exact=True)
         with self.assertRaises(RuntimeError):
             cs.query_prom(run, "http://x", get=lambda base, path, params: call(path, params))
 
@@ -197,9 +197,59 @@ class Main(unittest.TestCase):
             if "listener" in params.get("query", "") and path.endswith("query_range"):
                 seen["end"] = params["end"]
             return prom_resp([{"metric": {"result": "success"}, "values": [[T0, "1"]]}]) if path.endswith("query_range") else prom_resp([{"value": [T0, "3"]}])
-        run = dict(run="r", start=T0, end=T0 + 10, drain=5)
+        run = dict(run="r", start=T0, end=T0 + 10, drain=5, w1=T0 + 15, stop=T0 + 16, exact=True)
         cs.query_prom(run, "http://x", get=call)
-        self.assertEqual(seen["end"], T0 + 15 + cs.STEP)
+        self.assertEqual(seen["end"], T0 + 16 + cs.STEP)  # 소진 확인 초(T0+15)가 끝난 뒤 + 수집 1회
+
+    def test_drain_end_is_window_end(self):
+        # manifest에 drain_end가 있으면 그 초 전체까지 집계하고, 없으면 k6 종료 + drain_s로 근사
+        write(os.path.join(self.out, "manifest.csv"), HEADER.strip() + ",drain_end\n"
+              + f"b1-S1-100-r1,S1,measure,1,100,10,1000,{IPO},{T0},{T0 + 10},5,{T0 + 17}\n")
+        r = cs.read_s1_runs(os.path.join(self.out, "manifest.csv"))[0]
+        self.assertEqual((r["w1"], r["stop"], r["exact"]), (T0 + 17, T0 + 18, True))
+        write(os.path.join(self.out, "manifest.csv"), HEADER + f"b1-S1-100-r1,S1,measure,1,100,10,1000,{IPO},{T0},{T0 + 10},5\n")
+        r = cs.read_s1_runs(os.path.join(self.out, "manifest.csv"))[0]
+        self.assertEqual((r["w1"], r["stop"], r["exact"]), (T0 + 15, T0 + 16, False))
+
+    def test_db_window_uses_drain_end_second(self):
+        sqls = []
+        orig = cs.psql
+        def fake(sql, container):
+            sqls.append(sql)
+            return [["1"] * 7] if len(sqls) == 1 else []
+        cs.psql = fake
+        try:
+            cs.query_db(dict(run="r", ipos=[IPO], start=T0, end=T0 + 10, drain=5, w1=T0 + 17, stop=T0 + 18, exact=True), "c")
+        finally:
+            cs.psql = orig
+        self.assertIn(f"created_at < to_timestamp({T0 + 18})", sqls[0])
+        self.assertIn(f"processed_at <= to_timestamp({T0 + 10})", sqls[0])  # 부하 중 기준은 k6 종료 그대로
+        self.assertNotIn(f"to_timestamp({T0 + 15})", sqls[0])
+
+    def test_basis_is_shown(self):
+        write(os.path.join(self.out, "manifest.csv"), HEADER.strip() + ",drain_end\n"
+              + f"b1-S1-100-r1,S1,measure,1,100,10,1000,{IPO},{T0},{T0 + 10},5,{T0 + 15}\n"
+              + f"b1-S1-100-r2,S1,measure,2,100,10,1000,{IPO},{T0 + 100},{T0 + 110},5,\n")
+        self.assertEqual(self.run_main(), 0)
+        md = read(os.path.join(self.out, "인출.md"))
+        self.assertIn("(drain_end)", md)
+        self.assertIn("(근사: k6 종료 + drain_s)", md)
+
+    def test_expected_samples_match_lag_query_range(self):
+        # 랙 샘플은 k6 시작부터 소진 확인 초까지(19초) 조회 → 기대 3개. 집계 상한(+1초, 20초)으로 세면 4개라 누락으로 잘못 판정
+        write(os.path.join(self.out, "manifest.csv"), HEADER.strip() + ",drain_end\n"
+              + f"b1-S1-100-r1,S1,measure,1,100,10,1000,{IPO},{T0},{T0 + 10},5,{T0 + 19}\n")
+        self.assertEqual(self.run_main(prom=self.fake_prom(samples=3)), 0)
+
+    def test_bad_drain_end_fails(self):
+        write(os.path.join(self.out, "manifest.csv"), HEADER.strip() + ",drain_end\n"
+              + f"b1-S1-100-r1,S1,measure,1,100,10,1000,{IPO},{T0},{T0 + 10},5,x\n")
+        with self.assertRaisesRegex(ValueError, "drain_end가 숫자가 아님"):
+            cs.read_s1_runs(os.path.join(self.out, "manifest.csv"))
+
+    def test_scrape_within_drain_second_fails(self):
+        # 소진 확인 초 안의 수집은 확인 시각보다 이를 수 있어 실패
+        self.assertEqual(self.run_main(prom=self.fake_prom(scrape_after=0.5)), 1)
 
     def test_time_basis_is_written(self):
         self.assertEqual(self.run_main(), 0)

@@ -260,7 +260,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | --- | --- |
 | `진행.log` | 진행 기록 (재시작 시각, 토큰 재발급 시점, 회차별 처리량, 소진 대기 시간) |
 | `env.txt` | 커밋, dirty 여부, 서비스별 jar sha256, OS, bash, Python, Docker, compose 버전, 설정값 전부 |
-| `manifest.csv` | 실행 목록 (워밍업은 시나리오 `W`, 구간 `warmup`으로 판정에 쓰지 않음. run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기). 후처리와 판정은 열 이름으로 읽는다 |
+| `manifest.csv` | 실행 목록 (워밍업은 시나리오 `W`, 구간 `warmup`으로 판정에 쓰지 않음. run_id, 시나리오, 구간, 반복 번호, 목표 속도, 유지 시간, 예상 요청 수, 공모주 ID, k6 시작·종료 시각, 소진 대기, 소진 확인 시각 `drain_end`). 후처리와 판정은 열 이름으로 읽는다 |
 | `warmup.csv` | 워밍업 구간마다 끝 시각, 경과 초, 요청 수, 평균 응답 ms, 분당 기울기 %, 분당 기울기 ms, 연속 통과 수, 판정 |
 | `db-after.dump` | 측정이 끝난 DB 덤프 (`pg_dump -Fc --create`. `pg_restore --create -d postgres`로 되살린다) |
 | `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |

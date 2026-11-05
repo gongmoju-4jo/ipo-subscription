@@ -7,7 +7,9 @@
   인출.csv              실행별 5초 단위 원본 (랙, 리스너 누적 건수, 그 5초에 생긴 증거금 수)
   인출-prometheus.json  Prometheus query_range 응답 원본 (보관 기간이 지나도 다시 볼 수 있게)
 
-측정 구간: 실행마다 k6_start ~ k6_end + drain_s (소진 대기까지). "부하 중"은 k6_start ~ k6_end
+측정 구간: 실행마다 k6_start부터 소진 확인 시각(manifest drain_end)까지. "부하 중"은 k6_start부터 k6_end까지
+  drain_end는 정수 초라 그 초 전체를 포함한다 (DB는 < drain_end + 1). drain_end가 없는 예전 manifest는 k6_end + drain_s로 계산하고 근사로 표시한다
+  (drain_s는 소진 대기 시작부터 잰 정수 초라 실제 확인 시각보다 최대 약 2초 이를 수 있다)
 구분 (원천):
   인출 성공      이번 실행 공모주의 margin 중 created_at이 측정 구간 안 (DB)
   고유 이벤트 처리 processed_event(consumer_name=account-margin-reserve)의 processed_at이 측정 구간 안. 같은 eventId 중복 수신, DLT로 간 건은 빠진다 (DB)
@@ -48,7 +50,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ---------- 입력 ----------
 def read_s1_runs(path):
-    """manifest.csv의 S1 실행 → [dict(run, rep, rate, ipos, start, end, drain)]"""
+    """manifest.csv의 S1 실행 → [dict(run, rep, rate, ipos, start, end, drain, w1, stop, exact)]. w1 = 소진 확인 초, stop = w1 + 1 (DB 상한, 제외)"""
     with open(path, encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
     runs = []
@@ -64,8 +66,13 @@ def read_s1_runs(path):
                 raise ValueError(f"manifest {r['run_id']}: 공모주 ID 형식이 아님: {i}")
         if not ipos:
             raise ValueError(f"manifest {r['run_id']}: 공모주 ID 없음")
+        de = (r.get("drain_end") or "").strip()
+        if de and not de.isdigit():
+            raise ValueError(f"manifest {r['run_id']}: drain_end가 숫자가 아님")
+        start, end, drain = int(r["k6_start"]), int(r["k6_end"]), int(r["drain_s"])
+        w1 = int(de) if de else end + drain
         runs.append(dict(run=r["run_id"], rep=r.get("repeat", ""), rate=int(r["target_rate"]), ipos=ipos,
-                         start=int(r["k6_start"]), end=int(r["k6_end"]), drain=int(r["drain_s"])))
+                         start=start, end=end, drain=drain, w1=w1, stop=w1 + 1, exact=bool(de)))
     return runs
 
 
@@ -85,8 +92,8 @@ def env_lines(path):
 def query_db(run, container):
     """측정 구간과 부하 중 건수, 증거금 생성 5초 버킷. 실패하면 RuntimeError (0으로 넘기지 않음)"""
     ins = ",".join(f"'{i}'" for i in run["ipos"])
-    w0, w1, l1 = run["start"], run["end"] + run["drain"], run["end"]
-    win = lambda col: f"{col} >= to_timestamp({w0}) and {col} <= to_timestamp({w1})"
+    w0, stop, l1 = run["start"], run["stop"], run["end"]
+    win = lambda col: f"{col} >= to_timestamp({w0}) and {col} < to_timestamp({stop})"
     sql = ("select "
            f"(select count(*) from account.margin where ipo_id in ({ins}) and {win('created_at')}), "
            f"(select count(*) from account.processed_event where consumer_name = '{CONSUMER}' and {win('processed_at')}), "
@@ -126,12 +133,12 @@ def prom_get(base, path, params):
 
 def query_prom(run, base, get=prom_get):
     """(원본 응답 dict, 랙 [(t, v)], 리스너 {result: [(t, v)]}, 저장 샘플 수, 리스너 최종 수집 시각). 랙 시계열이 없으면 RuntimeError"""
-    w0, w1 = run["start"], run["end"] + run["drain"]
+    w0, w1, stop = run["start"], run["w1"], run["stop"]
     rng = {"start": w0, "end": w1, "step": STEP}
     raw = {"lag": get(base, "/api/v1/query_range", {"query": LAG_Q, **rng}),
-           # 누적값은 5초마다 수집되므로 소진 확인 뒤 한 번 더 수집된 값(+STEP)까지 읽는다. 실행 사이 GAP(>= STEP) 동안 요청이 없어 다음 실행은 섞이지 않는다
-           "listener": get(base, "/api/v1/query_range", {"query": LISTENER_Q, **rng, "end": w1 + STEP}),
-           "listener_scrape": get(base, "/api/v1/query", {"query": LISTENER_SCRAPE_Q, "time": w1 + STEP}),
+           # 누적값은 5초마다 수집되므로 소진 확인 초가 끝난 뒤 한 번 더 수집된 값(+STEP)까지 읽는다. 실행 사이 GAP 동안 요청이 없어 다음 실행은 섞이지 않는다
+           "listener": get(base, "/api/v1/query_range", {"query": LISTENER_Q, **rng, "end": stop + STEP}),
+           "listener_scrape": get(base, "/api/v1/query", {"query": LISTENER_SCRAPE_Q, "time": stop + STEP}),
            "lag_samples": get(base, "/api/v1/query", {"query": LAG_SAMPLES_Q.format(d=w1 - w0), "time": w1})}
     lag_res = raw["lag"]["data"]["result"]
     if not lag_res:
@@ -190,7 +197,7 @@ def judge_run(lag_load):
 
 def analyze(run, db, lag, listener, samples, scrape):
     load = run["end"] - run["start"]
-    window = run["end"] + run["drain"] - run["start"]
+    window = run["stop"] - run["start"]
     lag_load = [(t, v) for t, v in lag if t <= run["end"]]
     rate_load = db["processed_load"] / load if load > 0 else 0.0
     j = judge_run(lag_load)
@@ -204,13 +211,12 @@ def analyze(run, db, lag, listener, samples, scrape):
                 processed=db["processed"], processed_load_rate=rate_load, rejected=db["rejected"],
                 republished=db["reserved"] - db["success"], other=db["processed"] - db["success"] - db["rejected"] - (db["reserved"] - db["success"]),
                 received=received, failure=fail, error_pct=(fail / received * 100) if received else 0.0,
-                samples=samples, samples_expected=window // STEP, listener_scrape=scrape, **j)
+                samples=samples, samples_expected=(run["w1"] - run["start"]) // STEP, listener_scrape=scrape, **j)
 
 
 def check_scrape(r, run):
-    w1 = run["end"] + run["drain"]
-    if r["listener_scrape"] <= w1:
-        return f"{r['run']}: 리스너 최종 수집 시각이 소진 확인({kst(w1)}) 이전 → 마지막 처리분이 전체 수신에서 빠졌을 수 있음"
+    if r["listener_scrape"] < run["stop"]:
+        return f"{r['run']}: 리스너 최종 수집 시각이 소진 확인({kst(run['w1'])}초) 이전 → 마지막 처리분이 전체 수신에서 빠졌을 수 있음"
     return None
 
 
@@ -247,8 +253,8 @@ def render(batch, env, runs, results, stages, problems, clock=None):
     yn = lambda b: "예" if b else "아니오"
     L = [f"# 증거금 인출 Consumer 처리량 ({batch})", "", "## 측정 환경 (env.txt)", ""] + [f"- `{x}`" for x in env] + [""]
     L += ["## 정의", "",
-          "- 측정 구간: k6 시작 ~ k6 종료 + 소진 대기. 부하 중: k6 시작 ~ 종료",
-          "- 인출 성공 건/초: 이번 실행 공모주의 새 증거금 수 / (첫 생성 ~ 마지막 생성 시각)",
+          "- 측정 구간: k6 시작부터 소진 확인 초 끝까지 (manifest drain_end). 부하 중: k6 시작부터 종료까지",
+          "- 인출 성공 건/초: 이번 실행 공모주의 새 증거금 수 / (첫 생성부터 마지막 생성까지 시간)",
           "- 고유 처리 건/초(부하 중): processed_event 건수(중복 eventId, DLT 제외) / 부하 시간",
           "- 재발행: 이미 PENDING인 증거금에 온 재요청 (margin.reserved Outbox - 성공). 기타: 고유 처리 - 성공 - 거절 - 재발행",
           "- 전체 수신, 오류: 리스너 지표(spring_kafka_listener) 증가분. 중복 수신과 재시도 포함",
@@ -272,19 +278,21 @@ def render(batch, env, runs, results, stages, problems, clock=None):
           "| 실행 | 구간(KST) | 성공 | 성공 건/초 | 고유 처리 | 거절 | 재발행 | 기타 | 전체 수신 | 오류 | 랙 최대/끝 | 기울기 | 증가 추세 | 랙 샘플 |",
           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for run, r in zip(runs, results):
-        L.append(f"| {r['run']} | {kst(run['start'])}~{kst(run['end'])}+{run['drain']}s | {r['success']} | {r['success_rate']:.1f} | {r['processed']} | "
+        L.append(f"| {r['run']} | {kst(run['start'])}-{kst(run['end'])}+{run['drain']}s | {r['success']} | {r['success_rate']:.1f} | {r['processed']} | "
                  f"{r['rejected']} | {r['republished']} | {r['other']} | {r['received']:.0f} | {r['failure']:.0f} | {r['lag_max']:.0f}/{r['lag_end']:.0f} | "
                  f"{r['lag_slope']:.2f} | {yn(r['rising'])} | {r['samples']}/{r['samples_expected']} |")
     L += ["", "## 시간 기준", "",
-          "| 실행 | DB 집계 구간 | 고유 처리(부하 중) 구간 | 랙 조회 구간 | 리스너 누적값 기준 | 리스너 최종 수집 시각 |",
-          "| --- | --- | --- | --- | --- | --- |"]
+          "| 실행 | 소진 확인 시각 | DB 집계 구간 | 고유 처리(부하 중) 구간 | 랙 조회 구간 | 리스너 누적값 기준 | 리스너 최종 수집 시각 |",
+          "| --- | --- | --- | --- | --- | --- | --- |"]
     for run, r in zip(runs, results):
-        w1 = run["end"] + run["drain"]
-        L.append(f"| {r['run']} | {kst(run['start'])} ~ {kst(w1)} | {kst(run['start'])} ~ {kst(run['end'])} | "
-                 f"{kst(run['start'])} ~ {kst(w1)} (5초 간격 평가) | {kst(run['start'])} 직전 수집 → {kst(w1 + STEP)} 직전 수집 | "
+        w1 = run["w1"]
+        basis = "drain_end" if run["exact"] else "근사: k6 종료 + drain_s"
+        L.append(f"| {r['run']} | {kst(w1)} ({basis}) | {kst(run['start'])} 이상, {kst(run['stop'])} 미만 | {kst(run['start'])}-{kst(run['end'])} | "
+                 f"{kst(run['start'])}-{kst(w1)} (5초 간격 평가) | {kst(run['start'])} 직전 수집 → {kst(run['stop'] + STEP)} 직전 수집 | "
                  f"{kst(r['listener_scrape']) if r['listener_scrape'] else '없음'} |")
-    L += ["", "- DB 집계: margin.created_at, processed_event.processed_at, outbox.created_at이 구간 안인 행 (양 끝 포함). 시각은 서비스 컨테이너(JVM) 시계",
-          "- 구간 경계(k6 시작, 종료, 소진 확인)는 official.sh가 이 PC 시계로 정수 초 단위로 기록",
+    L += ["", "- DB 집계: margin.created_at, processed_event.processed_at, outbox.created_at이 구간 안인 행. 시각은 서비스 컨테이너(JVM) 시계",
+          "- 구간 경계(k6 시작, 종료, 소진 확인)는 official.sh가 이 PC 시계로 정수 초 단위로 기록. 소진 확인 초는 그 초 전체를 포함한다",
+          "- 근사로 표시된 실행: drain_end가 없는 예전 manifest라 k6 종료 + drain_s로 계산. 소진 대기 시작부터 잰 정수 초라 실제 확인보다 최대 약 2초 이를 수 있다",
           "- Prometheus: 5초마다 수집. 랙은 평가 시각 직전 수집값이라 최대 5초 늦다. 리스너 누적값은 구간 끝 뒤 첫 수집까지 읽어서 DB 구간보다 최대 5초 길다",
           "- 한계: 두 지표의 시간 기준이 달라 같은 구간의 건수가 경계에서 최대 수 초 어긋날 수 있다. 실행 사이 GAP(요청 없음) 동안은 처리할 메시지가 없어 "
           "GAP이 5초 이상이면 건수는 섞이지 않는다. 5초 단위 시계열(인출.csv)을 나란히 볼 때는 이 차이를 감안한다",

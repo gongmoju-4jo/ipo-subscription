@@ -229,6 +229,25 @@ public class Subscription extends BaseEntity {
     }
 
     /**
+     * 응답이 없는 {@code COMPENSATING}, {@code CANCEL_REQUESTED}의 증거금 반환 요청({@code margin.void-requested})을 재요청 시
+     * 요청 횟수({@code attempts})를 증가시키고 마지막 요청 시각({@code lastRequestedAt})을 현재 시각으로 갱신.
+     * 상태와 해제 사유({@code cancelReason})는 유지
+     * 같은 트랜잭션에서 같은 해제 사유로 Outbox에 다시 기록.
+     *
+     * @throws IllegalStateException {@code COMPENSATING}, {@code CANCEL_REQUESTED}가 아닌 상태에서 호출했거나, 해제 사유가 없는 경우
+     */
+    public void retryVoid() {
+        if (status != SubscriptionStatus.COMPENSATING && status != SubscriptionStatus.CANCEL_REQUESTED) {
+            throw new IllegalStateException("COMPENSATING, CANCEL_REQUESTED 상태에서만 반환을 다시 요청할 수 있습니다: " + status);
+        }
+        if (cancelReason == null) {
+            throw new IllegalStateException("해제 사유가 없는 청약은 반환을 다시 요청할 수 없습니다: " + status);
+        }
+        this.attempts++;
+        this.lastRequestedAt = Instant.now();
+    }
+
+    /**
      * 요청 횟수({@code attempts})가 최대 시도 횟수 이상인지 확인. {@code attempts}는 청약 접수 때 증가시키며 최대 횟수는 "총 인출 요청 횟수".
      * 최대 시도 횟수에 도달한 {@code PENDING}이 응답 시간까지 지나면 더 이상 재요청하지 않고 시간 초과 보상({@code COMPENSATING(TIMEOUT)})으로 넘어감.
      */

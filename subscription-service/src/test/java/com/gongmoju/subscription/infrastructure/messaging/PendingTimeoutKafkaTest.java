@@ -43,7 +43,7 @@ import static org.awaitility.Awaitility.await;
  * 실제 스케줄러, Outbox 발행기, Kafka, PostgreSQL(Testcontainers)로 PENDING 응답 시간 초과 처리를 처음부터 끝까지 검증함. Docker 필요.
  * 응답이 없는 PENDING을 스케줄러가 찾아 인출 요청을 다시 발행하고, 응답이 오면 확정되는 흐름과, 최대 횟수에 이르면 시간 초과 보상으로
  * 반환 요청이 발행되고 반환 응답을 받으면 취소되는 흐름을 확인함.
- * 시험이 짧게 끝나도록 최대 횟수는 2, 응답 시간은 10초로 줄임. 처리 대상은 마지막 요청 시각을 1분 전으로 만들어 바로 걸리게 함.
+ * 시험이 짧게 끝나도록 최대 횟수는 2, 응답 시간은 20초로 줄임. 응답 시간을 너무 짧게 하면 보상이 시작된 뒤 같은 컨텍스트의 반환 재요청 스케줄러가 반환 요청을 한 번 더 기록해 테스트가 흔들림(처리 흐름은 몇 초 안에 끝남). 처리 대상은 마지막 요청 시각을 1분 전으로 만들어 바로 걸리게 함.
  * 메시지 키를 테스트마다 다른 계좌 ID로 구분해서 같은 토픽을 공유해도 서로 영향이 없음.
  */
 @Testcontainers
@@ -54,7 +54,7 @@ import static org.awaitility.Awaitility.await;
         "outbox.publisher.enabled=true",
         "saga.timeout.enabled=true",
         "saga.timeout.interval=PT1S",
-        "saga.timeout.response-timeout=PT10S",
+        "saga.timeout.response-timeout=PT20S",
         "saga.timeout.max-attempts=2"
 })
 @DisplayName("PENDING 응답 시간 초과 처리 (스케줄러, Kafka, PostgreSQL)")
@@ -199,7 +199,7 @@ class PendingTimeoutKafkaTest {
         await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> assertThat(status()).isEqualTo("CANCELLED"));
     }
 
-    // 마지막 요청 시각을 1분 전으로 만들어 응답 시간(10초)이 이미 지난 PENDING을 만든다. 인출 요청 Outbox가 없어서(발행 완료로 간주) 조회 대상이 된다
+    // 마지막 요청 시각을 1분 전으로 만들어 응답 시간(20초)이 이미 지난 PENDING을 만든다. 인출 요청 Outbox가 없어서(발행 완료로 간주) 조회 대상이 된다
     private void insertPending(int attempts) {
         jdbcTemplate.update("""
                 INSERT INTO subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,

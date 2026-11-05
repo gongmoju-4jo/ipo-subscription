@@ -113,6 +113,16 @@ class Counters(unittest.TestCase):
         self.assertEqual(cs.increase([(T0 + 30, 2), (T0 + 35, 3)], T0), 3)
         self.assertEqual(cs.increase([], T0), 0)
 
+    def test_increase_base_only_at_start(self):
+        # 범위 조회 첫 평가는 start. start+5초에 처음 보인 실패 시계열은 구간 중 생긴 것이라 0에서 시작
+        self.assertEqual(cs.increase([(T0 + 5, 2), (T0 + 10, 3)], T0), 3)
+
+    def test_counter_reset_fails(self):
+        # 측정 중 재시작으로 누적값이 줄면 증가분을 알 수 없어 실패
+        with self.assertRaises(ValueError):
+            cs.increase([(T0, 500), (T0 + 5, 20), (T0 + 10, 40)], T0)
+        self.assertEqual(cs.increase([(T0, 500), (T0 + 5, 500), (T0 + 10, 540)], T0), 40)  # 같은 값은 리셋 아님
+
     def test_slope(self):
         self.assertAlmostEqual(cs.slope(lag_points([0, 10, 20])), 2.0)
         self.assertEqual(cs.slope(lag_points([5])), 0.0)
@@ -136,17 +146,17 @@ class Main(unittest.TestCase):
         return dict(success=1000, processed=1010, processed_load=900, rejected=5, reserved=1003, first=run["start"] + 1.0,
                     last=run["start"] + 11.0, buckets={run["start"] - run["start"] % 5: 400})
 
-    def fake_prom(self, lag=(0, 0, 0, 0), samples=3, listener=True, scrape_after=3):
+    def fake_prom(self, lag=(0, 0, 0, 0), samples=3, listener=True, scrape_after=3, partitions=6):
         def f(run, base):
             pts = lag_points(lag, run["start"])
             lis = {"success": [(run["start"], 0.0), (run["start"] + 15, 1010.0)]} if listener else {}
             if not lis:
                 raise RuntimeError("리스너 시계열이 없음")
-            return {"raw": run["run"]}, pts, lis, samples, run["w1"] + scrape_after
+            return {"raw": run["run"]}, pts, lis, samples, run["w1"] + scrape_after, partitions
         return f
 
     def run_main(self, **kw):
-        return cs.main(["--batch", "b1", "--results", self.root], db=kw.get("db", self.fake_db), prom=kw.get("prom", self.fake_prom()),
+        return cs.main(["--batch", "b1", "--results", self.root, "--partitions", "6"], db=kw.get("db", self.fake_db), prom=kw.get("prom", self.fake_prom()),
                        clock=lambda c, b: dict(db=0.25, prom=-0.5))
 
     def test_normal_outputs(self):
@@ -274,7 +284,7 @@ class Main(unittest.TestCase):
                                   {"metric": {"result": "failure"}, "value": [T0 + 23, "2"]}])
             return prom_resp([{"value": [T0, "3"]}])
         run = dict(run="r", start=T0, end=T0 + 10, drain=7, w1=T0 + 17, stop=T0 + 18, exact=True)
-        _, _, listener, _, scrape = cs.query_prom(run, "http://x", get=call)
+        _, _, listener, _, scrape, _ = cs.query_prom(run, "http://x", get=call)
         self.assertEqual(cs.increase(listener["success"], T0), 1000)
         self.assertEqual(cs.increase(listener["failure"], T0), 2)  # 범위 조회에 없던 실패도 보고
         self.assertGreaterEqual(scrape, run["stop"])
@@ -284,7 +294,7 @@ class Main(unittest.TestCase):
         def prom(run, base):
             t_end = run["stop"] + cs.STEP
             lis = {"success": [(run["start"], 0.0), (t_end, 1010.0)], "failure": [(t_end, 2.0)]}
-            return {}, lag_points((0, 0, 0, 0), run["start"]), lis, 3, run["w1"] + 3
+            return {}, lag_points((0, 0, 0, 0), run["start"]), lis, 3, run["w1"] + 3, 6
         self.assertEqual(self.run_main(prom=prom), 0)
         rows = list(csv.reader(io.StringIO(read(os.path.join(self.out, "인출.csv")))))
         t_end = T0 + 100 + 16 + cs.STEP  # r1: 시작 T0+100, 소진 확인 T0+115, stop T0+116
@@ -305,6 +315,36 @@ class Main(unittest.TestCase):
         # 소진 확인 뒤 수집이 없으면 마지막 처리분이 빠졌을 수 있어 실패
         self.assertEqual(self.run_main(prom=self.fake_prom(scrape_after=0)), 1)
         self.assertIn("리스너 최종 수집 시각이 소진 확인", read(os.path.join(self.out, "인출.md")))
+
+    def test_missing_partition_fails(self):
+        # 구간 중 랙을 보고한 파티션이 6개보다 적으면 합계 랙이 작게 나왔을 수 있어 실패
+        self.assertEqual(self.run_main(prom=self.fake_prom(partitions=5)), 1)
+        self.assertIn("랙을 보고한 파티션 5개 < 기대 6개", read(os.path.join(self.out, "인출.md")))
+
+    def test_counter_reset_in_main_fails(self):
+        def prom(run, base):
+            lis = {"success": [(run["start"], 500.0), (run["start"] + 5, 10.0), (run["stop"] + cs.STEP, 900.0)]}
+            return {}, lag_points((0, 0, 0, 0), run["start"]), lis, 3, run["w1"] + 3, 6
+        self.assertEqual(self.run_main(prom=prom), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "인출.md")))
+
+    def test_partition_query_uses_window(self):
+        seen = {}
+        def call(base, path, params):
+            q = params.get("query", "")
+            if "count by (partition)" in q:
+                seen["q"], seen["t"] = q, params["time"]
+                return prom_resp([{"value": [T0, "6"]}])
+            if path.endswith("query_range"):
+                return prom_resp([{"metric": {"result": "success"}, "values": [[T0, "1"]]}])
+            if "listener" in q and "timestamp" not in q:
+                return prom_resp([{"metric": {"result": "success"}, "value": [T0, "1"]}])
+            return prom_resp([{"value": [T0, "3"]}])
+        run = dict(run="r", start=T0, end=T0 + 10, drain=5, w1=T0 + 15, stop=T0 + 16, exact=True)
+        *_, partitions = cs.query_prom(run, "http://x", get=call)
+        self.assertEqual(partitions, 6)
+        self.assertIn("[15s:5s]", seen["q"])
+        self.assertEqual(seen["t"], T0 + 15)
 
     def test_sample_gap_fails(self):
         # 측정 구간 15초 / 5초 = 기대 3개. 2개는 90% 미만 → 실패

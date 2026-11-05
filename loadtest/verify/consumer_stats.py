@@ -23,7 +23,8 @@
   랙 증가 추세  실행마다 부하 중 랙의 기울기(최소제곱) > 0. 반복 중 과반이면 그 단계는 증가 추세
   처리량 정체  목표 속도를 올렸는데 고유 처리 건/초(부하 중, 반복 중앙값)가 이전 단계 반복 중 최댓값을 넘지 못함. 첫 단계는 비교할 단계가 없어 판정하지 않음
   둘 다 짧은 구간과 반복 변동에 흔들리므로 확정 판정이 아니다. 최종 판단은 인출.csv의 랙, 처리량 시계열과 자원.md(CPU), slow-queries.txt(DB)를 함께 보고 내린다
-실패로 끝나는 경우(종료 코드 1): S1 실행이 없음, DB 또는 Prometheus 조회 실패, 랙 시계열이 없음, 랙 저장 샘플이 기대의 90% 미만
+실패로 끝나는 경우(종료 코드 1): S1 실행이 없음, DB 또는 Prometheus 조회 실패, 랙 시계열이 없음, 랙 저장 샘플이 기대의 90% 미만,
+  측정 구간 중 랙을 보고한 파티션 수가 기대(--partitions, 기본 KAFKA_TOPIC_PARTITIONS 또는 6)보다 적음, 리스너 누적값이 줄어듦(재시작으로 리셋)
 """
 import argparse
 import csv
@@ -42,6 +43,8 @@ CONSUMER = "account-margin-reserve"
 LAG_Q = 'sum(kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"})'
 LISTENER_Q = 'sum by (result) (spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"})'
 LISTENER_SCRAPE_Q = 'max(timestamp(spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"}))'
+# 구간 중 랙을 보고한 파티션 수의 최솟값. Consumer가 죽어 파티션 시계열이 사라지면 합계 랙이 작게 나와 병목을 놓친다
+LAG_PARTITIONS_Q = 'min_over_time(count(count by (partition) (kafka_consumer_fetch_manager_records_lag{{topic="margin_reserve-requested"}}))[{d}s:{step}s])'
 LAG_SAMPLES_Q = 'max(count_over_time(kafka_consumer_fetch_manager_records_lag{{topic="margin_reserve-requested"}}[{d}s]))'
 STEP = 5
 SAMPLE_RATIO = 0.9
@@ -132,7 +135,7 @@ def prom_get(base, path, params):
 
 
 def query_prom(run, base, get=prom_get):
-    """(원본 응답 dict, 랙 [(t, v)], 리스너 {result: [(t, v)]}, 저장 샘플 수, 리스너 최종 수집 시각). 랙 시계열이 없으면 RuntimeError"""
+    """(원본 응답 dict, 랙 [(t, v)], 리스너 {result: [(t, v)]}, 저장 샘플 수, 리스너 최종 수집 시각, 랙 보고 파티션 수 최솟값). 랙 시계열이 없으면 RuntimeError"""
     w0, w1, stop = run["start"], run["w1"], run["stop"]
     rng = {"start": w0, "end": w1, "step": STEP}
     raw = {"lag": get(base, "/api/v1/query_range", {"query": LAG_Q, **rng}),
@@ -141,7 +144,8 @@ def query_prom(run, base, get=prom_get):
            # 범위 조회는 시작부터 5초 간격으로만 평가해 마지막 평가가 stop + STEP보다 이를 수 있다. 수집 확인과 같은 시각의 값을 따로 읽어 마지막 값으로 쓴다
            "listener_end": get(base, "/api/v1/query", {"query": LISTENER_Q, "time": stop + STEP}),
            "listener_scrape": get(base, "/api/v1/query", {"query": LISTENER_SCRAPE_Q, "time": stop + STEP}),
-           "lag_samples": get(base, "/api/v1/query", {"query": LAG_SAMPLES_Q.format(d=w1 - w0), "time": w1})}
+           "lag_samples": get(base, "/api/v1/query", {"query": LAG_SAMPLES_Q.format(d=w1 - w0), "time": w1}),
+           "lag_partitions": get(base, "/api/v1/query", {"query": LAG_PARTITIONS_Q.format(d=w1 - w0, step=STEP), "time": w1})}
     lag_res = raw["lag"]["data"]["result"]
     if not lag_res:
         raise RuntimeError(f"{run['run']}: 랙 시계열이 없음 ({LAG_Q})")
@@ -158,7 +162,9 @@ def query_prom(run, base, get=prom_get):
     samples = int(float(smp[0]["value"][1])) if smp else 0
     sc = raw["listener_scrape"]["data"]["result"]
     scrape = float(sc[0]["value"][1]) if sc else 0.0
-    return raw, lag, listener, samples, scrape
+    pr = raw["lag_partitions"]["data"]["result"]
+    partitions = int(float(pr[0]["value"][1])) if pr else 0
+    return raw, lag, listener, samples, scrape, partitions
 
 
 def clock_offsets(container, base):
@@ -184,10 +190,14 @@ def slope(points):
 
 
 def increase(series, start):
-    """누적 지표의 구간 증가분. 구간 시작에 없던 시계열(구간 중 처음 실패 등)은 0에서 시작한 것으로 본다"""
+    """누적 지표의 구간 증가분. 구간 시작(start)에 없던 시계열(구간 중 처음 실패 등)은 0에서 시작한 것으로 본다.
+    값이 줄어들면(서비스 재시작으로 카운터 리셋) 증가분을 알 수 없어 ValueError"""
     if not series:
         return 0.0
-    base = series[0][1] if series[0][0] <= start + STEP else 0.0
+    for (t0, v0), (t1, v1) in zip(series, series[1:]):
+        if v1 < v0:
+            raise ValueError(f"리스너 누적값이 줄어듦 ({kst(t0)} {v0:g} → {kst(t1)} {v1:g}). 측정 중 재시작으로 리셋된 것으로 보여 전체 수신을 셀 수 없음")
+    base = series[0][1] if series[0][0] <= start else 0.0
     return series[-1][1] - base
 
 
@@ -201,7 +211,7 @@ def judge_run(lag_load):
     return dict(lag_max=peak, lag_end=end, lag_slope=sl, rising=rising)
 
 
-def analyze(run, db, lag, listener, samples, scrape):
+def analyze(run, db, lag, listener, samples, scrape, partitions):
     load = run["end"] - run["start"]
     window = run["stop"] - run["start"]
     lag_load = [(t, v) for t, v in lag if t <= run["end"]]
@@ -217,12 +227,19 @@ def analyze(run, db, lag, listener, samples, scrape):
                 processed=db["processed"], processed_load_rate=rate_load, rejected=db["rejected"],
                 republished=db["reserved"] - db["success"], other=db["processed"] - db["success"] - db["rejected"] - (db["reserved"] - db["success"]),
                 received=received, failure=fail, error_pct=(fail / received * 100) if received else 0.0,
-                samples=samples, samples_expected=(run["w1"] - run["start"]) // STEP, listener_scrape=scrape, **j)
+                samples=samples, samples_expected=(run["w1"] - run["start"]) // STEP, listener_scrape=scrape,
+                partitions=partitions, **j)
 
 
 def check_scrape(r, run):
     if r["listener_scrape"] < run["stop"]:
         return f"{r['run']}: 리스너 최종 수집 시각이 소진 확인({kst(run['w1'])}초) 이전 → 마지막 처리분이 전체 수신에서 빠졌을 수 있음"
+    return None
+
+
+def check_partitions(r, expected):
+    if r["partitions"] < expected:
+        return f"{r['run']}: 랙을 보고한 파티션 {r['partitions']}개 < 기대 {expected}개 (Consumer가 빠져 합계 랙이 작게 나왔을 수 있음)"
     return None
 
 
@@ -281,12 +298,12 @@ def render(batch, env, runs, results, stages, problems, clock=None):
                                   "확정 전에 인출.csv 랙, 처리량 그래프와 자원.md CPU, slow-queries.txt를 확인한다." if first else
                                   "S1 모든 단계에서 Consumer 병목 의심 없음. 한계값을 만들지 않고 다른 병목(판정.md, 자원.md, slow-queries.txt)을 본다."), ""]
     L += ["## 실행별", "",
-          "| 실행 | 구간(KST) | 성공 | 성공 건/초 | 고유 처리 | 거절 | 재발행 | 기타 | 전체 수신 | 오류 | 랙 최대/끝 | 기울기 | 증가 추세 | 랙 샘플 |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+          "| 실행 | 구간(KST) | 성공 | 성공 건/초 | 고유 처리 | 거절 | 재발행 | 기타 | 전체 수신 | 오류 | 랙 최대/끝 | 기울기 | 증가 추세 | 랙 샘플 | 랙 파티션(최소) |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for run, r in zip(runs, results):
         L.append(f"| {r['run']} | {kst(run['start'])}-{kst(run['end'])}+{run['drain']}s | {r['success']} | {r['success_rate']:.1f} | {r['processed']} | "
                  f"{r['rejected']} | {r['republished']} | {r['other']} | {r['received']:.0f} | {r['failure']:.0f} | {r['lag_max']:.0f}/{r['lag_end']:.0f} | "
-                 f"{r['lag_slope']:.2f} | {yn(r['rising'])} | {r['samples']}/{r['samples_expected']} |")
+                 f"{r['lag_slope']:.2f} | {yn(r['rising'])} | {r['samples']}/{r['samples_expected']} | {r['partitions']} |")
     L += ["", "## 시간 기준", "",
           "| 실행 | 소진 확인 시각 | DB 집계 구간 | 고유 처리(부하 중) 구간 | 랙 조회 구간 | 리스너 누적값 기준 | 리스너 최종 수집 시각 |",
           "| --- | --- | --- | --- | --- | --- | --- |"]
@@ -330,6 +347,8 @@ def main(argv=None, db=query_db, prom=query_prom, clock=clock_offsets):
     ap.add_argument("--results", default=os.path.join(HERE, "..", "results"))
     ap.add_argument("--prometheus", default=os.environ.get("PROMETHEUS_URL", "http://127.0.0.1:9090"))
     ap.add_argument("--container", default="ipo-postgres")
+    # 기대 파티션 수: docker/kafka/create-topics.sh와 같은 규칙 (KAFKA_TOPIC_PARTITIONS가 있으면 그 값, 없으면 6)
+    ap.add_argument("--partitions", type=int, default=int(os.environ.get("KAFKA_TOPIC_PARTITIONS") or 6))
     a = ap.parse_args(argv)
     out = os.path.join(a.results, a.batch)
     try:
@@ -340,11 +359,11 @@ def main(argv=None, db=query_db, prom=query_prom, clock=clock_offsets):
         results, series, raws, problems = [], [], {}, []
         for run in runs:
             d = db(run, a.container)
-            raw, lag, listener, samples, scrape = prom(run, a.prometheus)
+            raw, lag, listener, samples, scrape, partitions = prom(run, a.prometheus)
             raws[run["run"]] = raw
-            r = analyze(run, d, lag, listener, samples, scrape)
+            r = analyze(run, d, lag, listener, samples, scrape, partitions)
             results.append(r); series.append((lag, listener, d["buckets"]))
-            problems += [p for p in (check_samples(r), check_scrape(r, run)) if p]
+            problems += [p for p in (check_samples(r), check_scrape(r, run), check_partitions(r, a.partitions)) if p]
         offsets = clock(a.container, a.prometheus)
     except (OSError, ValueError, KeyError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as e:
         print(f"consumer_stats.py: {e}", file=sys.stderr)

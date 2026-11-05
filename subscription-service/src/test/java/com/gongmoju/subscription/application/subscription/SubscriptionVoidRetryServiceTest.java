@@ -21,6 +21,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -73,7 +74,8 @@ class SubscriptionVoidRetryServiceTest {
         ipoId = UUID.randomUUID();
         accountId = UUID.randomUUID();
         subscriptionId = UUID.randomUUID();
-        threshold = Instant.now().minusSeconds(30);
+        // PostgreSQL은 시각을 마이크로초로 저장하므로 기준 시각을 같은 정밀도로 맞춤 (아니면 "기준과 같은 경우" 경계 테스트가 간헐적으로 실패함)
+        threshold = Instant.now().minusSeconds(30).truncatedTo(ChronoUnit.MICROS);
         jdbcTemplate.update("""
                 INSERT INTO ipo (ipo_id, name, offer_price, retail_quantity, equal_quantity, min_quantity, max_quantity,
                                  margin_rate, subscription_start_at, subscription_end_at, refund_date, status, version,

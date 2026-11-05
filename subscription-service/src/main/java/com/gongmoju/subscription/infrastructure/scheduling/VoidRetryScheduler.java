@@ -86,7 +86,9 @@ class VoidRetryScheduler {
         log.info("반환 재요청 처리 완료. 대상 {}건, 결과={}, 동시 변경으로 건너뜀 {}건, 오류 {}건", targets.size(), counts, skipped, failed);
     }
 
-    // 최대 횟수에 이른 청약은 재요청 대상 조회와 따로 조회 (계속 남아 재요청 대상의 건수 제한을 채우지 않게 함). 알림 간격마다 한 번 확인
+    // 최대 횟수에 이른 청약은 재요청 대상 조회와 따로 조회 (계속 남아 재요청 대상의 건수 제한을 채우지 않게 함). 알림 간격마다 한 번 확인.
+    // 상세 로그는 오래된 순 앞쪽 batch 건수까지만 남기고(이 청약들이 자동으로 종료되지 않으면 다음 주기에도 같은 청약이 앞쪽임),
+    // 총 건수와 상세에서 빠진 건수를 요약 로그로 남겨서 누락이 보이게 함. 빠진 청약은 DB에서 조회해야 함.
     private void alertExhausted(Instant now, Instant lastRequestedBefore) {
         if (lastAlertAt != null && now.isBefore(lastAlertAt.plus(alertInterval))) {
             return;
@@ -96,17 +98,35 @@ class VoidRetryScheduler {
             if (exhausted.isEmpty()) {
                 return;
             }
+            int logged = 0;
             for (UUID subscriptionId : exhausted) {
                 VoidRetryResult result = voidRetryService.handle(subscriptionId, lastRequestedBefore, properties.maxAttempts());
                 if (result.outcome() == VoidRetryResult.Outcome.MAX_ATTEMPTS_REACHED) {
+                    logged++;
                     log.error("반환 재요청이 최대 횟수에 도달했지만 계좌 응답이 없음. 자동으로 종료하거나 마감하지 않으니 운영자 확인 필요 "
                                     + "(margin.void-requested.DLT, margin.voided.DLT, 계좌의 margin 상태). subscriptionId={}, status={}, reason={}, attempts={}, lastRequestedAt={}",
                             subscriptionId, result.status(), result.cancelReason(), result.attempts(), result.lastRequestedAt());
                 }
             }
+            if (logged > 0) {
+                long total = Math.max(countExhausted(lastRequestedBefore, logged), logged);
+                log.error("반환 재요청 최대 횟수 도달 청약 요약. 총 {}건, 상세 로그 {}건, 상세에서 빠진 {}건. 빠진 청약은 DB에서 조회: "
+                                + "status IN ('COMPENSATING', 'CANCEL_REQUESTED') AND attempts >= {} AND last_requested_at < now() - 응답 시간 (오래된 순 뒤쪽)",
+                        total, logged, total - logged, properties.maxAttempts());
+            }
             lastAlertAt = now;
         } catch (RuntimeException e) {
             log.error("반환 재요청 최대 횟수 도달 알림 확인 중 오류. 다음 주기에 다시 시도함.", e);
+        }
+    }
+
+    // 총 건수 조회가 실패해도 상세 로그는 이미 남았으므로 알림을 막지 않음 (상세 건수를 총 건수로 대신함)
+    private long countExhausted(Instant lastRequestedBefore, long fallback) {
+        try {
+            return subscriptionRepository.countExhaustedVoid(lastRequestedBefore, properties.maxAttempts());
+        } catch (RuntimeException e) {
+            log.warn("반환 재요청 최대 횟수 도달 총 건수를 조회하지 못함. 상세 건수로 대신함.", e);
+            return fallback;
         }
     }
 }

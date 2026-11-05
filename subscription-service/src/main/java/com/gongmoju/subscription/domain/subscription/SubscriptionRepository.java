@@ -65,6 +65,12 @@ public interface SubscriptionRepository {
      */
     List<UUID> findExhaustedVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit);
 
+    /**
+     * 반환 재요청 최대 횟수에 이른 청약의 총 건수. {@link #findExhaustedVoidIds}와 같은 조건이며 건수 제한이 없음.
+     * 상세 조회는 앞쪽 {@code limit}건만 가져오므로, 대상이 그보다 많을 때 빠진 건수를 알리는 데 씀.
+     */
+    long countExhaustedVoid(Instant lastRequestedBefore, int maxAttempts);
+
     // 공모주의 청약 중 주어진 상태들의 건수 (마감 조건의 진행 중 SAGA 건수, ipo.closed의 confirmedCount, 배정 완료 때 배정 대상 청약 수)
     long countByIpoIdAndStatusIn(UUID ipoId, Collection<SubscriptionStatus> statuses);
 

@@ -100,6 +100,15 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
     List<UUID> findExhaustedVoidIds(@Param("lastRequestedBefore") Instant lastRequestedBefore,
                                     @Param("maxAttempts") int maxAttempts, @Param("limit") int limit);
 
+    // 위 조회와 같은 조건의 총 건수 (건수 제한 없음)
+    @Query(value = """
+            SELECT count(*) FROM subscription s
+            WHERE s.status IN ('COMPENSATING', 'CANCEL_REQUESTED')
+              AND s.last_requested_at < :lastRequestedBefore
+              AND s.attempts >= :maxAttempts""", nativeQuery = true)
+    long countExhaustedVoid(@Param("lastRequestedBefore") Instant lastRequestedBefore,
+                            @Param("maxAttempts") int maxAttempts);
+
     // 발행된 증거금 인출 요청 Outbox 중 가장 늦은 발행 시각. 없으면 null
     @Query("select max(o.publishedAt) from Outbox o where o.aggregateId = :subscriptionId "
             + "and o.topic = 'margin.reserve-requested' and o.publishedAt is not null")

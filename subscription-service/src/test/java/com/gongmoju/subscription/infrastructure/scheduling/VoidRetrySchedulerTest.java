@@ -140,6 +140,46 @@ class VoidRetrySchedulerTest {
         // given
         UUID exhausted = UUID.randomUUID();
         when(subscriptionRepository.findExhaustedVoidIds(THRESHOLD, MAX_ATTEMPTS, BATCH_SIZE)).thenReturn(List.of(exhausted));
+        when(subscriptionRepository.countExhaustedVoid(THRESHOLD, MAX_ATTEMPTS)).thenReturn(1L);
+        when(voidRetryService.handle(exhausted, THRESHOLD, MAX_ATTEMPTS)).thenReturn(result(Outcome.MAX_ATTEMPTS_REACHED, MAX_ATTEMPTS));
+
+        // when
+        scheduler.retryStaleVoid(NOW);
+
+        // then: 청약별 상세 로그 1줄과 요약 로그 1줄
+        List<ILoggingEvent> errors = errorLogs();
+        assertThat(errors).hasSize(2);
+        assertThat(errors.get(0).getFormattedMessage())
+                .contains(exhausted.toString(), "COMPENSATING", "TIMEOUT", "attempts=" + MAX_ATTEMPTS);
+        assertThat(errors.get(1).getFormattedMessage()).contains("총 1건", "상세 로그 1건", "빠진 0건");
+    }
+
+    @Test
+    @DisplayName("최대 횟수에 이른 청약이 상세 로그 건수보다 많으면 요약 로그에 총 건수와 상세에서 빠진 건수를 남겨 누락이 보이게 한다")
+    void retryStaleVoid_summaryShowsOmittedCount_whenExhaustedExceedsDetailLimit() {
+        // given: 알림 대상이 모두 250건인데 상세로 조회되는 것은 앞쪽 2건
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        when(subscriptionRepository.findExhaustedVoidIds(THRESHOLD, MAX_ATTEMPTS, BATCH_SIZE)).thenReturn(List.of(first, second));
+        when(subscriptionRepository.countExhaustedVoid(THRESHOLD, MAX_ATTEMPTS)).thenReturn(250L);
+        when(voidRetryService.handle(any(), eq(THRESHOLD), eq(MAX_ATTEMPTS))).thenReturn(result(Outcome.MAX_ATTEMPTS_REACHED, MAX_ATTEMPTS));
+
+        // when
+        scheduler.retryStaleVoid(NOW);
+
+        // then
+        List<ILoggingEvent> errors = errorLogs();
+        assertThat(errors).hasSize(3);
+        assertThat(errors.get(2).getFormattedMessage()).contains("총 250건", "상세 로그 2건", "빠진 248건");
+    }
+
+    @Test
+    @DisplayName("총 건수 조회가 실패해도 예외를 밖으로 던지지 않고 상세 로그와 상세 건수 기준 요약 로그를 남긴다")
+    void retryStaleVoid_fallsBackToDetailCount_whenCountFails() {
+        // given
+        UUID exhausted = UUID.randomUUID();
+        when(subscriptionRepository.findExhaustedVoidIds(THRESHOLD, MAX_ATTEMPTS, BATCH_SIZE)).thenReturn(List.of(exhausted));
+        when(subscriptionRepository.countExhaustedVoid(any(), anyInt())).thenThrow(new IllegalStateException("DB 오류"));
         when(voidRetryService.handle(exhausted, THRESHOLD, MAX_ATTEMPTS)).thenReturn(result(Outcome.MAX_ATTEMPTS_REACHED, MAX_ATTEMPTS));
 
         // when
@@ -147,9 +187,9 @@ class VoidRetrySchedulerTest {
 
         // then
         List<ILoggingEvent> errors = errorLogs();
-        assertThat(errors).hasSize(1);
-        assertThat(errors.get(0).getFormattedMessage())
-                .contains(exhausted.toString(), "COMPENSATING", "TIMEOUT", "attempts=" + MAX_ATTEMPTS);
+        assertThat(errors).hasSize(2);
+        assertThat(errors.get(0).getFormattedMessage()).contains(exhausted.toString());
+        assertThat(errors.get(1).getFormattedMessage()).contains("총 1건", "빠진 0건");
     }
 
     @Test
@@ -182,7 +222,7 @@ class VoidRetrySchedulerTest {
 
         // then
         verify(subscriptionRepository, times(2)).findExhaustedVoidIds(any(), anyInt(), anyInt());
-        assertThat(errorLogs()).hasSize(2);
+        assertThat(errorLogs()).hasSize(4);
     }
 
     @Test

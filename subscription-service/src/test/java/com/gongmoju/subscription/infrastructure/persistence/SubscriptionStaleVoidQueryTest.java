@@ -214,6 +214,37 @@ class SubscriptionStaleVoidQueryTest {
     }
 
     @Test
+    @DisplayName("최대 횟수에 이른 청약의 총 건수는 건수 제한과 상관없이 같은 조건(상태, 기준 시각, 요청 횟수)으로 센다")
+    void countExhaustedVoid_countsAllRegardlessOfLimit() {
+        // given
+        insert("COMPENSATING", MAX_ATTEMPTS, threshold.minusSeconds(300));
+        insert("CANCEL_REQUESTED", MAX_ATTEMPTS + 1, threshold.minusSeconds(200));
+        insert("COMPENSATING", MAX_ATTEMPTS, threshold.minusSeconds(100));
+        insert("COMPENSATING", MAX_ATTEMPTS - 1, threshold.minusSeconds(100));
+        insert("COMPENSATING", MAX_ATTEMPTS, threshold.plusSeconds(10));
+        insert("PENDING", MAX_ATTEMPTS, threshold.minusSeconds(100));
+        insert("CANCELLED", 0, threshold.minusSeconds(100));
+
+        // when
+        long total = subscriptionRepository.countExhaustedVoid(threshold, MAX_ATTEMPTS);
+        List<UUID> limited = subscriptionRepository.findExhaustedVoidIds(threshold, MAX_ATTEMPTS, 2);
+
+        // then
+        assertThat(total).isEqualTo(3);
+        assertThat(limited).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("최대 횟수에 이른 청약이 없으면 총 건수는 0이다")
+    void countExhaustedVoid_isZero_whenNone() {
+        // given
+        insert("COMPENSATING", MAX_ATTEMPTS - 1, threshold.minusSeconds(100));
+
+        // when, then
+        assertThat(subscriptionRepository.countExhaustedVoid(threshold, MAX_ATTEMPTS)).isZero();
+    }
+
+    @Test
     @DisplayName("반환 재요청 대상 조회용 COMPENSATING, CANCEL_REQUESTED 부분 인덱스(last_requested_at)가 만들어져 있다")
     void voidingLastRequestedIndexExists() {
         // given, when

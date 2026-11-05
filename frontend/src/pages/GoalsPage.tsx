@@ -106,6 +106,14 @@ const IMPROVE = [
   { run: '측정-9', change: 'Kafka 파티션, Consumer 3 → 6', p95: '1.44초', rate: '약 510건/초' },
 ];
 
+// 지금의 한계와 이어지는 로드맵 항목
+const LIMITS = [
+  { what: 'DLT 메시지는 Kafka UI로 사람이 확인하고 재처리도 수동', next: 'DLT 알림과 재처리, 관리자 API' },
+  { what: '목표를 넘는 600건/초에서는 확정이 15초를 넘음', next: '600건/초 확정 지연 개선' },
+  { what: '대량 환불 처리 시간은 아직 측정하지 않음', next: '대량 환불 측정' },
+  { what: '측정은 PC 1대에서 부하 도구와 서비스가 CPU를 나눠 씀', next: '-' },
+];
+
 const NEXT: { tag: string; what: string; why: string; source: string }[] = [
   { tag: '성능', what: '대량 환불 처리 시간 측정', why: 'G2의 남은 지표.\n환불 건수는 LG에너지솔루션 KB증권 청약 건수(DART)를 근거로 정하고, 목표 시간은 정하는 중', source: 'SA1 G2' },
   { tag: '성능', what: '600건/초에서 확정 지연 개선', why: '목표보다 높은 600건/초에서 한계 확인: 확정 p95 23.5초로 기준(15초) 초과.\n증거금 인출 Consumer 병목부터 개선 전후 같은 조건으로 측정', source: '정식측정-9, #92' },
@@ -113,9 +121,9 @@ const NEXT: { tag: string; what: string; why: string; source: string }[] = [
   { tag: '정합성', what: '원장 대사 배치', why: '잔고와 원장, 서비스 간 증거금과 배정 금액을 정기적으로 맞춰 보고 어긋나면 알림.\n지금은 검사 SQL을 손으로 실행', source: 'SA1 도전 과제' },
   { tag: '운영', what: 'DLT 알림과 재처리', why: 'MVP는 실패 메시지를 잃지 않게 DLT에 보관하는 데까지(Kafka UI로 확인).\n원인을 고치기 전에 자동으로 다시 보내면 같은 실패가 반복돼서, DLT가 쌓이면 알리고 원인 수정 뒤 원래 토픽으로 재처리.\n이벤트 처리 기록 덕분에 다시 보내도 한 번만 반영', source: '통합 테스트 ACC-12' },
   { tag: '운영', what: 'Slack 알림 → 관리자 API로 수동 처리', why: 'DLT나 정산 불일치가 생기면 Slack으로 알리고, 관리자(ADMIN)가 관리자 API로 DLT 메시지를 다시 처리하거나 멈춘 증거금을 반환하는 등 직접 복구', source: '통합 테스트 ACC-12, PR #75' },
-  { tag: '도메인', what: '증거금률 50%', why: '실제 공모주는 보통 50%.\n배정 대금이 증거금보다 커질 수 있어 추가 납입 흐름이 생기고, 정산과 정합성 검사식도 같이 바뀜', source: '유비쿼터스 언어, SA1 F-10' },
   { tag: '비교', what: 'Redis와 DB 멱등 처리 비교', why: '지금은 DB의 이벤트 처리 기록으로 중복을 막아요.\nRedis로 바꿨을 때 처리량과 장애 시 안전성을 같은 조건으로 비교', source: 'SA1 도전 과제' },
   { tag: '기능', what: '청약 취소', why: '취소 API가 없어 통합 테스트 1건(ACC-6)을 실행하지 못함', source: '11/5 통합 테스트' },
+  { tag: '아이디어', what: '증거금률 50%', why: '검토 중인 아이디어예요.\n지금은 증거금률 100%로 단순화해서 추가 납입이 없어요. 실제 공모주처럼 50%로 바꾸면 추가 납입 흐름과 정산, 정합성 검사식이 같이 바뀌어요', source: '유비쿼터스 언어' },
 ];
 
 export function GoalsPage() {
@@ -216,7 +224,7 @@ export function GoalsPage() {
         </div>
       </Card>
 
-      <div className="grid grid-2">
+      <div className="grid grid-wide-left">
         <Card title="병목을 찾아 개선한 결과" extra={<span className="hint">같은 조건 재측정</span>}>
           <table className="table">
             <thead><tr><th>측정</th><th>바꾼 것</th><th className="r">433건/초 확정 p95</th><th className="r">확정 처리 속도</th></tr></thead>
@@ -237,12 +245,23 @@ export function GoalsPage() {
           ) : (
             <div className="stack">
               <div className="big">{liveUnknown ? '일부 확인 불가' : liveViolations === 0 ? '위반 0' : `위반 ${liveViolations}`}</div>
-              <div className="hint">검사 {ops.data.checks.length}개를 지금 DB에 실행한 결과예요. 자세한 내용은 시스템 현황에서 볼 수 있어요</div>
+              <div className="hint">검사 {ops.data.checks.length}개를 지금 DB에 실행한 결과예요.<br />자세한 내용은 시스템 현황에서 볼 수 있어요</div>
               <Link to="/system" className="btn btn-ghost btn-sm" style={{ width: 'fit-content' }}>시스템 현황 보기</Link>
             </div>
           )}
         </Card>
       </div>
+      <Card title={<>지금의 한계 <small>로드맵으로 개선</small></>}>
+        <div className="list">
+          {LIMITS.map((l) => (
+            <div key={l.what} className="list-item" style={{ padding: '10px 0' }}>
+              <div style={{ fontSize: 14 }}>{l.what}</div>
+              <span className="hint" style={{ whiteSpace: 'nowrap' }}>{l.next === '-' ? '' : `→ ${l.next}`}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
       <Card title={<>로드맵 <small>트러블슈팅, 고도화 기간</small></>} extra={<Badge tone="muted">계획</Badge>}>
         <div className="list">
           {NEXT.map((n) => (

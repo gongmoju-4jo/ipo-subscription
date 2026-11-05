@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # 정식 측정: S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 p95, 소진 시간)를 판정할 수 있게 실행하고,
 # 부하가 모두 끝난 뒤 후처리(보고서, 요청 분류, 정합성 SQL)와 판정(verify/judge.py)까지 한다.
+# SCENARIOS로 S3, S4(Synthetic Data, loadtest/synthetic/)를 S0과 같은 세션에서 번갈아 실행해 비교할 수 있다.
 #
 # 사용: bash loadtest/official.sh --batch <이름>
+#       SCENARIOS=S0,S3,S4 BASELINE_DIR=loadtest/data/baseline-s34 bash loadtest/official.sh --batch <이름>
 #   결과: loadtest/results/<이름>/ (진행.log, env.txt, manifest.csv, s1-plan.txt, 판정.md) + 실행마다 loadtest/results/<이름>-.../
 #
 # 측정에 끼는 요인을 줄이는 방법
@@ -25,6 +27,11 @@
 #   WARM_SLOPE_MS=1   또는 기울기가 분당 +-1ms 이내면 통과 (응답이 수 ms일 때 %로 본 허용 폭이 너무 좁아지는 것을 막는다. 0이면 보지 않음)
 #   WARM_CONSEC=2     연속 통과 횟수 (한 번 우연히 평평하게 나온 것으로 끝내지 않는다)
 #   WARM_MIN=180 WARM_MAX=900  최소, 최대 시간(초). 최대까지 정상 상태에 닿지 않으면 중단 (종료 코드 2)
+#   SCENARIOS=S0,S1  실행할 시나리오 (S0은 필수). 순서: 워밍업 → [S3, S4 경로 예열 각 1회] → S0, S3, S4를 번갈아 3회씩 → [S1 단계]
+#                   S3, S4는 S0과 같은 100명 x 10회이고 요청 구성은 행동 CSV를 따른다. 경로 예열은 워밍업(모두 확정 경로)이 데우지 못한
+#                   거절 경로(이중청약, 잔액 부족)를 첫 측정 전에 한 번 지나가게 하는 것이고, 판정은 참고(정합성은 판정)
+#                   S3, S4는 두 번째 계좌와 잔액 부족 묶음이 있는 기준 스냅샷이 필요하다 (BASELINE_DIR, docs/LOADTEST.md 3-4절)
+#   S4_PREFIX=lb    S4 잔액 부족 묶음의 loginId 접두사 (seed_users.py --prefix). 회원 CSV는 loadtest/data/users-s4.csv
 #   GAP=30          실행 사이 대기(초). 앞 실행의 처리 대기는 소진 확인으로 없애고, 이 대기는 보고서의 서버 지표 구간
 #                   (요청 구간 앞뒤 10초 + Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도다. GC, DB 체크포인트는 대기로 피할 수 없다
 #                   개선 전후를 비교할 때는 같은 값을 쓴다
@@ -81,9 +88,14 @@ TOKEN_MAX_S=$((55 * 60))   # 토큰 만료 1시간보다 5분 일찍 끊는다
 STATS_INTERVAL="${STATS_INTERVAL:-5}"
 RESTORE="${RESTORE:-1}"; DB_DUMP="${DB_DUMP:-1}"
 K6_CPUS=2; K6_MEMORY=1g    # k6 컨테이너 상한 (모든 실행 같음. env.txt에 기록)
+SCENARIOS="${SCENARIOS:-S0,S1}"; S4_PREFIX="${S4_PREFIX:-lb}"
+S4_CSV="$DIR/data/users-s4.csv"
+SYN_RUNS=4                 # S3, S4 회원이 청약하는 횟수 = 경로 예열 1 + 측정 3 (S4 행동 CSV의 입금액 조건, synthetic/validate.py --runs)
+SYN_AMOUNT=150000          # S4 행동 CSV를 만든 청약 금액 (공모가 15,000원 x 10주. judge.py도 이 금액으로 기대값을 계산한다)
 
 BATCH=""; OUT=""; LOG=""; MANIFEST=""; PLAN=""; LOCK="$DIR/results/.official.lock"; LOCK_OWNED=""
 PY=""; COMPOSE=(); K6_NET=""; TOKEN_AT=0; TOKEN_N=0; S0_IPOS=(); S0_NEXT=0; WARM_IPOS=""; LAST_AVG=""; USERS=0; STATS_PID=""; SLOWQ_FAILS=0
+HAS_S1=0; HAS_S3=0; HAS_S4=0; S3_IPOS=(); S3_NEXT=0; S4_IPOS=(); S4_NEXT=0; S4_USERS=0
 
 # ---------- 공통 ----------
 say() { local line; line="$(date '+%F %T') $*"; printf '%s\n' "$line" >&2; [ -n "$LOG" ] && printf '%s\n' "$line" >> "$LOG"; return 0; }
@@ -247,15 +259,9 @@ wait_healthy() { # 인자: 제한 초, 컨테이너 목록. Eureka UP 4개 이�
   return 1
 }
 
-# 토큰 재발급. 성공하면 TOKEN_AT을 재발급 "시작" 시각으로 둔다 (만료는 발급 시각 기준이라 늦게 잡으면 위험)
-refresh_tokens() {
-  local t0 out rc
-  TOKEN_N=$((TOKEN_N + 1)); t0="$(date +%s)"
-  say "토큰 재발급 #$TOKEN_N 시작 (로그인 요청 발생)"
-  out="$(cd "$REPO" && py loadtest/seed/seed_users.py --run-id "tok-$BATCH-$TOKEN_N" --refresh-tokens 2>&1)"; rc=$?
-  printf '%s\n' "$out" | tail -3 >> "$LOG"
-  [ "$rc" -eq 0 ] || { say "토큰 재발급 실패 rc=$rc"; return 1; }
-  USERS="$(py - "$(pypath "$USERS_CSV")" "$t0" <<'PYEOF'
+# 회원 CSV가 t0 이후 갱신됐고 모든 행에 토큰이 있으면 회원 수를 출력한다
+token_csv_rows() { # 인자: CSV 경로, 재발급 시작 시각
+  py - "$(pypath "$1")" "$2" <<'PYEOF'
 import csv, os, sys
 path, t0 = sys.argv[1], int(sys.argv[2])
 if os.path.getmtime(path) < t0 - 1:
@@ -267,10 +273,28 @@ if any(not r["token"] for r in rows):
     sys.exit("빈 토큰이 있다")
 print(len(rows))
 PYEOF
-)" || { say "토큰 CSV 확인 실패"; return 1; }
+}
+
+# 토큰 재발급. 성공하면 TOKEN_AT을 재발급 "시작" 시각으로 둔다 (만료는 발급 시각 기준이라 늦게 잡으면 위험)
+# 기본 묶음(users.csv)과, S4가 있으면 잔액 부족 묶음(users-s4.csv)도 다시 발급한다
+refresh_tokens() {
+  local t0 out rc
+  TOKEN_N=$((TOKEN_N + 1)); t0="$(date +%s)"
+  say "토큰 재발급 #$TOKEN_N 시작 (로그인 요청 발생)"
+  out="$(cd "$REPO" && py loadtest/seed/seed_users.py --run-id "tok-$BATCH-$TOKEN_N" --refresh-tokens 2>&1)"; rc=$?
+  printf '%s\n' "$out" | tail -3 >> "$LOG"
+  [ "$rc" -eq 0 ] || { say "토큰 재발급 실패 rc=$rc"; return 1; }
+  USERS="$(token_csv_rows "$USERS_CSV" "$t0")" || { say "토큰 CSV 확인 실패 ($USERS_CSV)"; return 1; }
   is_uint "$USERS" && [ "$USERS" -ge 1000 ] || { say "회원 수가 1,000명 미만: $USERS"; return 1; }
+  if [ "$HAS_S4" = 1 ]; then
+    out="$(cd "$REPO" && py loadtest/seed/seed_users.py --run-id "tok-$BATCH-$TOKEN_N" --refresh-tokens --prefix "$S4_PREFIX" --out "$(pypath "$S4_CSV")" 2>&1)"; rc=$?
+    printf '%s\n' "$out" | tail -3 >> "$LOG"
+    [ "$rc" -eq 0 ] || { say "잔액 부족 묶음 토큰 재발급 실패 rc=$rc"; return 1; }
+    S4_USERS="$(token_csv_rows "$S4_CSV" "$t0")" || { say "토큰 CSV 확인 실패 ($S4_CSV)"; return 1; }
+    is_uint "$S4_USERS" && [ "$S4_USERS" -ge 1000 ] || { say "잔액 부족 묶음 회원 수가 1,000명 미만: $S4_USERS"; return 1; }
+  fi
   TOKEN_AT="$t0"
-  say "토큰 재발급 #$TOKEN_N 완료 ($(( $(date +%s) - t0 ))초, 회원 ${USERS}명)"
+  say "토큰 재발급 #$TOKEN_N 완료 ($(( $(date +%s) - t0 ))초, 회원 ${USERS}명$([ "$HAS_S4" = 1 ] && printf ', 잔액 부족 묶음 %s명' "$S4_USERS"))"
 }
 # 다음 실행(need초) 동안 토큰이 유효한지 보고, 모자라면 요청 없는 지금 재발급하고 GAP초 쉰다
 ensure_token() {
@@ -403,6 +427,10 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
     echo "설정 P95_LIMIT=$P95_LIMIT DRAIN_LIMIT=$DRAIN_LIMIT DRAIN_TIMEOUT=$DRAIN_TIMEOUT SKIP_BUILD=${SKIP_BUILD:-0} ALLOW_DIRTY=${ALLOW_DIRTY:-0}"
     echo "설정 REQUIRED_GROUPS=$REQUIRED_GROUPS"
     echo "설정 STATS_INTERVAL=$STATS_INTERVAL K6_CPUS=$K6_CPUS K6_MEMORY=$K6_MEMORY RESTORE=$RESTORE DB_DUMP=$DB_DUMP"
+    echo "설정 SCENARIOS=$SCENARIOS S4_PREFIX=$S4_PREFIX SYN_RUNS=$SYN_RUNS BASELINE_DIR=${BASELINE_DIR:-$DIR/data/baseline}"
+    # 어떤 행동 데이터로 측정했는지 (Synthetic Data는 커밋한 CSV를 쓰지만, 같은 커밋인지와 별개로 파일 자체를 남긴다)
+    [ "$HAS_S3" = 1 ] && echo "행동 CSV s3-behavior.csv sha256=$(sha256_file "$DIR/synthetic/s3-behavior.csv" 2>/dev/null || echo 조회실패)"
+    [ "$HAS_S4" = 1 ] && echo "행동 CSV s4-behavior.csv sha256=$(sha256_file "$DIR/synthetic/s4-behavior.csv" 2>/dev/null || echo 조회실패)"
   } >> "$OUT/env.txt"
   return "$mismatch"
 }
@@ -445,18 +473,113 @@ run_warmup() {
   sleep "$GAP"
 }
 
-run_s0() { # 인자: run_id, phase(warmup|measure)
-  local run="$1" phase="$2" ipo t0 t1 d drain_end drc rate
+# SCENARIOS("S0,S3,S4" 등)를 읽어 HAS_S1, HAS_S3, HAS_S4를 정한다. S0이 없거나, 모르는 값, 같은 값이 두 번이면 실패
+parse_scenarios() { # 인자: 쉼표로 구분한 시나리오
+  local s seen=","
+  HAS_S1=0; HAS_S3=0; HAS_S4=0
+  for s in ${1//,/ }; do
+    case "$seen" in *",$s,"*) echo "SCENARIOS에 ${s}가 두 번 있음: $1" >&2; return 1 ;; esac
+    seen="$seen$s,"
+    case "$s" in
+      S0) ;;
+      S1) HAS_S1=1 ;;
+      S3) HAS_S3=1 ;;
+      S4) HAS_S4=1 ;;
+      *) echo "SCENARIOS 값은 S0, S1, S3, S4 중에서 고른다: $s" >&2; return 1 ;;
+    esac
+  done
+  case "$seen" in *",S0,"*) ;; *) echo "SCENARIOS에 S0이 있어야 한다 (워밍업 뒤 기준값이자 S3, S4의 비교 대상): $1" >&2; return 1 ;; esac
+  return 0
+}
+
+# 워밍업 뒤 S0, S3, S4의 실행 순서를 "시나리오 run_id 구간" 줄로 낸다 (S1은 그 뒤 따로)
+# S3, S4는 경로 예열 1회 뒤 S0과 번갈아 3회씩 (몰아서 돌리면 세션 중 DB 증가, JVM 변화가 한 시나리오에 쏠린다)
+plan_runs() {
+  local i
+  [ "$HAS_S3" = 1 ] && echo "S3 $BATCH-S3-W warmup"
+  [ "$HAS_S4" = 1 ] && echo "S4 $BATCH-S4-W warmup"
+  for i in 1 2 3; do
+    echo "S0 $BATCH-S0-r$i measure"
+    [ "$HAS_S3" = 1 ] && echo "S3 $BATCH-S3-r$i measure"
+    [ "$HAS_S4" = 1 ] && echo "S4 $BATCH-S4-r$i measure"
+  done
+  return 0
+}
+
+# plan_runs 순서대로 run_one을 부른다. 순서는 fd 3으로 읽는다
+# (표준입력으로 읽으면 반복 안의 docker exec -i(소진 확인 psql)가 남은 줄을 먹어 실행이 조용히 빠진다)
+run_plan() {
+  local scen run phase
+  while read -r scen run phase <&3; do
+    run_one "$scen" "$run" "$phase"
+  done 3<<< "$(plan_runs)"
+}
+
+# S3, S4 행동 CSV를 이 측정의 요청 수, 청약 금액, 반복 횟수로 검사하고(synthetic/validate.py), 회원 CSV와 맞는지 본다
+#   S3: 두 번째 계좌 청약(SECOND_ACCOUNT) 투자자가 모두 users.csv에 accountId2를 가졌는지
+#   S4: users-s4.csv가 잔액 부족 묶음(S4_PREFIX)인지
+# 통과하면 S4 예수금 부족 투자자 수를 출력한다 (S4가 없으면 0). 부하 전에 불러서, 워밍업 뒤에야 k6가 멈추는 일을 막는다
+synthetic_check() {
+  py - "$(pypath "$DIR/synthetic/validate.py")" "$(pypath "$USERS_CSV")" "$(pypath "$S4_CSV")" "$HAS_S3" "$HAS_S4" \
+     $((S0_VUS * S0_ITERS)) $((S0_PRICE * QUANTITY)) "$SYN_RUNS" "$S4_PREFIX" <<'PYEOF'
+import csv, importlib.util, os, sys
+vpath, lt_csv, lb_csv, has3, has4, total, amount, runs, prefix = sys.argv[1:10]
+total, amount, runs = int(total), int(amount), int(runs)
+spec = importlib.util.spec_from_file_location("synthetic_validate", vpath)
+v = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(v)
+
+
+def users(path):
+    if not os.path.exists(path):
+        sys.exit(f"회원 CSV가 없다: {path}")
+    return list(csv.DictReader(open(path, encoding="utf-8")))
+
+
+short = 0
+if has3 == "1":
+    lt = users(lt_csv)
+    errors, exp = v.check("S3", total=total, users=len(lt))
+    if errors:
+        sys.exit(f"S3 행동 CSV 규칙 위반 {len(errors)}건: " + "; ".join(errors[:3]))
+    missing = [x for x in exp["detail"]["second_account_vusers"] if not lt[x].get("accountId2")]
+    if missing:
+        sys.exit(f"회원 CSV에 두 번째 계좌(accountId2)가 없는 S3 투자자 {len(missing)}명 (예: {missing[:5]}). "
+                 "S3, S4 기준 스냅샷을 만들 때의 회원 CSV를 쓴다 (docs/LOADTEST.md 3-4절)")
+if has4 == "1":
+    lb = users(lb_csv)
+    errors, exp = v.check("S4", total=total, users=len(lb), amount=amount, runs=runs)
+    if errors:
+        sys.exit(f"S4 행동 CSV 규칙 위반 {len(errors)}건 (청약 금액 {amount}원, {runs}회 기준): " + "; ".join(errors[:3]))
+    other = [r["loginId"] for r in lb if not r["loginId"].startswith(prefix)]
+    if other:
+        sys.exit(f"{lb_csv}가 잔액 부족 묶음({prefix})이 아니다 (예: {other[:3]})")
+    short = exp["rejected"]["INSUFFICIENT_BALANCE"]
+print(short)
+PYEOF
+}
+
+# 회차 하나 (S0, S3, S4. 100명 x 10회): 다음 공모주로 k6 → 소진 확인 → manifest → 쿼리 통계 → GAP초 대기
+run_one() { # 인자: 시나리오, run_id, phase(warmup|measure)
+  local scen="$1" run="$2" phase="$3" ipo t0 t1 d drain_end drc rate script extra=()
   ensure_token 300
-  [ "$S0_NEXT" -lt "${#S0_IPOS[@]}" ] || die 11 "S0 공모주가 모자람"
-  ipo="${S0_IPOS[$S0_NEXT]}"; S0_NEXT=$((S0_NEXT + 1))
+  case "$scen" in
+    S0) [ "$S0_NEXT" -lt "${#S0_IPOS[@]}" ] || die 11 "S0 공모주가 모자람"
+        ipo="${S0_IPOS[$S0_NEXT]}"; S0_NEXT=$((S0_NEXT + 1)); script=s0 ;;
+    S3) [ "$S3_NEXT" -lt "${#S3_IPOS[@]}" ] || die 11 "S3 공모주가 모자람"
+        ipo="${S3_IPOS[$S3_NEXT]}"; S3_NEXT=$((S3_NEXT + 1)); script=s3 ;;
+    S4) [ "$S4_NEXT" -lt "${#S4_IPOS[@]}" ] || die 11 "S4 공모주가 모자람"
+        ipo="${S4_IPOS[$S4_NEXT]}"; S4_NEXT=$((S4_NEXT + 1)); script=s4
+        extra=(--users data/users-s4.csv -e "S4_PREFIX=$S4_PREFIX") ;;
+    *) die 1 "run_one: 모르는 시나리오 $scen" ;;
+  esac
   t0="$(date +%s)"
-  k6_run s0 "$ipo" "$run" -e "VUS=$S0_VUS" -e "ITERATIONS=$S0_ITERS" -e "QUANTITY=$QUANTITY" || die 8 "$run k6 실패"
+  k6_run "$script" "$ipo" "$run" ${extra[@]+"${extra[@]}"} -e "VUS=$S0_VUS" -e "ITERATIONS=$S0_ITERS" -e "QUANTITY=$QUANTITY" || die 8 "$run k6 실패"
   t1="$(date +%s)"
   d="$(drain "$ipo" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
   drain_end="$(date +%s)"
-  echo "$run,S0,$phase,,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d,$drain_end" >> "$MANIFEST"
+  echo "$run,$scen,$phase,,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d,$drain_end" >> "$MANIFEST"
   slowq_run "$run"
   LAST_AVG="$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg)" || die 1 "$run 평균 응답을 읽지 못함"
   rate="$(json_metric "$DIR/results/$run/summary.json" http_reqs rate)" || rate="?"
@@ -508,8 +631,10 @@ post_process() {
     [ -n "$run" ] && [ "$run" != - ] || continue
     [ "$ipos" = - ] && ipos=""
     (cd "$DIR" && py report.py --run-id "$run") > "$DIR/results/$run/report.out" 2>&1 || { say "후처리: $run report.py 실패"; fails=$((fails + 1)); }
-    # S0은 요청 수가 정확히 맞아야 한다. S1은 k6가 목표 속도를 다 못 보낼 수 있어 판정(전달률, 밀린 반복)에서 본다
-    expect=""; [ "$scen" = S0 ] && is_uint "$expected" && expect="--expect-requests $expected"
+    # S0, S3, S4(100명 x 10회)는 요청 수가 정확히 맞아야 한다. S1은 k6가 목표 속도를 다 못 보낼 수 있어 판정(전달률, 밀린 반복)에서 본다
+    # S3는 같은 requestId 재전송의 응답 subscriptionId가 같은지도 check_requests.py가 본다
+    expect=""
+    case "$scen" in S0|S3|S4) is_uint "$expected" && expect="--expect-requests $expected" ;; esac
     # shellcheck disable=SC2086  # expect는 비어 있거나 옵션 2개
     py "$(pypath "$DIR/verify/check_requests.py")" "$(pypath "$DIR/results/$run/requests.log")" $expect > "$DIR/results/$run/check_requests.txt" 2>&1 \
       || { say "후처리: $run 요청 분류 이상 (check_requests.txt)"; fails=$((fails + 1)); }
@@ -524,7 +649,7 @@ post_process() {
     fi
   done <<< "$runs"
   py "$(pypath "$DIR/verify/judge.py")" "$(pypath "$MANIFEST")" --p95-limit "$P95_LIMIT" --drain-limit "$DRAIN_LIMIT" --container "$PG_CONTAINER" \
-    > "$OUT/판정.md" 2> "$OUT/판정.err" \
+     --s4-prefix "$S4_PREFIX" > "$OUT/판정.md" 2> "$OUT/판정.err" \
     || { say "후처리: judge.py 실패 (판정.err)"; fails=$((fails + 1)); }
   [ "$SLOWQ_FAILS" -eq 0 ] || { say "후처리: 쿼리 통계 조회 실패 ${SLOWQ_FAILS}번 (진행.log)"; fails=$((fails + SLOWQ_FAILS)); }
   if [ "$STATS_INTERVAL" -gt 0 ]; then
@@ -536,7 +661,7 @@ post_process() {
 }
 
 main() {
-  local dirty need minbal accounts s1_cost warm_cost r n k l ids dlt0 dlt1 i rep last pp
+  local dirty need minbal accounts s1_cost warm_cost syn_cost syn_short lb_short lb_mid lb_n r n k l ids dlt0 dlt1 i rep last pp
   while [ $# -gt 0 ]; do
     case "$1" in --batch) BATCH="${2:-}"; shift 2 ;; *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;; esac
   done
@@ -552,6 +677,11 @@ main() {
   [ "$WARM_BUCKET" -ge 5 ] && [ "$WARM_WINDOW" -ge 3 ] && [ "$WARM_CONSEC" -ge 1 ] && [ "$WARM_MAX" -ge "$WARM_MIN" ] \
     || { echo "워밍업 인자 범위: WARM_BUCKET>=5, WARM_WINDOW>=3, WARM_CONSEC>=1, WARM_MAX>=WARM_MIN (지금 $WARM_BUCKET, $WARM_WINDOW, $WARM_CONSEC, $WARM_MIN~$WARM_MAX)" >&2; exit 1; }
   case "$RESTORE$DB_DUMP" in 00|01|10|11) ;; *) echo "RESTORE, DB_DUMP는 0 또는 1: RESTORE=$RESTORE DB_DUMP=$DB_DUMP" >&2; exit 1 ;; esac
+  parse_scenarios "$SCENARIOS" || exit 1
+  case "$S4_PREFIX" in ''|*[!a-z0-9]*) echo "S4_PREFIX는 영문 소문자, 숫자: $S4_PREFIX" >&2; exit 1 ;; esac
+  if [ "$HAS_S4" = 1 ] && [ $((S0_PRICE * QUANTITY)) -ne "$SYN_AMOUNT" ]; then
+    echo "S4 행동 CSV는 청약 금액 ${SYN_AMOUNT}원 기준이다 (S0_PRICE x QUANTITY = $((S0_PRICE * QUANTITY))원). 금액을 바꾸려면 행동 CSV와 judge.py 기대값도 같이 바꾼다" >&2; exit 1
+  fi
   IFS=',' read -ra ST <<< "$STAGES"
   for r in "${ST[@]}"; do is_uint "$r" && [ "$r" -gt 0 ] || { echo "STAGES 값이 올바르지 않음: $STAGES" >&2; exit 1; }; done
 
@@ -601,17 +731,36 @@ main() {
   say "버전 기록: $(grep -m1 "^git=" "$OUT/env.txt")"
   stats_start
 
-  # 1. 토큰 (회원 수 확인 포함) → 예수금
+  # 1. 토큰 (회원 수 확인 포함) → S3, S4 데이터 확인 → 예수금
   refresh_tokens || die 3 "토큰 재발급 실패"
+  syn_short=0
+  if [ "$HAS_S3" = 1 ] || [ "$HAS_S4" = 1 ]; then
+    syn_short="$(synthetic_check 2>>"$LOG")" || die 4 "S3, S4 행동 CSV 또는 회원 CSV 확인 실패 (진행.log)"
+    is_uint "$syn_short" || die 4 "S3, S4 확인 결과가 숫자가 아님: $syn_short"
+    say "S3, S4 행동 CSV 확인 통과 (S4 예수금 부족 투자자 ${syn_short}명)"
+  fi
   s1_cost=0
-  for r in "${ST[@]}"; do s1_cost=$(( s1_cost + $(ceil_div $((r * DUR)) "$USERS") * S1_REPEAT )); done
+  if [ "$HAS_S1" = 1 ]; then
+    for r in "${ST[@]}"; do s1_cost=$(( s1_cost + $(ceil_div $((r * DUR)) "$USERS") * S1_REPEAT )); done
+  fi
+  syn_cost=0; [ "$HAS_S3" = 1 ] && syn_cost="$SYN_RUNS"   # S3는 기본 묶음 회원이 경로 예열 1 + 측정 3번 청약 (두 번째 계좌로 확정되면 그 계좌에서 빠진다)
   warm_cost=$(( $(ceil_div $((WARM_RATE * (WARM_MAX + 60))) "$USERS") + 1 ))   # 워밍업 최대 시간 동안 회원 1명이 보내는 요청 수
-  need=$(( S0_PRICE * QUANTITY * 3 + S1_PRICE * QUANTITY * (s1_cost + warm_cost) ))
+  need=$(( S0_PRICE * QUANTITY * (3 + syn_cost) + S1_PRICE * QUANTITY * (s1_cost + warm_cost) ))
   minbal="$(pg_int "select coalesce(min(a.cash_balance), 0) from account.account a join account.users u on u.user_id = a.user_id where u.login_id like 'lt%'")" || die 4 "예수금 조회 실패"
   accounts="$(pg_int "select count(*) from account.account a join account.users u on u.user_id = a.user_id where u.login_id like 'lt%'")" || die 4 "계좌 수 조회 실패"
-  say "회원 계좌 ${accounts}개, 회원당 예수금 최소 ${minbal}원, 최대로 필요한 금액 ${need}원 (워밍업 최대 ${warm_cost}건 + S0 3회차 + S1 최대 ${s1_cost}건)"
+  say "회원 계좌 ${accounts}개, 계좌당 예수금 최소 ${minbal}원, 최대로 필요한 금액 ${need}원 (워밍업 최대 ${warm_cost}건 + S0 3회차 + S3 ${syn_cost}회차 + S1 최대 ${s1_cost}건)"
   [ "$accounts" -ge "$USERS" ] || die 4 "계좌 수(${accounts})가 회원 수(${USERS})보다 적음"
   [ "$minbal" -ge "$need" ] || die 4 "예수금 부족. 입금 API로 넣는다: python loadtest/seed/seed_users.py --run-id deposit-<이름> --amount <금액>"
+  # S4: DB의 잔액 부족 묶음 예수금이 행동 CSV대로인지 (부족 수가 같고, 회차마다 결과가 바뀌는 애매한 금액이 없음)
+  if [ "$HAS_S4" = 1 ]; then
+    l="$(pg "select count(*) filter (where c < $SYN_AMOUNT), count(*) filter (where c >= $SYN_AMOUNT and c < $((SYN_AMOUNT * SYN_RUNS))), count(*) from (select sum(a.cash_balance) as c from account.users u join account.account a on a.user_id = u.user_id where u.login_id ~ '^${S4_PREFIX}[0-9]{4}\$' group by u.login_id) t")" \
+      || die 4 "잔액 부족 묶음 예수금 조회 실패"
+    read -r lb_short lb_mid lb_n <<< "$l"
+    say "잔액 부족 묶음: 회원 ${lb_n}명, 예수금 ${SYN_AMOUNT}원 미만 ${lb_short}명 (행동 CSV ${syn_short}명), 애매한 금액 ${lb_mid}명"
+    is_uint "$lb_n" && [ "$lb_n" -ge "$S4_USERS" ] || die 4 "잔액 부족 묶음 계좌가 회원 CSV(${S4_USERS}명)보다 적음: $lb_n. S3, S4 기준 스냅샷인지 확인한다 (BASELINE_DIR)"
+    [ "$lb_short" = "$syn_short" ] && [ "$lb_mid" = 0 ] \
+      || die 4 "잔액 부족 묶음 예수금이 행동 CSV와 다름. S4 행동 CSV로 시드한 스냅샷인지 확인한다 (seed_users.py --behavior)"
+  fi
 
   # 2. 콜드 시작: 세 서비스 재시작 → healthy → 45초 대기 → 사전 점검
   say "재시작: $RESTART_SERVICES"
@@ -632,35 +781,47 @@ main() {
   WARM_IPOS="$(new_ipos "$BATCH-W" "$warm_cost" "$S1_PRICE")" || die 11 "워밍업 공모주 생성 실패"
   l="$(new_ipos "$BATCH-S0" 3 "$S0_PRICE")" || die 11 "S0 공모주 생성 실패"
   IFS=',' read -ra S0_IPOS <<< "$l"
+  if [ "$HAS_S3" = 1 ]; then   # 경로 예열 1 + 측정 3. 회차마다 새 공모주 (같은 공모주면 이중청약 거절)
+    l="$(new_ipos "$BATCH-S3" "$SYN_RUNS" "$S0_PRICE")" || die 11 "S3 공모주 생성 실패"
+    IFS=',' read -ra S3_IPOS <<< "$l"
+  fi
+  if [ "$HAS_S4" = 1 ]; then
+    l="$(new_ipos "$BATCH-S4" "$SYN_RUNS" "$S0_PRICE")" || die 11 "S4 공모주 생성 실패"
+    IFS=',' read -ra S4_IPOS <<< "$l"
+  fi
   : > "$PLAN"
-  for r in "${ST[@]}"; do
-    n=$(( $(ceil_div $((r * DUR)) "$USERS") + 1 ))
-    for rep in $(seq 1 "$S1_REPEAT"); do   # 반복마다 새 공모주 (회원은 앞 반복의 공모주에 이미 청약했다)
-      l="$(new_ipos "$BATCH-S1-$r-r$rep" "$n" "$S1_PRICE")" || die 11 "S1 공모주 생성 실패"
-      echo "$r $rep $l" >> "$PLAN"
+  if [ "$HAS_S1" = 1 ]; then
+    for r in "${ST[@]}"; do
+      n=$(( $(ceil_div $((r * DUR)) "$USERS") + 1 ))
+      for rep in $(seq 1 "$S1_REPEAT"); do   # 반복마다 새 공모주 (회원은 앞 반복의 공모주에 이미 청약했다)
+        l="$(new_ipos "$BATCH-S1-$r-r$rep" "$n" "$S1_PRICE")" || die 11 "S1 공모주 생성 실패"
+        echo "$r $rep $l" >> "$PLAN"
+      done
     done
-  done
-  say "공모주 생성: 워밍업 ${warm_cost}개(공모가 $S1_PRICE), S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 $(wc -l < "$PLAN" | tr -d ' ')묶음(단계 ${#ST[@]}개 x ${S1_REPEAT}회, 묶음당 $(awk 'NR == 1 {print gsub(/,/, ",") + 1}' "$PLAN")~$(awk 'END {print gsub(/,/, ",") + 1}' "$PLAN")개, 공모가 $S1_PRICE)"
+  fi
+  say "공모주 생성: 워밍업 ${warm_cost}개(공모가 $S1_PRICE), S0 ${#S0_IPOS[@]}개, S3 ${#S3_IPOS[@]}개, S4 ${#S4_IPOS[@]}개(공모가 $S0_PRICE), S1 $(wc -l < "$PLAN" | tr -d ' ')묶음(단계 ${#ST[@]}개 x ${S1_REPEAT}회, 공모가 $S1_PRICE)"
   echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s,drain_end" > "$MANIFEST"
   # 첫 실행의 쿼리 통계에 준비 단계(공모주 생성 등)가 섞이지 않게 비운다. 이후 실행마다 slowq_run이 남기고 비운다
   slowq "$OUT/.slow-queries-reset.out" 1 || die 9 "쿼리 통계 초기화 실패 (.slow-queries-reset.out)"
 
-  # 4. 워밍업(독립 단계, 시간 기준) → S0 측정 3회
+  # 4. 워밍업(독립 단계, 시간 기준) → [S3, S4 경로 예열] → S0(, S3, S4 번갈아) 측정 3회
   run_warmup
-  for i in 1 2 3; do run_s0 "$BATCH-S0-r$i" measure; done
+  run_plan
 
   # 5. S1: 토큰을 새로 받고 쉰 뒤 속도 단계마다 독립 실행
-  refresh_tokens || die 3 "S1 전 토큰 재발급 실패"
-  # 재발급(로그인) 쿼리가 S1 첫 실행의 쿼리 통계에 섞이지 않게 비운다
-  slowq "$OUT/.slow-queries-reset.out" 1 || { say "쿼리 통계 초기화 실패 (S1 전)"; SLOWQ_FAILS=$((SLOWQ_FAILS + 1)); }
-  say "재발급 뒤 ${GAP}초 대기 (요청 없음)"; sleep "$GAP"
-  # 단계마다 S1_REPEAT회를 연달아 실행한다 (단계를 섞으면 앞 단계의 영향이 섞인다). 팀 규칙: 같은 조건 최소 3회, 중앙값
-  for i in $(seq 0 $((${#ST[@]} - 1))); do
-    for rep in $(seq 1 "$S1_REPEAT"); do
-      last=0; [ "$i" -eq $((${#ST[@]} - 1)) ] && [ "$rep" -eq "$S1_REPEAT" ] && last=1
-      run_s1 "${ST[$i]}" "$rep" "$last"
+  if [ "$HAS_S1" = 1 ]; then
+    refresh_tokens || die 3 "S1 전 토큰 재발급 실패"
+    # 재발급(로그인) 쿼리가 S1 첫 실행의 쿼리 통계에 섞이지 않게 비운다
+    slowq "$OUT/.slow-queries-reset.out" 1 || { say "쿼리 통계 초기화 실패 (S1 전)"; SLOWQ_FAILS=$((SLOWQ_FAILS + 1)); }
+    say "재발급 뒤 ${GAP}초 대기 (요청 없음)"; sleep "$GAP"
+    # 단계마다 S1_REPEAT회를 연달아 실행한다 (단계를 섞으면 앞 단계의 영향이 섞인다). 팀 규칙: 같은 조건 최소 3회, 중앙값
+    for i in $(seq 0 $((${#ST[@]} - 1))); do
+      for rep in $(seq 1 "$S1_REPEAT"); do
+        last=0; [ "$i" -eq $((${#ST[@]} - 1)) ] && [ "$rep" -eq "$S1_REPEAT" ] && last=1
+        run_s1 "${ST[$i]}" "$rep" "$last"
+      done
     done
-  done
+  fi
   if dlt1="$(kafka_dlt_total)"; then say "DLT 합계(종료)=$dlt1 (증가 $((dlt1 - dlt0)))"; else say "DLT 합계(종료) 조회 실패"; fi
   stats_stop
   say "== 부하 종료. 후처리 시작"

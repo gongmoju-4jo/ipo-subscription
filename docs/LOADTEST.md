@@ -159,19 +159,33 @@ S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 
 
 ```bash
 bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 10분~1시간 20분, 추정. 워밍업 3~15분 포함)
+SCENARIOS=S0,S3,S4 BASELINE_DIR=loadtest/data/baseline-s34 bash loadtest/official.sh --batch official-s34-a   # S3, S4를 S0과 같은 세션에서 비교
 ```
+
+`SCENARIOS`(기본 `S0,S1`)로 실행할 시나리오를 고릅니다. S0은 필수입니다 (워밍업 뒤 기준값이자 S3, S4의 비교 대상).
+
+| `SCENARIOS` | 워밍업 뒤 순서 | 필요한 것 |
+| --- | --- | --- |
+| `S0,S1` (기본) | S0 3회 → S1 단계 | 3-4절 기준 스냅샷 |
+| `S0,S3,S4` | S3, S4 경로 예열 각 1회 → S0, S3, S4를 번갈아 3회씩 | 3-4절 S3, S4 기준 스냅샷(`BASELINE_DIR`)과 그때의 회원 CSV(`users.csv`, `users-s4.csv`) |
+| `S0,S1,S3,S4` | 위 순서 뒤 S1 단계 | 위와 같음 |
+
+- 번갈아 실행하는 이유: 세션을 나누면 세션 간 편차가 섞이고, 시나리오별로 몰아서 돌리면 세션 중 DB 증가와 JVM 상태 변화가 한 시나리오에만 쏠립니다.
+- 경로 예열 이유: 워밍업은 모든 요청이 확정되는 경로라 이중청약, 잔액 부족 거절 경로가 데워지지 않은 채 첫 측정에 들어갑니다. 경로 예열 회차는 구간 `warmup`으로 남고, 성능은 참고값이지만 정합성은 판정합니다.
+- S3, S4는 시작 전(부하 전)에 데이터를 확인하고 맞지 않으면 멈춥니다 (종료 코드 4): 행동 CSV 규칙(이 측정의 청약 금액, 4회 기준), S3 투자자의 두 번째 계좌, S4 회원 CSV가 잔액 부족 묶음인지, DB의 잔액 부족 묶음 예수금이 행동 CSV대로인지. S4 행동 CSV는 청약 금액 150,000원(`S0_PRICE` x `QUANTITY`) 기준이라 금액을 바꾸면 시작하지 않습니다.
+- `S0,S3,S4`는 S1이 없어 약 25~35분입니다 (추정. 워밍업 3~15분 포함). S1이 없으므로 `consumer_stats.py`(S1 전용)는 해당하지 않습니다.
 
 하는 일 (순서대로, 중간에 사람이 끼어들지 않습니다)
 
 1. 커밋하지 않은 변경이 있으면 실행을 거부합니다. 이 커밋으로 jar를 빌드해 배포하고(`./gradlew build -x test`, `compose up -d --build`), 기준 스냅샷으로 DB와 Kafka를 되돌린 뒤(`baseline.sh restore`, 3-4절. 스냅샷 sha256과 상태를 `env.txt`에 남김), 컨테이너 안 jar와 빌드한 jar의 sha256이 같은지 확인해 `env.txt`에 남깁니다. 컨테이너별 CPU, 메모리 상한과 JVM 힙 옵션도 `env.txt`에 남기고(`자원 ...` 줄), 이때부터 부하가 끝날 때까지 `docker stats`를 `STATS_INTERVAL`초마다 기록합니다 (PostgreSQL, Kafka, k6 포함 모든 컨테이너).
-2. 토큰을 새로 받고(회원 수 확인), 예수금이 최대로 필요한 금액 이상인지 확인합니다.
+2. 토큰을 새로 받고(회원 수 확인. S4가 있으면 잔액 부족 묶음도), S3, S4 데이터를 확인하고, 예수금이 최대로 필요한 금액 이상인지 확인합니다.
 3. gateway, subscription, account를 재시작(콜드 상태)하고, healthy와 Eureka UP을 기다린 뒤 45초 쉬고 사전 점검(`precheck.sh`)을 합니다.
 4. 회차에 쓸 공모주를 모두 미리 만듭니다 (부하 중에는 만들지 않습니다).
 5. 워밍업: 측정 앞의 독립 단계입니다. `WARM_RATE`(기본 200건/초)로 일정한 부하를 걸고(모든 요청이 확정되게 공모주를 돌림), `WARM_BUCKET`(15초)마다 게이트웨이 평균 응답 시간을 Prometheus에서 읽습니다. 최근 `WARM_WINDOW`개 구간(2분)에 직선을 맞춰, 기울기가 분당 창 평균의 ±`WARM_SLOPE_PCT`%(5%) 이내이거나 분당 ±`WARM_SLOPE_MS`ms(1ms) 이내인 판정이 `WARM_CONSEC`번(2번) 연속이면 정상 상태로 보고 끝냅니다. 최소 `WARM_MIN`(180초), 최대 `WARM_MAX`(900초)이고, 최대까지 닿지 않으면 중단합니다. 구간마다 `warmup.csv`에 남고, 끝나면 소진을 확인하고 쉽니다.
    - 회차마다 흔들림으로 판정하던 방식(연속 3회차 ±20%)은 아직 빨라지는 중이어도 통과할 수 있어서, 워밍업이 끝나는 시점이 실행마다 달라지고 측정값에 섞였습니다. 시간 구간의 추세(기울기)로 보면 내려가는 중에는 통과하지 않습니다.
    - 절대 기울기(분당 ±1ms)를 함께 보는 이유: 데워진 뒤 응답이 2~7ms로 작으면 ±5%의 허용 폭이 분당 약 0.25ms까지 좁아져, 평평한 상태의 작은 흔들림도 통과하지 못하고 최대 시간에 닿습니다. 분당 1ms는 2분 창 전체로 2ms 차이라 G1(평균 500ms), G2(15초) 판정에 영향이 없는 크기이고, 응답이 아직 내려가는 중(분당 1ms보다 빠르게 감소)이면 통과하지 않습니다. `WARM_SLOPE_MS=0`이면 상대 기울기만 봅니다.
-6. S0: 1,000건(100명 x 10회) 측정 3회를 실행합니다.
-7. S1: 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
+6. S0: 1,000건(100명 x 10회) 측정 3회를 실행합니다. S3, S4가 있으면 경로 예열 뒤 S0, S3, S4를 번갈아 3회씩 실행합니다.
+7. S1(`SCENARIOS`에 있을 때): 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
 8. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다. docker stats 기록은 `docker-stats.csv`와 `자원.md`(실행마다 k6 구간의 컨테이너별 CPU, 메모리 최대)로 정리합니다. 어떤 실행의 k6 구간에 샘플이 없으면 후처리 실패(종료 코드 10)로 셉니다. 기록 간격(5초)의 2배보다 짧은 실행은 샘플이 빠질 수 있어 경고로만 남깁니다.
 9. 측정이 끝난 DB를 `db-after.dump`로 남깁니다(`DB_DUMP=1`). 다음 측정은 기준 스냅샷으로 되돌리므로 이번 측정의 원본 행은 여기에만 남습니다.
 
@@ -345,6 +359,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `RESTORE`, `DB_DUMP` | `1`, `1` | `official.sh` (시작할 때 기준 스냅샷 복원, 끝난 뒤 DB 덤프. `RESTORE=0`은 `env.txt`에 남고 정식 결과로 쓰지 않음) |
 | `BASELINE_DIR` | `loadtest/data/baseline` | `baseline.sh`, `official.sh` (기준 스냅샷 위치) |
 | `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |
+| `SCENARIOS` | `S0,S1` | `official.sh` (실행할 시나리오. S0 필수, S0, S1, S3, S4 중에서. 4장) |
 | `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
 | `S1_REPEAT` | `3` | `official.sh` (S1 단계마다 반복 측정 횟수. 팀 규칙은 최소 3회, 3 미만이면 판정이 참고값) |
 | `S0_PRICE`, `S1_PRICE`, `QUANTITY` | `15000`, `1000`, `10` | `official.sh` (공모가, 청약 수량) |
@@ -356,7 +371,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
 | `BEHAVIOR_CSV` | `../synthetic/<시나리오>-behavior.csv` | `s3.js`, `s4.js` (`-e BEHAVIOR_CSV=...`, 행동 CSV 경로. k6 스크립트 기준 상대 경로) |
-| `S4_PREFIX` | `lb` | `s4.js` (잔액 부족 묶음의 loginId 접두사. 회원 CSV가 이 묶음이 아니면 시작 전에 멈춤) |
+| `S4_PREFIX` | `lb` | `official.sh` → `s4.js`, `judge.py --s4-prefix` (잔액 부족 묶음의 loginId 접두사. 회원 CSV가 이 묶음이 아니면 시작 전에 멈춤) |
 | `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `verify.sh`, `precheck.sh`, `official.sh`(하위 스크립트와 `judge.py --container`에 같은 값을 넘긴다) |
 | `KAFKA_CONTAINER` | `ipo-kafka` | `precheck.sh`, `baseline.sh` |
 | `EUREKA_URL` | `http://localhost:8761` | `precheck.sh` |

@@ -291,6 +291,39 @@ public class Subscription extends BaseEntity {
                 && this.allocatedAmount != null && this.allocatedAmount == allocatedAmount;
     }
 
+    /**
+     * 정산 완료 응답({@code margin.settled})으로 {@code ALLOCATED}를 {@code REFUNDED}로 전환함. 환불액을 저장함 (0주 배정이면 증거금 전액, 청약 수량을 전부 배정받았으면 0).
+     * 환불액은 증거금 − 배정 대금과 같아야 함 (이벤트 명세 {@code margin.settled} 절).
+     *
+     * @param refundAmount 환불액 (원)
+     * @throws IllegalStateException    {@code ALLOCATED}가 아닌 상태에서 호출했거나, 배정 대금이 없는 경우
+     * @throws IllegalArgumentException 환불액이 증거금 − 배정 대금과 다른 경우
+     */
+    public void completeRefund(long refundAmount) {
+        if (status != SubscriptionStatus.ALLOCATED) {
+            throw new IllegalStateException("ALLOCATED 상태에서만 환불을 완료할 수 있습니다: " + status);
+        }
+        if (allocatedAmount == null) {
+            throw new IllegalStateException("배정 대금이 없는 청약은 환불을 완료할 수 없습니다: " + status);
+        }
+        if (refundAmount < 0 || refundAmount != marginAmount - allocatedAmount) {
+            throw new IllegalArgumentException("환불액이 증거금 − 배정 대금과 다릅니다: refundAmount=" + refundAmount
+                    + ", marginAmount=" + marginAmount + ", allocatedAmount=" + allocatedAmount);
+        }
+        this.status = SubscriptionStatus.REFUNDED;
+        this.refundAmount = refundAmount;
+    }
+
+    /**
+     * 이미 저장한 정산 결과와 같은지 비교함. 정산 금액은 배정 대금과 같으므로 배정 대금과 비교함. 환불 전이면 항상 {@code false}.
+     *
+     * @return 배정 대금과 정산 금액, 저장한 환불액과 환불액이 모두 같으면 {@code true}
+     */
+    public boolean hasSameRefund(long postedAmount, long refundAmount) {
+        return this.allocatedAmount != null && this.allocatedAmount == postedAmount
+                && this.refundAmount != null && this.refundAmount == refundAmount;
+    }
+
     private static Subscription create(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
                                        long requestedQuantity, long marginAmount, Instant receivedAt) {
         if (requestedQuantity < 1) {

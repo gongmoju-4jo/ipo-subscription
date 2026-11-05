@@ -6,6 +6,7 @@ name: Deploy
 #
 # 저장소 변수(Settings → Secrets and variables → Actions → Variables)
 #   AWS_REGION, AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY, EC2_INSTANCE_ID, DEPLOY_BASE_URL(예: http://{고정 IP})
+# 스모크 계정: Parameter Store /ipo/prod/SMOKE_LOGIN_ID, SMOKE_PASSWORD (서버 안에서 deploy.sh가 사용)
 # AWS 권한은 OIDC로 받는다 (장기 액세스 키를 GitHub에 두지 않는다)
 on:
   workflow_run:
@@ -189,5 +190,21 @@ jobs:
           echo "결과: $status"
           [[ "$status" == "Success" ]]
 
-      - name: 스모크 (가입 → 로그인 → 계좌 개설 → 입금)
-        run: bash deploy/smoke.sh "${{ vars.DEPLOY_BASE_URL }}"
+      # 비밀번호가 담긴 스모크는 서버 안에서 deploy.sh가 실행했다 (HTTP로 인터넷에 비밀번호를 보내지 않으려고)
+      # 여기서는 인터넷에서 공개 주소로 실제로 들어오는지만 본다 (보안 그룹, 고정 IP, 게이트웨이 공개). 자격 증명은 보내지 않는다
+      - name: 공개 주소 확인 (Swagger 200, 토큰 없는 API 401)
+        env:
+          BASE_URL: ${{ vars.DEPLOY_BASE_URL }}
+        run: |
+          base="${BASE_URL%/}"
+          code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base$1" || true; }
+          s=""
+          for _ in $(seq 1 12); do
+            s="$(code /swagger-ui/index.html)"
+            [[ "$s" == 200 ]] && break
+            sleep 5
+          done
+          [[ "$s" == 200 ]] || { echo "Swagger 화면 응답이 200이 아닙니다: $s"; exit 1; }
+          s="$(code /api/v1/ipos)"
+          [[ "$s" == 401 ]] || { echo "토큰 없는 API 응답이 401이 아닙니다: $s"; exit 1; }
+          echo "공개 주소 정상: Swagger 200, 토큰 없는 API 401"

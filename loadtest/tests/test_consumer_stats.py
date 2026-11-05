@@ -328,7 +328,7 @@ class Main(unittest.TestCase):
         self.assertEqual(self.run_main(prom=prom), 1)
         self.assertFalse(os.path.exists(os.path.join(self.out, "인출.md")))
 
-    def partition_call(self, counts, seen=None):
+    def partition_call(self, counts, seen=None, lag_times=None):
         # counts: 평가 시각 → 파티션 수 (없는 시각은 값 없음)
         def call(base, path, params):
             q = params.get("query", "")
@@ -337,8 +337,8 @@ class Main(unittest.TestCase):
                     seen.update(path=path, start=params["start"], end=params["end"], step=params["step"])
                 return prom_resp([{"metric": {}, "values": [[t, str(n)] for t, n in counts.items()]}])
             if path.endswith("query_range") and "records_lag" in q:
-                t = params["start"]
-                return prom_resp([{"metric": {}, "values": [[t + i * cs.STEP, "0"] for i in range(4)]}])
+                ts = lag_times if lag_times is not None else [params["start"] + i * cs.STEP for i in range(4)]
+                return prom_resp([{"metric": {}, "values": [[t, "0"] for t in ts]}])
             if path.endswith("query_range"):
                 return prom_resp([{"metric": {"result": "success"}, "values": [[params["start"], "1"]]}])
             if "listener" in q and "timestamp" not in q:
@@ -363,6 +363,14 @@ class Main(unittest.TestCase):
         self.assertEqual(missing, 0)
         *_, fewer = cs.query_prom(run, "http://x", get=self.partition_call({start + i * 5: (5 if i == 2 else 6) for i in range(4)}))
         self.assertEqual(fewer, 5)
+
+    def test_partition_and_lag_missing_together(self):
+        # 같은 시각(start+10)에 랙과 파티션 값이 함께 빠져도 그 시각을 0개로 센다
+        start = T0 + 2
+        run = dict(run="r", start=start, end=start + 10, drain=5, w1=start + 15, stop=start + 16, exact=True)
+        times = [start, start + 5, start + 15]
+        *_, partitions = cs.query_prom(run, "http://x", get=self.partition_call({t: 6 for t in times}, lag_times=times))
+        self.assertEqual(partitions, 0)
 
     def test_sample_gap_fails(self):
         # 측정 구간 15초 / 5초 = 기대 3개. 2개는 90% 미만 → 실패

@@ -165,8 +165,8 @@ def query_prom(run, base, get=prom_get):
     scrape = float(sc[0]["value"][1]) if sc else 0.0
     pr = raw["lag_partitions"]["data"]["result"]
     counts = {int(float(t)): int(float(v)) for t, v in pr[0]["values"]} if pr else {}
-    # 랙 평가 시각마다 파티션 수를 본다. 그 시각에 값이 없으면(시계열이 모두 사라짐) 0개로 센다
-    partitions = min((counts.get(t, 0) for t, _ in lag), default=0)
+    # 범위 조회의 모든 평가 시각(start부터 STEP 간격)을 본다. 랙과 파티션 값이 함께 빠진 시각도 0개로 센다
+    partitions = min((counts.get(t, 0) for t in range(w0, w1 + 1, STEP)), default=0)
     return raw, lag, listener, samples, scrape, partitions
 
 

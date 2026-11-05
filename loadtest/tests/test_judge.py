@@ -246,13 +246,15 @@ class TestInput(unittest.TestCase):
 
 
 class FakeRun:
-    """subprocess.run을 바꿔서 실제 query_g2 경로(인자 순서, SQL, 출력 해석)를 그대로 지나가게 한다"""
+    """subprocess.run을 바꿔서 실제 query_g2 경로(인자 순서, SQL, 출력 해석)를 그대로 지나가게 한다.
+    stdout이 목록이면 호출마다 차례로 하나씩 돌려준다 (query_counts처럼 psql을 여러 번 부르는 경로)"""
     def __init__(self, stdout="", returncode=0, stderr=""):
         self.calls, self.stdout, self.returncode, self.stderr = [], stdout, returncode, stderr
 
     def __call__(self, cmd, **kw):
         self.calls.append(cmd)
-        return type("R", (), {"returncode": self.returncode, "stdout": self.stdout, "stderr": self.stderr})()
+        out = self.stdout.pop(0) if isinstance(self.stdout, list) else self.stdout
+        return type("R", (), {"returncode": self.returncode, "stdout": out, "stderr": self.stderr})()
 
 
 class TestRealQueryPath(unittest.TestCase):
@@ -300,6 +302,215 @@ class TestRealQueryPath(unittest.TestCase):
         c.run("r", "S0", "measure", "", [U[0]], {"metrics": {"http_reqs": {"count": 1, "rate": 1}}}, g2())
         with self.assertRaises(ValueError):
             c.judge()
+
+    def test_query_counts_parses_all_queries(self):
+        fake = FakeRun(["CONFIRMED,-,903\nREJECTED,INSUFFICIENT_BALANCE,97\n", "903,0.42,1.25\n", "lb0003,1000,0\nlb0007,149000,0\n"])
+        judge.subprocess.run = fake
+        c = judge.query_counts([U[0]], "ipo-postgres", ["lb0003", "lb0007"])
+        self.assertEqual(c["by_status"], {("CONFIRMED", "-"): 903, ("REJECTED", "INSUFFICIENT_BALANCE"): 97})
+        self.assertEqual((c["margins"], c["reject_p50"], c["reject_p95"]), (903, 0.42, 1.25))
+        self.assertEqual(c["balances"], {"lb0003": (1000, 0), "lb0007": (149000, 0)})
+        self.assertIn("in ('lb0003','lb0007')", fake.calls[2][-1])
+        self.assertEqual(len(fake.calls), 3)
+
+    def test_query_counts_no_rejection_and_no_logins(self):
+        judge.subprocess.run = FakeRun(["CONFIRMED,-,10\n", "10,,\n"])
+        c = judge.query_counts([U[0]], "ipo-postgres")
+        self.assertIsNone(c["reject_p50"])
+        self.assertEqual(c["balances"], {})
+
+    def test_query_counts_rejects_bad_login_before_sql(self):
+        fake = FakeRun("")
+        judge.subprocess.run = fake
+        with self.assertRaises(ValueError):
+            judge.query_counts([U[0]], "ipo-postgres", ["lb0001'); drop table x;--"])
+        self.assertEqual(fake.calls, [])
+
+    def test_query_counts_bad_output_raises(self):
+        judge.subprocess.run = FakeRun(["CONFIRMED,903\n"])
+        with self.assertRaises(RuntimeError):
+            judge.query_counts([U[0]], "ipo-postgres")
+
+
+# ---------- S3, S4 (Synthetic Data) ----------
+
+EXP = {
+    "S3": {"scenario": "S3", "requests": 1000, "subscription_rows": 920, "confirmed": 860, "rejected": {"ALREADY_SUBSCRIBED": 60},
+           "margins": 860, "detail": {}},
+    "S4": {"scenario": "S4", "requests": 1000, "subscription_rows": 1000, "confirmed": 903, "rejected": {"INSUFFICIENT_BALANCE": 97},
+           "margins": 903, "detail": {"short_vusers": [3, 7], "deposits": {"3": 1000, "7": 149000}}},
+}
+
+
+def counts(confirmed, rejected, margins, stuck=None, other=None, balances=None, rp=(0.4, 1.1)):
+    by = {("CONFIRMED", "-"): confirmed}
+    for reason, n in rejected.items():
+        by[("REJECTED", reason)] = n
+    for st, n in (stuck or {}).items():
+        by[(st, "-")] = n
+    for st, n in (other or {}).items():
+        by[(st, "-")] = n
+    return {"by_status": by, "margins": margins, "reject_p50": rp[0], "reject_p95": rp[1], "balances": balances or {}}
+
+
+S3_OK = counts(860, {"ALREADY_SUBSCRIBED": 60}, 860)
+S4_OK = counts(903, {"INSUFFICIENT_BALANCE": 97}, 903, balances={"lb0003": (1000, 0), "lb0007": (149000, 0)})
+
+
+class SynthCase(Case):
+    def __init__(self, exp=None):
+        super().__init__()
+        self.counts, self.logins, self.exp = {}, {}, exp or EXP
+
+    def srun(self, run_id, scenario, phase, ipo, s, d, c, expected=1000):
+        self.run(run_id, scenario, phase, "", [ipo], s, d, expected=expected)
+        self.counts[(ipo,)] = c
+
+    def judge(self, p95=15, drain=15, real_expected=False):
+        path = self.manifest()
+        out = io.StringIO()
+
+        def fake_counts(ipos, container, logins=()):
+            if tuple(ipos) not in self.counts or self.counts[tuple(ipos)] is None:
+                raise AssertionError(f"조회하면 안 되는 회차: {ipos}")
+            self.logins[tuple(ipos)] = list(logins)
+            return self.counts[tuple(ipos)]
+        kw = {} if real_expected else {"expected_of": lambda s: self.exp[s]}
+        judge.judge(path, p95, drain, query=lambda ipos, c: self.g2[tuple(ipos)], counts=fake_counts, out=out, **kw)
+        return out.getvalue()
+
+
+def synth_case(scen="S3", cs=None, g2s=None, sums=None, with_s0=True):
+    ok = S3_OK if scen == "S3" else S4_OK
+    conf = 860 if scen == "S3" else 903
+    c = SynthCase()
+    if with_s0:
+        for i in range(3):
+            c.run(f"s0-r{i + 1}", "S0", "measure", "", [U[i]], summary(rate=900, avg=4), g2(p95=1.5, drain=1.5))
+    c.srun(f"{scen}-W", scen, "warmup", U[3], summary(), g2(confirmed=conf), ok)
+    for i in range(3):
+        c.srun(f"{scen}-r{i + 1}", scen, "measure", U[4 + i], (sums or [summary(rate=850, avg=5, p95=9)] * 3)[i],
+               (g2s or [g2(confirmed=conf, p95=1.8, drain=2.0)] * 3)[i], (cs or [ok] * 3)[i])
+    return c
+
+
+class TestSynthetic(unittest.TestCase):
+    def test_s3_all_pass(self):
+        out = synth_case("S3").judge()
+        sec = section(out, "S3 (measure")
+        self.assertIn("3회 중 통과 3회 → 통과", sec)
+        self.assertIn("합격 통과", sec)
+        self.assertIn("G2 (확정 건): 접수→확정 p95 1.80초, 소진 2.00초 → 통과", sec)
+        self.assertIn("거절 지연 (참고): p50 0.40초, p95 1.10초", sec)
+        integ = section(out, "정합성")
+        self.assertIn("| S3-r1 | S3 | measure | 920 (920) | 860 (860) | ALREADY_SUBSCRIBED 60 (ALREADY_SUBSCRIBED 60) | 860 (860) | 0 |", integ)
+        self.assertIn("| S3-W | S3 | warmup |", integ)
+
+    def test_comparison_with_s0(self):
+        out = section(synth_case("S3").judge(), "S0 대비")
+        self.assertIn("| S0 | 900.0 | 4.0 | 130.0 | 1.50 | 1.50 |", out)
+        self.assertIn("| S3 | 850.0 (-50.0) | 5.0 (+1.0) | 9.0 (-121.0) | 1.80 (+0.30) | 2.00 (+0.50) |", out)
+
+    def test_comparison_without_s0(self):
+        out = section(synth_case("S3", with_s0=False).judge(), "S0 대비")
+        self.assertIn("S0 중앙값이 없어 비교하지 않음", out)
+
+    def test_g2_uses_expected_confirmed_not_requests(self):  # S0 규칙(확정 = 요청)이면 거절이 섞인 S3는 항상 무효가 된다
+        self.assertEqual(judge.g2({"requests": 1000, "dropped": 0}, g2(confirmed=860), "S3", 15, 15, expected_confirmed=860), "통과")
+        self.assertTrue(judge.g2({"requests": 1000, "dropped": 0}, g2(confirmed=859), "S3", 15, 15, expected_confirmed=860).startswith("무효(확정 859 / 기대 확정 860)"))
+
+    def test_rate_applies_to_s3_s4(self):  # 부하 모양이 S0과 같으므로 처리량 기준도 같다
+        for scen in ("S3", "S4"):
+            self.assertEqual(judge.g1({"avg": 5, "fail": 0, "rate": 199, "p95": 9, "dropped": 0}, scen)[0], "불합격")
+
+    def test_stuck_and_mismatch_fail_integrity(self):
+        bad = counts(859, {"ALREADY_SUBSCRIBED": 60}, 859, stuck={"PENDING": 1})
+        out = synth_case("S3", cs=[S3_OK, bad, S3_OK], g2s=[g2(confirmed=860), g2(confirmed=859), g2(confirmed=860)]).judge()
+        integ = section(out, "정합성")
+        self.assertIn("확정 859 ≠ 기대 860", integ)
+        self.assertIn("미처리 1건 (PENDING 1)", integ)
+        self.assertIn("증거금 859 ≠ 기대 860", integ)
+        sec = section(out, "S3 (measure")
+        self.assertIn("3회 중 통과 2회, 그 밖 불합격 → 통과 아님", sec)
+        self.assertIn("G1, G2 판정하지 않음", sec)  # 확정 수가 기대와 달라 G2 무효
+
+    def test_wrong_reason_and_other_status(self):
+        bad = counts(860, {"ALREADY_SUBSCRIBED": 59, "INSUFFICIENT_BALANCE": 1}, 860, other={"CANCELLED": 1})
+        out = section(synth_case("S3", cs=[bad, S3_OK, S3_OK]).judge(), "정합성")
+        self.assertIn("거절 ALREADY_SUBSCRIBED 59 ≠ 기대 60", out)
+        self.assertIn("거절 INSUFFICIENT_BALANCE 1 ≠ 기대 0", out)
+        self.assertIn("그 밖의 상태 1건 (CANCELLED 1)", out)
+        self.assertIn("청약 행 921 ≠ 기대 920", out)
+
+    def test_http_error_is_undecidable_not_defect(self):
+        out = synth_case("S3", sums=[summary(fail=0.002), summary(), summary()]).judge()
+        self.assertIn("판정 불가 | HTTP 오류 0.20%", section(out, "정합성"))
+        self.assertIn("그 밖 판정 불가", section(out, "S3 (measure"))
+
+    def test_request_count_mismatch_is_invalid_and_not_queried(self):
+        c = synth_case("S3", sums=[summary(requests=999), summary(), summary()])
+        c.counts[(U[4],)] = None  # 조회되면 실패
+        out = c.judge()
+        self.assertIn("| S3-r1 | S3 | measure | - (920) |", section(out, "정합성"))
+        self.assertIn("무효 | 요청 999 / 예상 1000", section(out, "정합성"))
+        self.assertIn("G1, G2 판정하지 않음", section(out, "S3 (measure"))
+
+    def test_manifest_expected_must_match_csv(self):
+        c = SynthCase()
+        c.srun("S3-r1", "S3", "measure", U[0], summary(), g2(confirmed=860), S3_OK, expected=900)
+        with self.assertRaises(ValueError) as e:
+            c.judge()
+        self.assertIn("900", str(e.exception))
+
+    def test_s4_passes_logins_and_checks_balances(self):
+        c = synth_case("S4")
+        out = c.judge()
+        self.assertEqual(c.logins[(U[4],)], ["lb0003", "lb0007"])
+        self.assertIn("3회 중 통과 3회 → 통과", section(out, "S4 (measure"))
+
+    def test_s4_money_moved_fails(self):
+        moved = counts(903, {"INSUFFICIENT_BALANCE": 97}, 903, balances={"lb0003": (850, 150), "lb0007": (149000, 0)})
+        missing = counts(903, {"INSUFFICIENT_BALANCE": 97}, 903, balances={"lb0003": (1000, 0)})
+        out = section(synth_case("S4", cs=[moved, missing, S4_OK]).judge(), "정합성")
+        self.assertIn("예수금 부족 투자자의 돈이 움직임 1명 (lb0003 예수금 850/입금 1000, 청약증거금 150)", out)
+        self.assertIn("lb0007 계좌 없음", out)
+
+    def test_s4_prefix(self):
+        c = synth_case("S4")
+        path = c.manifest()
+        seen = {}
+
+        def fake_counts(ipos, container, logins=()):
+            seen[tuple(ipos)] = logins
+            return dict(c.counts[tuple(ipos)], balances={"zz0003": (1000, 0), "zz0007": (149000, 0)})
+        out = io.StringIO()
+        judge.judge(path, 15, 15, query=lambda ipos, x: c.g2[tuple(ipos)], out=out, s4_prefix="zz",
+                    expected_of=lambda s: EXP[s], counts=fake_counts)
+        self.assertEqual(seen[(U[4],)], ["zz0003", "zz0007"])
+        self.assertIn("3회 중 통과 3회 → 통과", section(out.getvalue(), "S4 (measure"))
+
+    def test_real_expected_from_committed_csv(self):
+        out = synth_case("S3").judge(real_expected=True)
+        self.assertIn("920 (920) | 860 (860) | ALREADY_SUBSCRIBED 60 (ALREADY_SUBSCRIBED 60)", section(out, "정합성"))
+
+    def test_bad_behavior_csv_stops_judging(self):
+        tmp = tempfile.mkdtemp()
+        fake = os.path.join(tmp, "validate.py")
+        with open(fake, "w", encoding="utf-8") as f:
+            f.write("def check(scenario):\n    return ['0행: 규칙 위반'], None\n")
+        orig = judge.VALIDATE_PY
+        judge.VALIDATE_PY = fake
+        try:
+            with self.assertRaises(ValueError) as e:
+                synth_case("S3").judge(real_expected=True)
+            self.assertIn("규칙 위반", str(e.exception))
+        finally:
+            judge.VALIDATE_PY = orig
+
+    def test_s0_s1_output_unchanged_without_synthetic(self):  # S3, S4가 없으면 새 절이 나오지 않는다
+        out = s0_case().judge()
+        self.assertNotIn("정합성", out)
+        self.assertNotIn("S0 대비", out)
 
 
 if __name__ == "__main__":

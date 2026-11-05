@@ -22,6 +22,8 @@ expect_out() { # 이름, 기대 rc, 기대 출력, 명령...
 }
 REQ="subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve"
 lag_of() { parse_lag "$REQ" < "$1"; }
+# main 인자 검사용 임시 loadtest 폴더 (기준 스냅샷 파일이 있어야 빌드 전 확인을 통과한다)
+fake_dir() { local d; d="$(mktemp -d)"; mkdir -p "$d/data/baseline"; : > "$d/data/baseline/ipo-baseline.dump"; echo "$d"; }
 
 # ---- parse_lag ----
 expect_out "실제 출력 (모두 0, '-' 포함) → 0" 0 0 lag_of "$REAL_CG"
@@ -95,9 +97,9 @@ for bad_env in "WARM_SLOPE_PCT=0" "WARM_SLOPE_PCT=." "WARM_SLOPE_PCT=-1" "WARM_S
             DIR="$(mktemp -d)"; main --batch zz-args ) 2>&1 )"; rc=$?
   [ "$rc" = 1 ] && [ -n "$out" ] && ok "main: $bad_env → 시작 전에 종료 코드 1" || bad "main 인자 $bad_env" "rc=$rc out=$out"
 done
-out="$( ( WARM_SLOPE_PCT=2.5; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+out="$( ( WARM_SLOPE_PCT=2.5; DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
 [ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: WARM_SLOPE_PCT=2.5는 통과해 결과 폴더 만들기까지 간다" || bad "main 2.5" "rc=$rc out=$out"
-out="$( ( WARM_SLOPE_MS=0; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+out="$( ( WARM_SLOPE_MS=0; DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
 [ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: WARM_SLOPE_MS=0(절대 기울기 끔)은 통과해 결과 폴더 만들기까지 간다" || bad "main slope-ms 0" "rc=$rc out=$out"
 
 # ---- pick_python, pypath (워밍업 판정은 verify/warmup.py, test_warmup.py) ----
@@ -324,6 +326,190 @@ bash() { return 0; }
 unset -f py bash
 [ "$rc" = 2 ] && ok "post_process: 쿼리 통계 실패 수를 후처리 실패로 센다 (rc 2)" || bad "post_process SLOWQ" "rc=$rc"
 SLOWQ_FAILS=0; DIR="$DIR_SAVE"; OUT="$OUT_SAVE"; MANIFEST="$MANIFEST_SAVE"
+
+# ---- SCENARIOS (S3, S4 Synthetic Data) ----
+# 위 테스트들이 가짜 py를 만들고 unset -f py로 지워서 official.sh의 py 함수도 없어진다.
+# Windows에서는 같은 이름의 Python 실행기(py.exe)가 대신 불려 가려지고 macOS, Linux에서는 command not found가 된다. 원래 정의로 되돌린다
+py() { "$PY" -X utf8 "$@"; }
+sc() { parse_scenarios "$1" 2>/dev/null && echo "$HAS_S1$HAS_S3$HAS_S4"; }
+expect_out "parse_scenarios: 기본 S0,S1" 0 100 sc "S0,S1"
+expect_out "parse_scenarios: S0,S3,S4" 0 011 sc "S0,S3,S4"
+expect_out "parse_scenarios: 순서가 달라도 같다 (S4,S0)" 0 001 sc "S4,S0"
+expect_out "parse_scenarios: S0만" 0 000 sc "S0"
+for v in "S1" "S3,S4" "" "S0,S2" "S0,S0" "s0" "S0,S3,S3"; do
+  expect_out "parse_scenarios: '$v' → 실패" 1 "" sc "$v"
+done
+BATCH=b
+HAS_S1=0; HAS_S3=0; HAS_S4=0
+expect_out "plan_runs: S0만이면 지금과 같은 S0 3회" 0 "S0 b-S0-r1 measure
+S0 b-S0-r2 measure
+S0 b-S0-r3 measure" plan_runs
+HAS_S3=1; HAS_S4=1
+expect_out "plan_runs: S3, S4 경로 예열 뒤 S0, S3, S4를 번갈아 3회" 0 "S3 b-S3-W warmup
+S4 b-S4-W warmup
+S0 b-S0-r1 measure
+S3 b-S3-r1 measure
+S4 b-S4-r1 measure
+S0 b-S0-r2 measure
+S3 b-S3-r2 measure
+S4 b-S4-r2 measure
+S0 b-S0-r3 measure
+S3 b-S3-r3 measure
+S4 b-S4-r3 measure" plan_runs
+HAS_S3=0
+expect_out "plan_runs: S4만 추가" 0 "S4 b-S4-W warmup
+S0 b-S0-r1 measure
+S4 b-S4-r1 measure
+S0 b-S0-r2 measure
+S4 b-S4-r2 measure
+S0 b-S0-r3 measure
+S4 b-S4-r3 measure" plan_runs
+
+# run_plan: 반복 안에서 표준입력을 읽는 명령(docker exec -i)이 있어도 실행이 빠지지 않는다
+RP="$(mktemp)"
+( HAS_S3=1; HAS_S4=1   # 가짜 run_one이 밖으로 새지 않게 서브셸에서
+  run_one() { echo "$*" >> "$RP"; cat > /dev/null; }
+  run_plan <<< "표준입력에 남은 줄
+또 한 줄" )
+[ "$(grep -c . "$RP")" = 11 ] && [ "$(head -1 "$RP")" = "S3 b-S3-W warmup" ] && [ "$(tail -1 "$RP")" = "S4 b-S4-r3 measure" ] \
+  && ok "run_plan: 표준입력을 먹는 명령이 있어도 11개 실행 모두 (fd 3으로 순서를 읽음)" || bad "run_plan" "$(tr '\n' '|' < "$RP")"
+HAS_S1=0; HAS_S3=0; HAS_S4=0
+
+# main: 잘못된 SCENARIOS, S4_PREFIX, S4 청약 금액은 빌드, 복원 전에 막는다 (결과 폴더도 만들지 않음)
+for bad_env in "SCENARIOS=S1" "SCENARIOS=S0,S9" "S4_PREFIX=LB" "S4_PREFIX=" "SCENARIOS=S0,S4 S0_PRICE=10000"; do
+  out="$( ( for kv in $bad_env; do eval "$kv"; done
+            DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+  [ "$rc" = 1 ] && [[ "$out" != *STOP* ]] && ok "main: $bad_env → 시작 전에 종료 코드 1" || bad "main $bad_env" "rc=$rc out=$out"
+done
+out="$( ( SCENARIOS=S0,S3,S4; DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: SCENARIOS=S0,S3,S4는 통과해 결과 폴더 만들기까지 간다" || bad "main S0,S3,S4" "rc=$rc out=$out"
+out="$( ( SCENARIOS=S0,S3 S0_PRICE=10000; DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: S3만이면 청약 금액 제한이 없다 (S4 입금액만 금액에 묶임)" || bad "main S3 금액" "rc=$rc out=$out"
+# BASELINE_DIR: 실행한 위치 기준 상대 경로를 절대 경로로 바꾼다 (복원은 loadtest 폴더로 이동해서 부르므로 상대 경로면 못 찾는다)
+BL="$(mktemp -d)"; mkdir -p "$BL/snap/s34"; : > "$BL/snap/s34/ipo-baseline.dump"
+out="$( ( cd "$BL" && BASELINE_DIR=snap/s34 && DIR="$(fake_dir)" && mkdir() { echo "STOP $BASELINE_DIR"; exit 0; } && main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [ "$out" = "STOP $BL/snap/s34" ] && ok "main: 상대 경로 BASELINE_DIR을 실행 위치 기준 절대 경로로 바꾼다" || bad "main BASELINE_DIR 상대 경로" "rc=$rc out=$out"
+out="$( ( cd "$BL" && BASELINE_DIR=snap/none && DIR="$(fake_dir)" && mkdir() { echo STOP; exit 0; } && main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 1 ] && [[ "$out" == *"기준 스냅샷이 없음: $BL/snap/none/ipo-baseline.dump"* ]] && ok "main: 기준 스냅샷이 없으면 빌드 전에 종료 코드 1" || bad "main 스냅샷 없음" "rc=$rc out=$out"
+out="$( ( RESTORE=0; DIR="$(mktemp -d)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [[ "$out" == *STOP* ]] && ok "main: RESTORE=0이면 스냅샷이 없어도 시작한다" || bad "main RESTORE=0" "rc=$rc out=$out"
+
+# synthetic_check: 커밋한 행동 CSV + 가짜 회원 CSV
+# (앞 테스트들이 DIR을 임시 폴더로 바꿔 두므로 테스트 파일 위치 기준의 실제 loadtest 폴더를 쓴다)
+SY="$(mktemp -d)"; DIR_SAVE="$DIR"; DIR="$(cd "$HERE/.." && pwd)"
+"$PY" -X utf8 - "$(pypath "$DIR/synthetic/s3-behavior.csv")" "$(pypath "$SY")" <<'PYEOF'
+import csv, os, sys
+second = {int(r["vuser"]) for r in csv.DictReader(open(sys.argv[1], encoding="utf-8")) if r["action"] == "SECOND_ACCOUNT"}
+def write(name, prefix, acc2):
+    with open(os.path.join(sys.argv[2], name), "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f); w.writerow(["loginId", "userId", "accountId", "accountId2", "token"])
+        for i in range(1000):
+            w.writerow([f"{prefix}{i:04d}", f"u{i}", f"a{i}", f"b{i}" if acc2(i) else "", "t"])
+write("lt.csv", "lt", lambda i: i in second)
+write("lt-no2.csv", "lt", lambda i: i in second and i != min(second))
+write("lb.csv", "lb", lambda i: False)
+PYEOF
+[ -s "$SY/lt.csv" ] && [ -s "$SY/lb.csv" ] && ok "synthetic_check 준비: 가짜 회원 CSV 생성" || bad "synthetic_check 준비" "가짜 회원 CSV가 없다 (아래 실패 케이스가 엉뚱한 이유로 통과할 수 있음)"
+USERS_CSV_SAVE="$USERS_CSV"; S4_CSV_SAVE="$S4_CSV"
+syc() { USERS_CSV="$SY/$1"; S4_CSV="$SY/$2"; HAS_S3="$3"; HAS_S4="$4"; synthetic_check 2>"$SY/err"; }
+# 실패 케이스는 종료 코드와 함께 실패 이유(메시지)까지 본다 (다른 이유로 실패해도 통과로 보이지 않게)
+syc_fails() { # 이름, 메시지에 있어야 할 말, syc 인자...
+  local name="$1" want="$2" out rc; shift 2
+  out="$(syc "$@")"; rc=$?
+  if [ "$rc" = 1 ] && [ -z "$out" ] && grep -q -- "$want" "$SY/err"; then ok "$name"; else bad "$name" "rc=$rc out='$out' err=$(tail -1 "$SY/err")"; fi
+}
+expect_out "synthetic_check: S3, S4 모두 맞으면 S4 예수금 부족 수(97)" 0 97 syc lt.csv lb.csv 1 1
+expect_out "synthetic_check: S3만이면 0" 0 0 syc lt.csv lb.csv 1 0
+syc_fails "synthetic_check: 두 번째 계좌가 없는 S3 투자자 → 실패" "두 번째 계좌(accountId2)가 없는 S3 투자자 1명" lt-no2.csv lb.csv 1 0
+syc_fails "synthetic_check: S4 회원 CSV가 기본 묶음 → 실패" "잔액 부족 묶음(lb)이 아니다" lt.csv lt.csv 0 1
+syc_fails "synthetic_check: S4 회원 CSV가 없음 → 실패" "회원 CSV가 없다" lt.csv none.csv 0 1
+S0_SAVE="$S0_PRICE"; S0_PRICE=50000   # 청약 500,000원이면 입금 1,000,000원 회원도 4회 중간에 부족해진다
+syc_fails "synthetic_check: 청약 금액이 달라 회차마다 결과가 바뀌는 입금액 → 실패" "회차마다 결과가 달라짐" lt.csv lb.csv 0 1
+S0_PRICE="$S0_SAVE"; USERS_CSV="$USERS_CSV_SAVE"; S4_CSV="$S4_CSV_SAVE"; HAS_S3=0; HAS_S4=0; DIR="$DIR_SAVE"
+
+# run_one: 시나리오마다 스크립트, 회원 CSV, 공모주를 고르고 manifest에 같은 형식으로 남긴다
+RO="$(mktemp -d)"; : > "$RO/manifest.csv"
+( MANIFEST="$RO/manifest.csv"   # 가짜 함수가 밖으로 새지 않게 서브셸에서
+  ensure_token() { :; }; slowq_run() { :; }; sleep() { :; }; json_metric() { echo 5; }; drain() { echo 2; }
+  k6_run() { echo "$*" >> "$RO/k6"; }
+  S0_IPOS=("$U1"); S0_NEXT=0; S4_IPOS=("$U2" "$U1"); S4_NEXT=0; S3_IPOS=(); S3_NEXT=0
+  run_one S4 b-S4-W warmup; run_one S0 b-S0-r1 measure; run_one S4 b-S4-r1 measure
+  ( run_one S3 b-S3-r1 measure ); echo "$?" > "$RO/rc-s3"
+  ( run_one S9 b-x measure ); echo "$?" > "$RO/rc-s9" ) 2>/dev/null
+grep -q "^s4 $U2 b-S4-W --users data/users-s4.csv -e S4_PREFIX=lb -e VUS=100 -e ITERATIONS=10 " "$RO/k6" && ok "run_one: S4는 s4.js와 잔액 부족 묶음 회원 CSV" || bad "run_one S4 k6" "$(head -1 "$RO/k6")"
+grep -q "^s0 $U1 b-S0-r1 -e VUS=100" "$RO/k6" && ok "run_one: S0은 기본 회원 CSV (--users 없음)" || bad "run_one S0 k6" "$(sed -n 2p "$RO/k6")"
+grep -q "^s4 $U1 b-S4-r1 " "$RO/k6" && ok "run_one: S4 회차마다 다음 공모주" || bad "run_one S4 다음 공모주" "$(sed -n 3p "$RO/k6")"
+grep -q "^b-S4-W,S4,warmup,,,,1000,$U2,[0-9]*,[0-9]*,2,[0-9]*$" "$RO/manifest.csv" && grep -q "^b-S0-r1,S0,measure,,,,1000,$U1," "$RO/manifest.csv" \
+  && ok "run_one: manifest 행 (시나리오, 구간, 예상 요청 1000, 공모주, 소진, drain_end)" || bad "run_one manifest" "$(tr '\n' '|' < "$RO/manifest.csv")"
+[ "$(cat "$RO/rc-s3")" = 11 ] && ok "run_one: 공모주가 모자라면 종료 코드 11" || bad "run_one 공모주 부족" "rc=$(cat "$RO/rc-s3")"
+[ "$(cat "$RO/rc-s9")" = 1 ] && ok "run_one: 모르는 시나리오 → 종료 코드 1" || bad "run_one 모르는 시나리오" "rc=$(cat "$RO/rc-s9")"
+
+# post_process: S3, S4도 요청 수를 확인하고, judge.py에 잔액 부족 묶음 접두사를 넘긴다
+PP2="$(mktemp -d)"; CALLS="$PP2/calls.log"; : > "$CALLS"
+DIR_SAVE="$DIR"; OUT_SAVE="${OUT:-}"; MANIFEST_SAVE="${MANIFEST:-}"
+DIR="$PP2"; OUT="$PP2/batch"; MANIFEST="$OUT/manifest.csv"; mkdir -p "$OUT" "$PP2/results/b-S3-r1" "$PP2/results/b-S4-r1"
+printf 'run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s,drain_end\nb-S3-r1,S3,measure,,,,1000,%s,1,2,3,6\nb-S4-r1,S4,measure,,,,1000,%s,1,2,3,6\n' "$U1" "$U2" > "$MANIFEST"
+py()   { echo "py $*" >> "$CALLS"; return 0; }
+bash() { echo "bash $*" >> "$CALLS"; return 0; }
+S4_PREFIX=zz; ( post_process ) 2>/dev/null; rc=$?; S4_PREFIX=lb
+unset -f py bash
+[ "$rc" = 0 ] && ok "post_process: S3, S4 실행으로 끝까지 돈다" || bad "post_process S3 rc" "$rc"
+[ "$(grep check_requests.py "$CALLS" | grep -c -- "--expect-requests 1000")" = 2 ] && ok "post_process: S3, S4 요청 분류에도 예상 요청 수(1000)를 넘긴다" || bad "post_process S3 expect" "$(grep check_requests "$CALLS")"
+grep -q -- "judge.py.*--s4-prefix zz" "$CALLS" && ok "post_process: judge.py에 S4_PREFIX를 넘긴다" || bad "post_process s4-prefix" "$(grep judge "$CALLS")"
+grep "autovacuum.py" "$CALLS" | grep -q -- "manifest.csv --results .*results --before .*autovacuum-before.csv" \
+  && ok "post_process: autovacuum.py로 실행별 autovacuum을 정리한다 (manifest, results, 첫 실행 직전 기록)" || bad "post_process autovacuum" "$(grep autovacuum "$CALLS")"
+# autovacuum.py가 실패하거나(기록 없는 실행) 실행 중 기록이 실패했으면 후처리 실패로 센다
+py()   { [[ "$*" == *autovacuum.py* ]] && return 1; return 0; }
+bash() { return 0; }
+( post_process ) 2>/dev/null; rc=$?
+[ "$rc" = 1 ] && ok "post_process: autovacuum.py 실패는 후처리 실패 (rc 1)" || bad "post_process autovacuum 실패" "rc=$rc"
+py()   { return 0; }
+AUTOVAC_FAILS=2; ( post_process ) 2>/dev/null; rc=$?; AUTOVAC_FAILS=0
+[ "$rc" = 2 ] && ok "post_process: 실행 중 autovacuum 기록 실패 수를 후처리 실패로 센다 (rc 2)" || bad "post_process AUTOVAC_FAILS" "rc=$rc"
+unset -f py bash
+py() { "$PY" -X utf8 "$@"; }   # unset -f py가 official.sh의 py도 지우므로 되돌린다
+DIR="$DIR_SAVE"; OUT="$OUT_SAVE"; MANIFEST="$MANIFEST_SAVE"
+
+# autovac: pg_stat_user_tables 누적 횟수 기록. 조회 실패, 빈 결과는 실패 (0으로 넘기지 않음), CRLF 출력은 정리
+AV="$(mktemp -d)"
+( docker() { printf 'account.margin,10,2,1,3,1793887501,\r\nsubscription.outbox,5,0,0,1,,1793887816\r\n'; }   # 표준입력을 읽지 않는다 (autovac은 넘기는 입력이 없다)
+  autovac "$AV/ok.csv"; echo "$?" > "$AV/rc-ok"
+  docker() { echo "connection refused" >&2; return 2; }
+  autovac "$AV/fail.csv"; echo "$?" > "$AV/rc-fail"
+  docker() { printf '\r\n'; }
+  autovac "$AV/empty.csv"; echo "$?" > "$AV/rc-empty" ) 2>/dev/null
+[ "$(cat "$AV/rc-ok")" = 0 ] && [ "$(head -1 "$AV/ok.csv")" = "table,live_tup,dead_tup,autovacuum_count,autoanalyze_count,last_autovacuum,last_autoanalyze" ] \
+  && [ "$(sed -n 2p "$AV/ok.csv")" = "account.margin,10,2,1,3,1793887501," ] && [ "$(tr -dc '\r' < "$AV/ok.csv" | wc -c | tr -d ' ')" = 0 ] \
+  && ok "autovac: 머리줄 + 테이블별 행, CRLF 정리" || bad "autovac 정상" "rc=$(cat "$AV/rc-ok") $(cat -A "$AV/ok.csv" 2>&1 | head -3)"
+[ "$(cat "$AV/rc-fail")" = 1 ] && [ ! -e "$AV/fail.csv" ] && ok "autovac: docker 실패 → 실패, 파일 안 만듦" || bad "autovac 실패" "rc=$(cat "$AV/rc-fail")"
+[ "$(cat "$AV/rc-empty")" = 1 ] && [ ! -e "$AV/empty.csv" ] && ok "autovac: 빈 결과 → 실패" || bad "autovac 빈 결과" "rc=$(cat "$AV/rc-empty")"
+AF="$(mktemp -d)"
+( DIR="$AF"; mkdir -p "$AF/results/b-S0-r1"; autovac() { return 1; }; autovac_run b-S0-r1; echo "$AUTOVAC_FAILS" > "$AF/n" ) 2>/dev/null
+[ "$(cat "$AF/n")" = 1 ] && ok "autovac_run: 기록 실패는 측정을 멈추지 않고 실패 수만 센다" || bad "autovac_run" "$(cat "$AF/n")"
+
+# ---- Mac 기본 bash 3.2: 변수 바로 뒤에 ASCII가 아닌 문자(한글 등)가 붙으면 이름의 일부로 읽어 set -u에서 멈춘다 → 항상 ${VAR} ----
+na_scan() { # 인자: 저장소 루트. 변수 바로 뒤에 비ASCII 문자가 붙은 줄을 "파일:줄"로 출력
+  "$PY" -X utf8 - "$(pypath "$1")" <<'PYEOF'
+import glob, os, re, sys
+root = sys.argv[1]
+pat = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-\x7f])")
+hits = []
+for pattern in ("loadtest/**/*.sh", "deploy/**/*.sh", "docker/**/*.sh"):
+    for f in glob.glob(os.path.join(root, pattern), recursive=True):
+        for n, line in enumerate(open(f, encoding="utf-8"), 1):
+            if pat.search(line):
+                hits.append(f"{os.path.relpath(f, root)}:{n}".replace(os.sep, "/"))
+print(" ".join(sorted(hits)))
+PYEOF
+}
+# 검사기가 실제로 잡는지 먼저 확인한다 (못 잡는 검사기는 "위반 0"으로 항상 통과한다)
+NAT="$(mktemp -d)"; mkdir -p "$NAT/loadtest/sub" "$NAT/deploy"
+D='$'   # 이 파일 자체가 검사에 걸리지 않게 '$'를 따로 붙여 위반 줄을 만든다
+printf 'echo "회원 %sUSERS명"\necho "회원 %s{USERS}명"\n' "$D" "$D" > "$NAT/loadtest/sub/a.sh"
+printf 'echo "%sv가 틀림" "%s{v}가 맞음" "%sv → 화살표" "%sv 공백"\n' "$D" "$D" "$D" "$D" > "$NAT/deploy/b.sh"
+expect_out "bash 3.2 검사기: 변수 바로 뒤 한글, 화살표는 잡고 중괄호로 감싼 변수, 공백 뒤는 안 잡는다" 0 "deploy/b.sh:1 loadtest/sub/a.sh:1" na_scan "$NAT"
+NA="$(na_scan "$REPO")"; rc=$?
+[ "$rc" = 0 ] && [ -z "$NA" ] && ok "bash 3.2: 셸 스크립트에 변수 바로 뒤 비ASCII 문자 없음 (\${VAR}로 감쌈)" || bad "bash 3.2 변수 경계" "rc=$rc $NA"
 
 echo; echo "통과 $PASS, 실패 $FAIL"
 [ "$FAIL" -eq 0 ]

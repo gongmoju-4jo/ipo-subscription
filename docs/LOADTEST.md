@@ -23,23 +23,25 @@
 | --- | --- |
 | `compose.perf.yml` | 컨테이너별 CPU, 메모리 상한과 JVM 힙 고정, 슬로우 쿼리 설정 |
 | `loadtest/official.sh` | 정식 측정 전체 실행 (빌드, 배포, 버전 기록, S0, S1, 후처리, 판정). 4장 |
-| `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정 (`판정.md`) |
+| `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정, S3, S4 정합성 판정과 S0 대비 (`판정.md`) |
 | `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). 3-4절 |
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
 | `loadtest/verify/consumer_stats.py` | 정식 측정이 끝난 뒤 따로 실행. S1의 증거금 인출 Consumer 처리량, 랙 추이, 오류율, 병목 의심 단계 (`인출.md`, `인출.csv`, `인출-prometheus.json`). `python loadtest/verify/consumer_stats.py --batch <이름>` |
-| `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py` 테스트 (Docker, DB 없이 실행). 9장 |
-| `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 |
+| `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/synthetic/` | S3, S4 Synthetic Data: LLM 프롬프트와 응답 원문, 행동 CSV, 생성 코드, 검증(`validate.py`). 6장, `loadtest/synthetic/README.md` |
+| `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 (`--behavior`로 S3 두 번째 계좌, S4 입금액을 행동 CSV에서 읽음) |
 | `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js` |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
-| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 15종 실행 (11~15는 배정, 정산 뒤 검사. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
+| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 19종 실행 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족 검사. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
 | `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
 | `loadtest/stage_table.py` | S1 단계별 표 생성 (목표 속도, 실제 처리량, 지연, 실패율) |
 | `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
 | `loadtest/sql/slow-queries.sql` | 슬로우 쿼리 확인 |
+| `loadtest/verify/autovacuum.py` | 정식 측정 실행별 autovacuum, autoanalyze 정리 (`autovacuum.md`) |
 
 모니터링은 `docker-compose up`에 함께 올라옵니다: Prometheus `http://localhost:9090`, Grafana `http://localhost:3000` (계정 `admin`, 비밀번호는 `.env`의 `GRAFANA_ADMIN_PASSWORD`). Grafana에 "측정 대시보드"가 자동으로 등록됩니다.
 
@@ -81,10 +83,14 @@ cp .env.example .env     # GRAFANA_ADMIN_PASSWORD에 직접 정한 값을 넣는
 | 용도 | 명령 (로컬 실행) |
 | --- | --- |
 | S0, S1, S2 | `python loadtest/seed/seed_users.py --run-id r1` |
-| S3 (100번~199번 회원에게 두 번째 계좌) | `python loadtest/seed/seed_users.py --run-id r1 --second-account-count 100` |
-| S4 (10% 잔액 부족, 별도 묶음) | `python loadtest/seed/seed_users.py --run-id r1 --prefix lb --low-balance-ratio 0.1 --out loadtest/data/users-s4.csv` |
+| S3 (행동 CSV의 `SECOND_ACCOUNT` 투자자에게 두 번째 계좌) | `python loadtest/seed/seed_users.py --run-id s34-acc2 --behavior loadtest/synthetic/s3-behavior.csv --amount 100000000` |
+| S4 (잔액 부족 묶음, 투자자별 입금액은 행동 CSV) | `python loadtest/seed/seed_users.py --run-id s34-lb --prefix lb --behavior loadtest/synthetic/s4-behavior.csv --out loadtest/data/users-s4.csv` |
 
-S0~S3는 같은 묶음(`loadtest/data/users.csv`)을 씁니다. S3를 하려면 `--second-account-count 100`으로 시드해야 합니다.
+S0~S3는 같은 묶음(`loadtest/data/users.csv`)을 씁니다. S3를 하려면 S3 행동 CSV로 한 번 더 시드해 두 번째 계좌를 엽니다.
+
+- `--behavior`는 시드 전에 `synthetic/validate.py` 규칙으로 행동 CSV를 검사하고, 위반이 있으면 회원을 만들지 않고 멈춥니다.
+- S3 시드는 두 번째 계좌에 `--amount`를 넣습니다. 기본 묶음의 다른 계좌와 같은 금액(1억)으로 넣어야 정식 측정의 최소 예수금 확인에서 멈추지 않습니다. 새 `--run-id`라서 첫 계좌에도 같은 금액이 한 번 더 입금됩니다.
+- S4 시드는 투자자마다 행동 CSV의 입금액을 넣습니다 (`--amount`는 쓰지 않음). 0번부터 `--users`-1번까지 모든 회원의 입금액이 CSV에 있어야 합니다.
 
 컨테이너로 실행하려면 같은 명령을 `python:3.12-slim`으로 감쌉니다.
 
@@ -131,29 +137,61 @@ docker-compose stop kafka-ui        # 1단계에서 상한 없이 뜬 kafka-ui�
 - `baseline.sh restore`는 계좌, 청약, 배정 서비스를 멈추고 데이터베이스 `ipo`를 지운 뒤 스냅샷으로 다시 만들고(`ANALYZE`, `CHECKPOINT` 포함), Kafka 볼륨을 비워 토픽을 다시 만든 다음 서비스를 띄웁니다. 복원 뒤 상태가 meta와 다르면 실패합니다. 정식 측정(`official.sh`)이 시작할 때 자동으로 실행합니다.
 - 회원 CSV(`loadtest/data/users.csv`)는 스냅샷을 만들 때의 시드 결과라 계좌 ID가 스냅샷과 같습니다. 회원을 다시 시드했으면 스냅샷도 다시 만듭니다.
 
+#### S3, S4 기준 스냅샷 (한 번)
+
+S3, S4는 두 번째 계좌와 잔액 부족 묶음이 더 필요해서, 위 스냅샷을 바탕으로 별도 폴더에 따로 만듭니다. 위 스냅샷은 그대로 둡니다.
+
+```bash
+bash loadtest/baseline.sh restore   # 위 스냅샷으로 되돌린다 (지금 DB는 사라진다. 필요하면 먼저 dump)
+docker-compose up -d                # 시드는 자원 상한 없이
+python loadtest/seed/seed_users.py --run-id s34-acc2 --behavior loadtest/synthetic/s3-behavior.csv --amount 100000000 --base-url http://127.0.0.1:8080
+python loadtest/seed/seed_users.py --run-id s34-lb --prefix lb --behavior loadtest/synthetic/s4-behavior.csv --out loadtest/data/users-s4.csv --base-url http://127.0.0.1:8080
+BASELINE_DIR=loadtest/data/baseline-s34 bash loadtest/baseline.sh save
+docker-compose -f docker-compose.yml -f compose.perf.yml up -d
+docker-compose stop kafka-ui
+```
+
+- 확인: 기본 묶음 계좌 1,060개(두 번째 계좌 60개), 잔액 부족 묶음 회원 1,000명 중 예수금 150,000원 미만 97명, 청약 0
+- 계좌 개설은 같은 requestId면 기존 계좌를 돌려주므로 `users.csv`의 첫 계좌 ID는 위 스냅샷과 같습니다. 두 번째 계좌(`accountId2`)는 이 스냅샷에만 있습니다
+
 ## 4. 정식 측정 (official.sh)
 
 S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한, 기준 스냅샷)를 마친 상태에서 실행합니다.
 
 ```bash
 bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results/official-1103-a/ (약 1시간 10분~1시간 20분, 추정. 워밍업 3~15분 포함)
+SCENARIOS=S0,S3,S4 BASELINE_DIR=loadtest/data/baseline-s34 bash loadtest/official.sh --batch official-s34-a   # S3, S4를 S0과 같은 세션에서 비교
 ```
+
+`SCENARIOS`(기본 `S0,S1`)로 실행할 시나리오를 고릅니다. S0은 필수입니다 (워밍업 뒤 기준값이자 S3, S4의 비교 대상).
+
+| `SCENARIOS` | 워밍업 뒤 순서 | 필요한 것 |
+| --- | --- | --- |
+| `S0,S1` (기본) | S0 3회 → S1 단계 | 3-4절 기준 스냅샷 |
+| `S0,S3,S4` | S3, S4 경로 예열 각 1회 → S0, S3, S4를 번갈아 3회씩 | 3-4절 S3, S4 기준 스냅샷(`BASELINE_DIR`)과 그때의 회원 CSV(`users.csv`, `users-s4.csv`) |
+| `S0,S1,S3,S4` | 위 순서 뒤 S1 단계 | 위와 같음 |
+
+- 번갈아 실행하는 이유: 세션을 나누면 세션 간 편차가 섞이고, 시나리오별로 몰아서 돌리면 세션 중 DB 증가와 JVM 상태 변화가 한 시나리오에만 쏠립니다.
+- 경로 예열 이유: 워밍업은 모든 요청이 확정되는 경로라 이중청약, 잔액 부족 거절 경로가 데워지지 않은 채 첫 측정에 들어갑니다. 경로 예열 회차는 구간 `warmup`으로 남고, 성능은 참고값이지만 정합성은 판정합니다.
+- S3, S4는 시작 전(부하 전)에 데이터를 확인하고 맞지 않으면 멈춥니다 (종료 코드 4): 행동 CSV 규칙(이 측정의 청약 금액, 4회 기준), S3 투자자의 두 번째 계좌, S4 회원 CSV가 잔액 부족 묶음인지, DB의 잔액 부족 묶음 예수금이 행동 CSV대로인지. S4 행동 CSV는 청약 금액 150,000원(`S0_PRICE` x `QUANTITY`) 기준이라 금액을 바꾸면 시작하지 않습니다.
+- `S0,S3,S4`는 S1이 없어 약 25~35분입니다 (추정. 워밍업 3~15분 포함). S1이 없으므로 `consumer_stats.py`(S1 전용)는 해당하지 않습니다.
 
 하는 일 (순서대로, 중간에 사람이 끼어들지 않습니다)
 
 1. 커밋하지 않은 변경이 있으면 실행을 거부합니다. 이 커밋으로 jar를 빌드해 배포하고(`./gradlew build -x test`, `compose up -d --build`), 기준 스냅샷으로 DB와 Kafka를 되돌린 뒤(`baseline.sh restore`, 3-4절. 스냅샷 sha256과 상태를 `env.txt`에 남김), 컨테이너 안 jar와 빌드한 jar의 sha256이 같은지 확인해 `env.txt`에 남깁니다. 컨테이너별 CPU, 메모리 상한과 JVM 힙 옵션도 `env.txt`에 남기고(`자원 ...` 줄), 이때부터 부하가 끝날 때까지 `docker stats`를 `STATS_INTERVAL`초마다 기록합니다 (PostgreSQL, Kafka, k6 포함 모든 컨테이너).
-2. 토큰을 새로 받고(회원 수 확인), 예수금이 최대로 필요한 금액 이상인지 확인합니다.
+2. 토큰을 새로 받고(회원 수 확인. S4가 있으면 잔액 부족 묶음도), S3, S4 데이터를 확인하고, 예수금이 최대로 필요한 금액 이상인지 확인합니다.
 3. gateway, subscription, account를 재시작(콜드 상태)하고, healthy와 Eureka UP을 기다린 뒤 45초 쉬고 사전 점검(`precheck.sh`)을 합니다.
 4. 회차에 쓸 공모주를 모두 미리 만듭니다 (부하 중에는 만들지 않습니다).
 5. 워밍업: 측정 앞의 독립 단계입니다. `WARM_RATE`(기본 200건/초)로 일정한 부하를 걸고(모든 요청이 확정되게 공모주를 돌림), `WARM_BUCKET`(15초)마다 게이트웨이 평균 응답 시간을 Prometheus에서 읽습니다. 최근 `WARM_WINDOW`개 구간(2분)에 직선을 맞춰, 기울기가 분당 창 평균의 ±`WARM_SLOPE_PCT`%(5%) 이내이거나 분당 ±`WARM_SLOPE_MS`ms(1ms) 이내인 판정이 `WARM_CONSEC`번(2번) 연속이면 정상 상태로 보고 끝냅니다. 최소 `WARM_MIN`(180초), 최대 `WARM_MAX`(900초)이고, 최대까지 닿지 않으면 중단합니다. 구간마다 `warmup.csv`에 남고, 끝나면 소진을 확인하고 쉽니다.
    - 회차마다 흔들림으로 판정하던 방식(연속 3회차 ±20%)은 아직 빨라지는 중이어도 통과할 수 있어서, 워밍업이 끝나는 시점이 실행마다 달라지고 측정값에 섞였습니다. 시간 구간의 추세(기울기)로 보면 내려가는 중에는 통과하지 않습니다.
    - 절대 기울기(분당 ±1ms)를 함께 보는 이유: 데워진 뒤 응답이 2~7ms로 작으면 ±5%의 허용 폭이 분당 약 0.25ms까지 좁아져, 평평한 상태의 작은 흔들림도 통과하지 못하고 최대 시간에 닿습니다. 분당 1ms는 2분 창 전체로 2ms 차이라 G1(평균 500ms), G2(15초) 판정에 영향이 없는 크기이고, 응답이 아직 내려가는 중(분당 1ms보다 빠르게 감소)이면 통과하지 않습니다. `WARM_SLOPE_MS=0`이면 상대 기울기만 봅니다.
-6. S0: 1,000건(100명 x 10회) 측정 3회를 실행합니다.
-7. S1: 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
+6. S0: 1,000건(100명 x 10회) 측정 3회를 실행합니다. S3, S4가 있으면 경로 예열 뒤 S0, S3, S4를 번갈아 3회씩 실행합니다.
+7. S1(`SCENARIOS`에 있을 때): 속도 단계(`STAGES`)마다 `DUR`초 측정을 `S1_REPEAT`(기본 3)회 연달아 독립 k6 실행으로 합니다 (팀 규칙: 같은 조건 최소 3회, 중앙값). 반복마다 새 공모주를 돌려 써서 모든 요청이 확정 경로를 탑니다 (`IPO_IDS`, 6장).
 8. 부하가 끝나면 실행마다 보고서(`report.py`), 요청 분류(`check_requests.py`), 정합성 SQL(`verify.sh`)을 만들고, 판정(`judge.py`)을 `판정.md`로 씁니다. docker stats 기록은 `docker-stats.csv`와 `자원.md`(실행마다 k6 구간의 컨테이너별 CPU, 메모리 최대)로 정리합니다. 어떤 실행의 k6 구간에 샘플이 없으면 후처리 실패(종료 코드 10)로 셉니다. 기록 간격(5초)의 2배보다 짧은 실행은 샘플이 빠질 수 있어 경고로만 남깁니다.
 9. 측정이 끝난 DB를 `db-after.dump`로 남깁니다(`DB_DUMP=1`). 다음 측정은 기준 스냅샷으로 되돌리므로 이번 측정의 원본 행은 여기에만 남습니다.
 
 - 쿼리 통계: 첫 실행 직전에 `pg_stat_statements`를 비우고(`loadtest/sql/slow-queries.sql`), 실행마다 소진 확인 뒤 그 실행의 통계를 `slow-queries.txt`에 남기고 다시 비웁니다. 요청과 소진까지의 Consumer 쿼리가 들어가고, 실행 사이에 토큰 재발급이 끼면 그 로그인 쿼리도 다음 실행에 섞입니다. 조회가 실패해도 측정은 이어 가고 후처리 실패(종료 코드 10)로 셉니다. `compose.perf.yml`로 띄우지 않아 확장을 쓸 수 없으면 시작 전에 멈춥니다(종료 코드 9).
+- autovacuum: PostgreSQL은 바꾸거나 지운 행의 옛 버전(죽은 행)을 남기고, autovacuum이 쌓인 죽은 행을 백그라운드에서 치웁니다 (autoanalyze는 쿼리 계획용 통계 갱신). 측정 중 청약 상태 변경, outbox 발행 표시처럼 행 변경이 많아 측정 도중에 자동으로 돌고, 돌 때 CPU, IO를 써서 그 실행이 느려질 수 있습니다. 통계(`pg_stat_user_tables`)에는 누적 횟수와 마지막 시각만 남아서, 첫 실행 직전과 실행마다 소진 확인 뒤 테이블별 누적 횟수를 남기고(`autovacuum-before.csv`, 실행별 `autovacuum.csv`) 후처리에서 앞 기록과의 차이로 실행마다 돈 테이블을 `autovacuum.md`에 정리합니다. 차이에는 앞 실행 뒤 대기 시간도 들어가고, 통계 반영이 몇 초 늦을 수 있어 경계 근처의 1회는 앞뒤 실행으로 밀릴 수 있습니다. 기록이 실패해도 측정은 이어 가고 후처리 실패(종료 코드 10)로 셉니다.
 - **모든 부하 실행(S0 회차, S1 단계) 뒤에 이번 공모주의 `PENDING`/`COMPENSATING` 0, 필수 Consumer 그룹 lag 0, outbox 미발행 0을 확인하고 `GAP`초 쉰 뒤 다음 실행을 합니다.** 앞 실행의 처리 대기가 다음 실행의 G2에 섞이지 않게 하는 것은 소진 확인이 맡습니다. `GAP`(기본 30초)은 보고서의 서버 지표 구간(요청 구간 앞뒤 10초, Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도입니다. JVM GC(G1은 쉬는 동안 스스로 돌지 않음)와 DB 체크포인트는 대기로 피할 수 없습니다. 개선 전후를 비교할 때는 같은 `GAP`을 씁니다.
 - psql, Kafka, git, 토큰 재발급, k6 조회가 실패하면 0으로 보지 않고 중단합니다. Consumer lag은 `LOG-END-OFFSET - CURRENT-OFFSET`으로 계산하고(커밋 오프셋이 `-`인데 메시지가 있으면 대기로 셉니다), 필수 그룹(`REQUIRED_GROUPS`)이 없으면 실패입니다.
 - 토큰이 다음 실행 중에 만료될 것 같으면 실행 사이(요청 없는 구간)에 재발급하고 `GAP`초 쉽니다. 재발급 시점은 `진행.log`에 남습니다.
@@ -173,6 +211,20 @@ bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results
 - S1은 한계 지점(평균 500ms 또는 오류율 1%가 처음 깨지는 단계)으로 보므로 처리량을 기준에 넣지 않고, 목표 속도 대비 실제 전달률을 따로 보여줍니다.
 - 소진 시간은 마지막 요청 접수 이후 마지막 확정까지(`MAX(confirmed_at) - MAX(received_at)`)입니다. 확정 수가 요청 수와 다르면(오류, 거절, 미처리가 섞이면) G2는 무효입니다.
 - `판정.md`의 S1 한계 지점은 G1 또는 G2가 처음 깨지는 단계입니다.
+
+S3, S4 (Synthetic Data) 판정 기준. 회차마다 유효성, 정합성, 성능을 따로 판정하고 하나로 합치지 않습니다.
+
+| | 기준 | 깨지면 |
+| --- | --- | --- |
+| 기대값 | 행동 CSV를 `synthetic/validate.py`로 집계 (요청 수, 청약 행, 확정, 사유별 거절, 증거금). CSV가 규칙을 어기거나 manifest의 예상 요청 수와 다르면 판정 전체를 멈춤 | `judge.py` 실패 |
+| 유효성 | 요청 수 = 기대 요청 수(1,000) | **무효** (시험이 잘못됨. G1, G2, 정합성 모두 판정하지 않음) |
+| 정합성 | 청약 행, 확정, 사유별 거절, 증거금 수가 기대값과 같음 + 미처리(`PENDING`, `COMPENSATING`, `CANCEL_REQUESTED`) 0. S4는 예수금 부족 투자자의 예수금이 행동 CSV 입금액 그대로이고 청약증거금 0 | **불합격** (시스템 결함. 무효와 다르다). HTTP 오류가 있으면 접수되지 않은 요청이 섞여 **판정 불가** |
+| 성능 | G1은 S0과 같음(처리량 포함, 부하 모양이 같다). G2는 확정 건만, 확정 수가 기대 확정 수와 다르면 G2 무효 | G1, G2 불합격 |
+
+- 대표값은 measure 3회 중앙값입니다. 3회가 모두 유효해야 G1, G2를 판정하고, 정합성은 3회 모두 통과해야 통과입니다. 경로 예열 회차(`warmup`)도 정합성은 판정합니다 (정합성은 예열과 관계없이 맞아야 한다).
+- 거절 지연(접수 → 거절, `updated_at - received_at`)은 참고 지표로만 보여 줍니다. 청약에 거절 시각 컬럼이 없어 대신 쓰는 값입니다.
+- `판정.md`에 "S0 대비" 표가 붙습니다 (S3, S4 중앙값 - S0 중앙값). 합격선 없이 수치로만 봅니다.
+- 정합성 SQL 16~19번(`verify.sql`)은 같은 조건을 행 단위로 보여 줍니다 (같은 requestId 2행, 증거금 2개, 회원당 유효 청약 2건, 돈이 있는데 잔액 부족 거절). judge는 건수로, SQL은 어느 행이 문제인지로 봅니다.
 
 종료 코드: 0 정상, 2 워밍업이 최대 시간 안에 정상 상태에 닿지 않음 또는 판정 실패, 3 토큰, 4 예수금, 5 버전(dirty, jar 불일치), 6 소진 대기, 7 기동, 8 k6, 9 사전 점검, 10 부하는 끝났고 후처리 일부 실패, 11 공모주 생성, 12 잠금·결과 폴더, 13 도구 없음, 14 기준 상태 복원 실패
 
@@ -215,12 +267,25 @@ python loadtest/report.py --run-id $RUN                                         
 | S0 | 회원 1,000명이 각 1건 (100명 × 10회, 1초에 걸쳐 시작) | 새 공모주 | `users.csv` | 전부 202 |
 | S1 | 도착률 고정 단계 부하 (`STAGES` 기본 100,200,300,433,600,800건/초, 단계마다 전환 `RAMP` 10초 + 유지 `HOLD` 90초, 앞에 `WARMUP` 60초). 정식 측정은 한 속도 고정(`RATE`, `DURATION`)을 단계마다 따로 실행 | 새 공모주 (`IPO_IDS`면 여러 개) | `users.csv` | 전부 202 |
 | S2 | S0과 같은 구성으로 마감된 공모주에 요청 | `new_ipo.sh --closed` | `users.csv` | 전부 422 `SUBSCRIPTION_CLOSED` |
-| S3 | 정상 800 + 같은 requestId 재전송 100 + 두 번째 계좌 100 | 새 공모주 | `users.csv` (두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음 |
-| S4 | S0과 같은 구성, 10% 회원이 잔액 부족 | 새 공모주 | `users-s4.csv` | 전부 202 (잔액 부족 판정은 Consumer) |
+| S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약 거절은 Consumer |
+| S4 | Synthetic Data `s4-behavior.csv`: 투자자 1,000명 x 1건, 97명 예수금 부족 (S0과 같은 100명 x 10회) | 새 공모주 | `users-s4.csv` (S4 행동 CSV의 입금액으로 시드) | 전부 202 (잔액 부족 판정은 Consumer) |
 
 - **S1과 S2의 조건(요청 속도, 유지 시간, 요청 구성)은 임시 값입니다.** 첫 측정 전에 확정하고, 측정을 시작한 뒤에는 바꾸지 않습니다.
-- S3의 비율은 가정한 값이라 `S3_RESEND`, `S3_SECOND`, `S3_SECOND_FROM`으로 바꿀 수 있습니다.
-- S0~S4 모두 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`).
+- S0~S2는 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`). S3, S4는 요청 수가 행동 CSV 행 수(1,000)와 같아야 해서 줄이면 시작 전에 멈춥니다.
+
+### S3, S4 Synthetic Data
+
+S3, S4의 요청 구성은 LLM으로 만든 행동 CSV(`loadtest/synthetic/`)를 따릅니다 (발제 필수 항목 "가상 사용자 기반의 부하 테스트 시나리오 생성"). 부하 모양(100명 x 10회, 1초에 걸쳐 시작)과 청약 수량은 S0과 같고, 누가 어떤 행동을 하는지만 다릅니다. 프롬프트와 응답 원문, 규칙, 기대 결과는 `loadtest/synthetic/README.md`에 있습니다.
+
+| 시나리오 | 요청 수 | 청약 행 | 확정 | 거절 | 증거금 |
+| --- | --- | --- | --- | --- | --- |
+| S3 | 1,000 | 920 | 860 | 60 `ALREADY_SUBSCRIBED` | 860 |
+| S4 | 1,000 | 1,000 | 903 | 97 `INSUFFICIENT_BALANCE` | 903 |
+
+- 행동 CSV의 i번째 행이 i번째 요청입니다 (VU `i / 10 + 1`의 `i % 10`번째). `vuser`는 회원 CSV의 행 번호입니다.
+- S3: `RESEND`는 같은 투자자의 `NORMAL`과 같은 requestId(`RUN_ID`와 투자자 번호로 만든 값이라 회차끼리 겹치지 않음), `SECOND_ACCOUNT`는 두 번째 계좌(`accountId2`)와 다른 requestId로 보냅니다.
+- k6는 요청을 보내기 전에 데이터를 확인하고 맞지 않으면 바로 멈춥니다 (종료 코드 107): 행 수와 요청 수, S3는 `SECOND_ACCOUNT` 투자자의 두 번째 계좌, S4는 회원 CSV가 잔액 부족 묶음(`lb`)인지. S4를 기본 묶음으로 돌리면 S0과 같은 요청이 나가 "거절 0"이 결함처럼 보이기 때문입니다.
+- 행동 CSV를 바꾸면 `python loadtest/synthetic/validate.py s3`(또는 `s4`)로 검사하고, S3, S4 기준 스냅샷을 다시 만듭니다 (3-4절).
 
 ### S1 단계 부하와 단계별 표
 
@@ -264,10 +329,11 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `warmup.csv` | 워밍업 구간마다 끝 시각, 경과 초, 요청 수, 평균 응답 ms, 분당 기울기 %, 분당 기울기 ms, 연속 통과 수, 판정 |
 | `db-after.dump` | 측정이 끝난 DB 덤프 (`pg_dump -Fc --create`. `pg_restore --create -d postgres`로 되살린다) |
 | `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |
-| `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점) |
+| `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점). S3, S4가 있으면 회차별 정합성 표, 시나리오별 중앙값, S0 대비 표 |
 | `docker-stats.raw` | docker stats 원본 (`<epoch초>\t<JSON>` 한 줄씩, 조회 실패는 `ERROR` 줄) |
 | `docker-stats.csv` | 위 원본을 숫자로 바꾼 표 (컨테이너별 CPU %(100% = 1코어), 메모리 사용·상한 바이트, PIDs, 네트워크, 디스크) |
 | `slow-queries-before.txt` | 측정 시작 전 `pg_stat_statements` 누적 (비우기 전, 기록용) |
+| `autovacuum-before.csv`, `autovacuum.md` | 첫 실행 직전 테이블별 autovacuum, autoanalyze 누적 횟수 / 실행별로 그 사이에 돈 테이블과 횟수 (4장) |
 | `자원.md`, `자원.err` | 실행마다 k6 구간의 컨테이너별 CPU 최대·평균, CPU 상한 대비, 메모리 최대. k6는 `k6-<run_id>` 컨테이너 |
 
 | 실행별 파일 | 내용 |
@@ -280,6 +346,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `report.md` | 회차 보고서 (k6 요약, 결과 분류, 서비스별 서버 지표) |
 | `prometheus.json` | 보고서의 서버 지표 질의와 응답 원본 |
 | `slow-queries.txt` | 이 실행 동안의 쿼리 통계 (총 실행 시간, 평균 실행 시간 상위 10개. 정식 측정) |
+| `autovacuum.csv` | 이 실행이 끝나고 소진 확인 뒤 테이블별 행 수, 죽은 행 수, autovacuum, autoanalyze 누적 횟수와 마지막 시각(epoch) (정식 측정) |
 
 - 합격 기준은 처리량 200건/초 이상, 평균 500ms 이하, 오류율 1% 미만이고, 목표 기준은 400건/초 이상, 평균 250ms 이하, p95 500ms 이하, 오류 0입니다. 기본은 합격 기준이고 `-e THRESHOLD=goal`로 목표 기준을 씁니다. 기준은 측정 전에 정하고 측정 후에는 바꾸지 않습니다.
 - 기준을 어기면 종료 코드 99입니다. **`summary.json`의 `thresholds`는 `true`가 위반, `false`가 통과**입니다.
@@ -296,6 +363,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `RESTORE`, `DB_DUMP` | `1`, `1` | `official.sh` (시작할 때 기준 스냅샷 복원, 끝난 뒤 DB 덤프. `RESTORE=0`은 `env.txt`에 남고 정식 결과로 쓰지 않음) |
 | `BASELINE_DIR` | `loadtest/data/baseline` | `baseline.sh`, `official.sh` (기준 스냅샷 위치) |
 | `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |
+| `SCENARIOS` | `S0,S1` | `official.sh` (실행할 시나리오. S0 필수, S0, S1, S3, S4 중에서. 4장) |
 | `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
 | `S1_REPEAT` | `3` | `official.sh` (S1 단계마다 반복 측정 횟수. 팀 규칙은 최소 3회, 3 미만이면 판정이 참고값) |
 | `S0_PRICE`, `S1_PRICE`, `QUANTITY` | `15000`, `1000`, `10` | `official.sh` (공모가, 청약 수량) |
@@ -306,6 +374,8 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `STATS_INTERVAL` | `5` | `official.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
+| `BEHAVIOR_CSV` | `../synthetic/<시나리오>-behavior.csv` | `s3.js`, `s4.js` (`-e BEHAVIOR_CSV=...`, 행동 CSV 경로. k6 스크립트 기준 상대 경로) |
+| `S4_PREFIX` | `lb` | `official.sh` → `s4.js`, `judge.py --s4-prefix` (잔액 부족 묶음의 loginId 접두사. 회원 CSV가 이 묶음이 아니면 시작 전에 멈춤) |
 | `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `verify.sh`, `precheck.sh`, `official.sh`(하위 스크립트와 `judge.py --container`에 같은 값을 넘긴다) |
 | `KAFKA_CONTAINER` | `ipo-kafka` | `precheck.sh`, `baseline.sh` |
 | `EUREKA_URL` | `http://localhost:8761` | `precheck.sh` |
@@ -321,15 +391,17 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
 bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
-python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자)
+python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)
+python loadtest/tests/test_autovacuum.py  # 실행별 autovacuum 차이 (새 테이블, 기록 없는 실행, 통계 초기화, 형식 오류)
+python loadtest/tests/test_synthetic.py   # 행동 CSV 규칙과 기대 결과, 생성 코드 재실행 결과가 커밋한 CSV와 같은지, 생성 코드가 응답 원문과 같은지
 ```
 
 - `loadtest/tests/fixtures/consumer-groups.txt`는 `kafka-consumer-groups.sh --describe --all-groups`의 실제 출력, `docker-stats.raw`는 `docker stats --no-stream --format '{{json .}}'`의 실제 출력입니다. 출력 형식이 바뀌면 새로 받아 바꿉니다.

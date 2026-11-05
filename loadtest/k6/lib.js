@@ -11,8 +11,17 @@ export const QUANTITY = Number(__ENV.QUANTITY || 10);
 
 // 회원 CSV(loginId,userId,accountId,accountId2,token)를 모든 VU가 함께 읽는다
 export function loadUsers() {
-  const path = __ENV.USERS_CSV || '../data/users.csv';
-  return new SharedArray('users', () => {
+  return loadCsv('users', __ENV.USERS_CSV || '../data/users.csv');
+}
+
+// Synthetic Data 행동 CSV (loadtest/synthetic/<시나리오>-behavior.csv). BEHAVIOR_CSV로 바꿀 수 있다
+export function loadBehavior(scenario) {
+  return loadCsv('behavior', __ENV.BEHAVIOR_CSV || `../synthetic/${scenario.toLowerCase()}-behavior.csv`);
+}
+
+// 머리줄이 있는 CSV를 모든 VU가 함께 읽는다 (값에 쉼표가 없는 CSV만)
+export function loadCsv(name, path) {
+  return new SharedArray(name, () => {
     const lines = open(path).split(/\r?\n/).filter((l) => l.trim() !== '');
     const head = lines[0].split(',');
     return lines.slice(1).map((l) => {
@@ -87,18 +96,22 @@ export function check202(res, data) {
   });
 }
 
-// 100명 x 10회 (S0, S4): 한 요청 = 한 회원이고, 100명을 1초에 걸쳐 시작한다
-export function normal(scenario) {
+// 100명 x 10회 (S0, S3, S4): 100명을 1초에 걸쳐 시작하고, 요청 순번 idx = (VU - 1) x 10 + 반복 번호
+// pick(idx, users)는 요청 하나의 { user, accountId, requestId }를 돌려준다. 없으면 S0 방식 (한 요청 = 한 회원, requestId 무작위)
+// verify(users, total)는 시작 전에 데이터를 검사하고 문제가 있으면 예외를 던진다 (init에서 던지면 k6가 요청 없이 끝난다)
+export function normal(scenario, { pick, verify } = {}) {
   const vus = Number(__ENV.VUS || 100);
   const iters = Number(__ENV.ITERATIONS || 10);
   const users = loadUsers();
+  if (verify) verify(users, vus * iters);
+  const choose = pick || ((idx) => ({ user: users[idx], accountId: users[idx].accountId, requestId: uuid4() }));
   return {
     options: makeOptions(scenario, { [scenario]: { executor: 'per-vu-iterations', vus, iterations: iters, maxDuration: '2m' } }),
     run() {
       if (__ITER === 0) sleepRamp(vus);
       const idx = (__VU - 1) * iters + __ITER;
-      const u = users[idx];
-      const { res, data } = subscribe({ scenario, idx, user: u, accountId: u.accountId, requestId: uuid4(), expected: [202] });
+      const { user, accountId, requestId } = choose(idx, users);
+      const { res, data } = subscribe({ scenario, idx, user, accountId, requestId, expected: [202] });
       check202(res, data);
     },
   };

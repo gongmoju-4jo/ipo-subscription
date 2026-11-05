@@ -29,7 +29,7 @@ const GOALS: GoalRow[] = [
     id: 'G2',
     name: '확정 속도',
     target: '접수→확정 p95 15초 이하, 소진 15초 이하',
-    measured: '목표 피크 433건/초에서 p95 1.44초, 소진 0.74초로 기준 이내. 대량 환불은 미측정. 600건/초는 목표보다 높은 부하에서 확인한 한계(p95 23.5초)로, 목표 실패와 구분',
+    measured: '목표 피크 433건/초에서 p95 1.44초, 소진 0.74초로 기준 이내.\n대량 환불은 미측정.\n600건/초는 목표보다 높은 부하에서 확인한 한계(p95 23.5초)로, 목표 실패와 구분',
     status: 'partial',
     source: '정식측정-9 (official-1104-e)',
   },
@@ -68,24 +68,24 @@ const SCENARIOS = [
 
 // 목표 수치의 근거 (SA1 "G1 목표 수치의 근거", "G1 성공 기준" 표). [가정]은 가정이라고 그대로 적는다
 const WHY = [
-  { num: '433건/초', basis: 'LG에너지솔루션 KB증권 청약 2,122,367건(DART, 2022-01-21) 중 1일차 1,299,764건. 오픈 직후 10분에 20%가 몰린다고 보고 1,299,764 x 20% ÷ 600초. 20%는 가정 (시간대별 자료 없음. 10%면 217건/초)' },
+  { num: '433건/초', basis: 'LG에너지솔루션 KB증권 청약 2,122,367건(DART, 2022-01-21) 중 1일차 1,299,764건.\n오픈 직후 10분에 20%가 몰린다고 보고 1,299,764 x 20% ÷ 600초.\n20%는 가정 (시간대별 자료 없음.\n10%면 217건/초)' },
   { num: '목표 400건/초', basis: '위 피크 433건/초를 받아내기 위한 목표' },
-  { num: '합격 200건/초, 평균 500ms', basis: '발제 권장 기준선. 동시 100명이 200건/초를 내려면 한 건이 평균 0.5초 안에 끝나야 함 (100 ÷ 0.5초)' },
+  { num: '합격 200건/초, 평균 500ms', basis: '발제 권장 기준선.\n동시 100명이 200건/초를 내려면 한 건이 평균 0.5초 안에 끝나야 함 (100 ÷ 0.5초)' },
   { num: '100명 x 10회', basis: '발제 부하 조건 (1초에 100명 시작, 각 10회)' },
   { num: '600건/초', basis: '목표보다 높은 부하에서 어디서 한계가 오는지 확인하려고 추가한 단계' },
-  { num: '환불 212만 건', basis: '같은 KB증권 청약 건수. 경쟁률 약 69:1이라 거의 모든 청약에 환불이 생김' },
+  { num: '환불 212만 건', basis: '같은 KB증권 청약 건수.\n경쟁률 약 69:1이라 거의 모든 청약에 환불이 생김' },
 ];
 
 // 부하 조건의 근거 (docs/LOADTEST.md, 시연 시나리오 측정 조건 표, 정식측정-9). 근거가 기록되지 않은 값은 넣지 않는다
 const WHY_LOAD = [
-  { num: '1,000건 (100명 x 10회)', basis: '발제가 정한 동시성 확인 조건이라 그대로 씀. 우리 서비스 기준 부하는 이게 아니라 실제 청약 건수(DART)로 계산한 433건/초(S1). 한 사람은 공모주마다 1건만 청약할 수 있어서 회원도 1,000명을 만듦' },
-  { num: '워밍업 (최소 3분, 최대 15분)', basis: '기동 직후에는 JVM 컴파일, 커넥션 풀, DB 캐시가 덜 데워져 느림. 응답 시간 추세가 평평해질 때까지 돌리고 그 구간은 판정에서 뺌' },
-  { num: '단계 100, 200, 300, 433, 600건/초', basis: '433은 목표 피크, 600은 목표를 넘겨 한계가 어디서 오는지 보려고. 속도를 고정(도착률 고정)해서 느려져도 요청 수가 줄지 않게 함' },
+  { num: '1,000건 (100명 x 10회)', basis: '발제가 정한 동시성 확인 조건이라 그대로 씀.\n우리 서비스 기준 부하는 이게 아니라 실제 청약 건수(DART)로 계산한 433건/초(S1).\n한 사람은 공모주마다 1건만 청약할 수 있어서 회원도 1,000명을 만듦' },
+  { num: '워밍업 (최소 3분, 최대 15분)', basis: '기동 직후에는 JVM 컴파일, 커넥션 풀, DB 캐시가 덜 데워져 느림.\n응답 시간 추세가 평평해질 때까지 돌리고 그 구간은 판정에서 뺌' },
+  { num: '단계 100, 200, 300, 433, 600건/초', basis: '433은 목표 피크, 600은 목표를 넘겨 한계가 어디서 오는지 보려고.\n속도를 고정(도착률 고정)해서 느려져도 요청 수가 줄지 않게 함' },
   { num: '같은 조건 3회, 중앙값', basis: '1초 남짓에 끝나는 시험은 회차마다 흔들림이 커서 한 번 값은 우연일 수 있음' },
   { num: '회원 1,000명, 요청마다 새 requestId', basis: '같은 회원, 같은 요청만 보내면 캐시와 중복 처리로 실제보다 빠르게 나옴' },
-  { num: '측정마다 같은 시작 DB', basis: '회원 1,000명, 청약 0건 스냅샷으로 되돌림. 데이터가 쌓여 DB 크기가 달라지는 것을 막음' },
+  { num: '측정마다 같은 시작 DB', basis: '회원 1,000명, 청약 0건 스냅샷으로 되돌림.\n데이터가 쌓여 DB 크기가 달라지는 것을 막음' },
   { num: '실행 사이 30초 쉬기', basis: '앞 실행의 서버 지표(5초 수집)가 다음 실행 구간에 섞이지 않게' },
-  { num: '컨테이너마다 CPU, 메모리 상한', basis: '측정마다 같은 자원을 쓰게 고정. 배포 서버도 같은 값' },
+  { num: '컨테이너마다 CPU, 메모리 상한', basis: '측정마다 같은 자원을 쓰게 고정.\n배포 서버도 같은 값' },
   { num: '파티션, Consumer 6', basis: '3일 때 확정 속도가 약 345건/초에서 막혀 6으로 늘림 → 약 510건/초 (측정-8 → 9)' },
   { num: 'S3, S4 비율', basis: 'LLM이 시나리오를 가정해 정한 값 (실제 통계 아님)' },
 ];
@@ -101,20 +101,20 @@ const S1_STAGES = [
 
 const IMPROVE = [
   { run: '측정-6 (기준)', change: '처음 설정 (서비스, DB CPU 1, 파티션 3)', p95: '54.47초', rate: '약 285건/초' },
-  { run: '측정-7', change: '청약 서비스 CPU 1 → 2 (가설: 청약 서비스 CPU 부족). 결과 변화 없음 → 가설 기각', p95: '54.63초', rate: '측정-6과 같음' },
+  { run: '측정-7', change: '청약 서비스 CPU 1 → 2 (가설: 청약 서비스 CPU 부족).\n결과 변화 없음 → 가설 기각', p95: '54.63초', rate: '측정-6과 같음' },
   { run: '측정-8', change: 'PostgreSQL CPU 1 → 2', p95: '36.09초', rate: '약 345건/초' },
   { run: '측정-9', change: 'Kafka 파티션, Consumer 3 → 6', p95: '1.44초', rate: '약 510건/초' },
 ];
 
 const NEXT: { tag: string; what: string; why: string; source: string }[] = [
-  { tag: '성능', what: '대량 환불 처리 시간 측정', why: 'G2의 남은 지표. 환불 건수는 LG에너지솔루션 KB증권 청약 건수(DART)를 근거로 정하고, 목표 시간은 정하는 중', source: 'SA1 G2' },
-  { tag: '성능', what: '600건/초에서 확정 지연 개선', why: '목표보다 높은 600건/초에서 한계 확인: 확정 p95 23.5초로 기준(15초) 초과. 증거금 인출 Consumer 병목부터 개선 전후 같은 조건으로 측정', source: '정식측정-9, #92' },
-  { tag: '정합성', what: '접수도 Outbox로', why: '마감 직전 접수가 늦게 발행되면 마감 뒤에 들어올 수 있어요. 청약 행과 다음 이벤트를 한 트랜잭션에 저장하고, 마감은 DB만 보고 판단', source: '이벤트 명세 위험 4' },
-  { tag: '정합성', what: '원장 대사 배치', why: '잔고와 원장, 서비스 간 증거금과 배정 금액을 정기적으로 맞춰 보고 어긋나면 알림. 지금은 검사 SQL을 손으로 실행', source: 'SA1 도전 과제' },
-  { tag: '운영', what: 'DLT 알림과 재처리', why: 'MVP는 실패 메시지를 잃지 않게 DLT에 보관하는 데까지(Kafka UI로 확인). 원인을 고치기 전에 자동으로 다시 보내면 같은 실패가 반복돼서, DLT가 쌓이면 알리고 원인 수정 뒤 원래 토픽으로 재처리. 이벤트 처리 기록 덕분에 다시 보내도 한 번만 반영', source: '통합 테스트 ACC-12' },
+  { tag: '성능', what: '대량 환불 처리 시간 측정', why: 'G2의 남은 지표.\n환불 건수는 LG에너지솔루션 KB증권 청약 건수(DART)를 근거로 정하고, 목표 시간은 정하는 중', source: 'SA1 G2' },
+  { tag: '성능', what: '600건/초에서 확정 지연 개선', why: '목표보다 높은 600건/초에서 한계 확인: 확정 p95 23.5초로 기준(15초) 초과.\n증거금 인출 Consumer 병목부터 개선 전후 같은 조건으로 측정', source: '정식측정-9, #92' },
+  { tag: '정합성', what: '접수도 Outbox로', why: '마감 직전 접수가 늦게 발행되면 마감 뒤에 들어올 수 있어요.\n청약 행과 다음 이벤트를 한 트랜잭션에 저장하고, 마감은 DB만 보고 판단', source: '이벤트 명세 위험 4' },
+  { tag: '정합성', what: '원장 대사 배치', why: '잔고와 원장, 서비스 간 증거금과 배정 금액을 정기적으로 맞춰 보고 어긋나면 알림.\n지금은 검사 SQL을 손으로 실행', source: 'SA1 도전 과제' },
+  { tag: '운영', what: 'DLT 알림과 재처리', why: 'MVP는 실패 메시지를 잃지 않게 DLT에 보관하는 데까지(Kafka UI로 확인).\n원인을 고치기 전에 자동으로 다시 보내면 같은 실패가 반복돼서, DLT가 쌓이면 알리고 원인 수정 뒤 원래 토픽으로 재처리.\n이벤트 처리 기록 덕분에 다시 보내도 한 번만 반영', source: '통합 테스트 ACC-12' },
   { tag: '운영', what: 'Slack 알림 → 관리자 API로 수동 처리', why: 'DLT나 정산 불일치가 생기면 Slack으로 알리고, 관리자(ADMIN)가 관리자 API로 DLT 메시지를 다시 처리하거나 멈춘 증거금을 반환하는 등 직접 복구', source: '통합 테스트 ACC-12, PR #75' },
-  { tag: '도메인', what: '증거금률 50%', why: '실제 공모주는 보통 50%. 배정 대금이 증거금보다 커질 수 있어 추가 납입 흐름이 생기고, 정산과 정합성 검사식도 같이 바뀜', source: '유비쿼터스 언어, SA1 F-10' },
-  { tag: '비교', what: 'Redis와 DB 멱등 처리 비교', why: '지금은 DB의 이벤트 처리 기록으로 중복을 막아요. Redis로 바꿨을 때 처리량과 장애 시 안전성을 같은 조건으로 비교', source: 'SA1 도전 과제' },
+  { tag: '도메인', what: '증거금률 50%', why: '실제 공모주는 보통 50%.\n배정 대금이 증거금보다 커질 수 있어 추가 납입 흐름이 생기고, 정산과 정합성 검사식도 같이 바뀜', source: '유비쿼터스 언어, SA1 F-10' },
+  { tag: '비교', what: 'Redis와 DB 멱등 처리 비교', why: '지금은 DB의 이벤트 처리 기록으로 중복을 막아요.\nRedis로 바꿨을 때 처리량과 장애 시 안전성을 같은 조건으로 비교', source: 'SA1 도전 과제' },
   { tag: '기능', what: '청약 취소', why: '취소 API가 없어 통합 테스트 1건(ACC-6)을 실행하지 못함', source: '11/5 통합 테스트' },
 ];
 
@@ -146,7 +146,7 @@ export function GoalsPage() {
                 <tr key={i}>
                   <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{g.id} {g.name}</td>
                   <td className="sub">{g.target}</td>
-                  <td style={{ fontWeight: 700 }}>{g.measured}</td>
+                  <td style={{ fontWeight: 700 }}><span className="lines">{g.measured}</span></td>
                   <td>
                     {g.status === 'achieved' ? <Badge tone="success">달성</Badge> : g.status === 'partial' ? <Badge tone="progress">부분 달성</Badge> : <Badge tone="muted">미측정</Badge>}
                   </td>
@@ -160,7 +160,7 @@ export function GoalsPage() {
           <DesignNote title="왜 이 수치로 잡았나">
             <dl className="kv">
               {WHY.map((w) => (
-                <Fragment key={w.num}><dt style={{ whiteSpace: 'nowrap' }}>{w.num}</dt><dd style={{ textAlign: 'left' }}>{w.basis}</dd></Fragment>
+                <Fragment key={w.num}><dt style={{ whiteSpace: 'nowrap' }}>{w.num}</dt><dd className="lines" style={{ textAlign: 'left' }}>{w.basis}</dd></Fragment>
               ))}
             </dl>
           </DesignNote>
@@ -209,7 +209,7 @@ export function GoalsPage() {
           <DesignNote title="부하 조건은 왜 이렇게 잡았나">
             <dl className="kv">
               {WHY_LOAD.map((w) => (
-                <Fragment key={w.num}><dt style={{ whiteSpace: 'nowrap' }}>{w.num}</dt><dd style={{ textAlign: 'left' }}>{w.basis}</dd></Fragment>
+                <Fragment key={w.num}><dt style={{ whiteSpace: 'nowrap' }}>{w.num}</dt><dd className="lines" style={{ textAlign: 'left' }}>{w.basis}</dd></Fragment>
               ))}
             </dl>
           </DesignNote>
@@ -222,7 +222,7 @@ export function GoalsPage() {
             <thead><tr><th>측정</th><th>바꾼 것</th><th className="r">433건/초 확정 p95</th><th className="r">확정 처리 속도</th></tr></thead>
             <tbody>
               {IMPROVE.map((r) => (
-                <tr key={r.run}><td>{r.run}</td><td>{r.change}</td><td className="r num" style={{ fontWeight: 700 }}>{r.p95}</td><td className="r num">{r.rate}</td></tr>
+                <tr key={r.run}><td>{r.run}</td><td><span className="lines">{r.change}</span></td><td className="r num" style={{ fontWeight: 700 }}>{r.p95}</td><td className="r num">{r.rate}</td></tr>
               ))}
             </tbody>
           </table>
@@ -249,7 +249,7 @@ export function GoalsPage() {
             <div key={n.what} className="list-item">
               <div>
                 <div className="item-title" style={{ fontSize: 15 }}><span className="tag">{n.tag}</span>{n.what}</div>
-                <div className="item-meta">{n.why}</div>
+                <div className="item-meta lines">{n.why}</div>
               </div>
               <span className="hint" style={{ whiteSpace: 'nowrap' }}>{n.source}</span>
             </div>

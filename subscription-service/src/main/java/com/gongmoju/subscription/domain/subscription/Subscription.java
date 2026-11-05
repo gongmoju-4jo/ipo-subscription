@@ -229,11 +229,99 @@ public class Subscription extends BaseEntity {
     }
 
     /**
+     * 응답이 없는 {@code COMPENSATING}, {@code CANCEL_REQUESTED}의 증거금 반환 요청({@code margin.void-requested})을 재요청 시
+     * 요청 횟수({@code attempts})를 증가시키고 마지막 요청 시각({@code lastRequestedAt})을 현재 시각으로 갱신.
+     * 상태와 해제 사유({@code cancelReason})는 유지
+     * 같은 트랜잭션에서 같은 해제 사유로 Outbox에 다시 기록.
+     *
+     * @throws IllegalStateException {@code COMPENSATING}, {@code CANCEL_REQUESTED}가 아닌 상태에서 호출했거나, 해제 사유가 없는 경우
+     */
+    public void retryVoid() {
+        if (status != SubscriptionStatus.COMPENSATING && status != SubscriptionStatus.CANCEL_REQUESTED) {
+            throw new IllegalStateException("COMPENSATING, CANCEL_REQUESTED 상태에서만 반환을 다시 요청할 수 있습니다: " + status);
+        }
+        if (cancelReason == null) {
+            throw new IllegalStateException("해제 사유가 없는 청약은 반환을 다시 요청할 수 없습니다: " + status);
+        }
+        this.attempts++;
+        this.lastRequestedAt = Instant.now();
+    }
+
+    /**
      * 요청 횟수({@code attempts})가 최대 시도 횟수 이상인지 확인. {@code attempts}는 청약 접수 때 증가시키며 최대 횟수는 "총 인출 요청 횟수".
      * 최대 시도 횟수에 도달한 {@code PENDING}이 응답 시간까지 지나면 더 이상 재요청하지 않고 시간 초과 보상({@code COMPENSATING(TIMEOUT)})으로 넘어감.
      */
     public boolean hasReachedMaxAttempts(int maxAttempts) {
         return attempts >= maxAttempts;
+    }
+
+    /**
+     * 배정 결과({@code allocation.result})로 {@code CONFIRMED}를 {@code ALLOCATED}로 전환함. 배정 수량과 배정 대금을 저장함 (0주 배정 포함).
+     * 배정 대금은 배정 수량 × 공모가와 같아야 함 (테이블 명세 {@code allocated_amount}).
+     *
+     * @param allocatedQuantity 배정 수량. 0 이상, 청약 수량 이하
+     * @param allocatedAmount   배정 대금 (원)
+     * @throws IllegalStateException    {@code CONFIRMED}가 아닌 상태에서 호출한 경우
+     * @throws IllegalArgumentException 배정 수량이 범위를 벗어났거나 배정 대금이 배정 수량 × 공모가와 다른 경우
+     */
+    public void allocate(long allocatedQuantity, long allocatedAmount) {
+        if (status != SubscriptionStatus.CONFIRMED) {
+            throw new IllegalStateException("CONFIRMED 상태에서만 배정할 수 있습니다: " + status);
+        }
+        if (allocatedQuantity < 0 || allocatedQuantity > requestedQuantity) {
+            throw new IllegalArgumentException("배정 수량은 0 이상 청약 수량 이하여야 합니다: allocatedQuantity="
+                    + allocatedQuantity + ", requestedQuantity=" + requestedQuantity);
+        }
+        if (allocatedAmount != Math.multiplyExact(allocatedQuantity, ipo.getOfferPrice())) {
+            throw new IllegalArgumentException("배정 대금이 배정 수량 × 공모가와 다릅니다: allocatedQuantity="
+                    + allocatedQuantity + ", allocatedAmount=" + allocatedAmount + ", offerPrice=" + ipo.getOfferPrice());
+        }
+        this.status = SubscriptionStatus.ALLOCATED;
+        this.allocatedQuantity = allocatedQuantity;
+        this.allocatedAmount = allocatedAmount;
+    }
+
+    /**
+     * 이미 저장한 배정 결과와 같은지 비교함. 배정 전이면 항상 {@code false}.
+     *
+     * @return 배정 수량과 배정 대금이 모두 같으면 {@code true}
+     */
+    public boolean hasSameAllocation(long allocatedQuantity, long allocatedAmount) {
+        return this.allocatedQuantity != null && this.allocatedQuantity == allocatedQuantity
+                && this.allocatedAmount != null && this.allocatedAmount == allocatedAmount;
+    }
+
+    /**
+     * 정산 완료 응답({@code margin.settled})으로 {@code ALLOCATED}를 {@code REFUNDED}로 전환함. 환불액을 저장함 (0주 배정이면 증거금 전액, 청약 수량을 전부 배정받았으면 0).
+     * 환불액은 증거금 − 배정 대금과 같아야 함 (이벤트 명세 {@code margin.settled} 절).
+     *
+     * @param refundAmount 환불액 (원)
+     * @throws IllegalStateException    {@code ALLOCATED}가 아닌 상태에서 호출했거나, 배정 대금이 없는 경우
+     * @throws IllegalArgumentException 환불액이 증거금 − 배정 대금과 다른 경우
+     */
+    public void completeRefund(long refundAmount) {
+        if (status != SubscriptionStatus.ALLOCATED) {
+            throw new IllegalStateException("ALLOCATED 상태에서만 환불을 완료할 수 있습니다: " + status);
+        }
+        if (allocatedAmount == null) {
+            throw new IllegalStateException("배정 대금이 없는 청약은 환불을 완료할 수 없습니다: " + status);
+        }
+        if (refundAmount < 0 || refundAmount != marginAmount - allocatedAmount) {
+            throw new IllegalArgumentException("환불액이 증거금 − 배정 대금과 다릅니다: refundAmount=" + refundAmount
+                    + ", marginAmount=" + marginAmount + ", allocatedAmount=" + allocatedAmount);
+        }
+        this.status = SubscriptionStatus.REFUNDED;
+        this.refundAmount = refundAmount;
+    }
+
+    /**
+     * 이미 저장한 정산 결과와 같은지 비교함. 정산 금액은 배정 대금과 같으므로 배정 대금과 비교함. 환불 전이면 항상 {@code false}.
+     *
+     * @return 배정 대금과 정산 금액, 저장한 환불액과 환불액이 모두 같으면 {@code true}
+     */
+    public boolean hasSameRefund(long postedAmount, long refundAmount) {
+        return this.allocatedAmount != null && this.allocatedAmount == postedAmount
+                && this.refundAmount != null && this.refundAmount == refundAmount;
     }
 
     private static Subscription create(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,

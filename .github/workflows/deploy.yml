@@ -1,0 +1,210 @@
+name: Deploy
+
+# develop에 머지되어 CI(빌드, 테스트)가 성공한 커밋만 EC2에 배포한다. CI가 실패한 커밋은 배포하지 않는다
+# 수동 실행(Run workflow): 재배포, 롤백. sha를 비우면 선택한 브랜치의 최신 커밋을 배포한다. develop CI가 성공한 커밋만 받는다
+# 배포 브랜치를 main으로 바꿀 때는 branches를 main으로 바꾸고, ci.yml의 push 대상에도 main을 추가한다
+#
+# 저장소 변수(Settings → Secrets and variables → Actions → Variables)
+#   AWS_REGION, AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY, EC2_INSTANCE_ID, DEPLOY_BASE_URL(예: http://{고정 IP})
+# 스모크 계정: Parameter Store /ipo/prod/SMOKE_LOGIN_ID, SMOKE_PASSWORD (서버 안에서 deploy.sh가 사용)
+# AWS 권한은 OIDC로 받는다 (장기 액세스 키를 GitHub에 두지 않는다)
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 배포할 커밋 SHA (비우면 선택한 브랜치의 최신 커밋)
+        required: false
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read   # 수동 실행 때 CI 실행 결과 조회
+
+# 배포는 한 번에 하나만. 진행 중인 배포를 취소하지 않고 끝난 뒤 다음 배포를 실행한다
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  # 자동 배포는 CI가 끝난 커밋이 아직 브랜치의 최신일 때만 한다
+  # 앞 커밋의 CI가 늦게 끝나 뒤 커밋 배포 다음에 실행되면, 서버가 이전 코드로 되돌아가지 않게 건너뛴다
+  # 수동 실행(재배포, 롤백)은 지정한 커밋을 그대로 배포한다
+  gate:
+    name: gate
+    # CI가 develop push(머지)로 실행되어 성공한 경우만. PR에서 돈 CI로는 배포하지 않는다
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: 최신 커밋인지 확인 (자동 배포)
+        id: check
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_run" ]]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          latest="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" "refs/heads/$HEAD_BRANCH" | cut -f1)"
+          [[ -n "$latest" ]] || { echo "브랜치 $HEAD_BRANCH의 최신 커밋을 읽지 못했습니다"; exit 1; }
+          if [[ "$latest" != "$HEAD_SHA" ]]; then
+            echo "건너뜀: $HEAD_SHA는 $HEAD_BRANCH의 최신 커밋($latest)이 아닙니다. 최신 커밋의 CI가 끝나면 그 커밋을 배포합니다"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: deploy
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha || github.sha }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      MODULES: eureka-server api-gateway account-service subscription-service allocation-service
+
+    steps:
+      - name: 입력, 변수 확인
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]] || { echo "커밋 SHA 형식이 아닙니다: $SHA"; exit 1; }
+          for v in AWS_REGION ECR_REGISTRY EC2_INSTANCE_ID; do
+            [[ -n "${!v}" ]] || { echo "저장소 변수 $v가 비어 있습니다"; exit 1; }
+          done
+          [[ -n "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ]] || { echo "저장소 변수 AWS_DEPLOY_ROLE_ARN이 비어 있습니다"; exit 1; }
+          [[ -n "${{ vars.DEPLOY_BASE_URL }}" ]] || { echo "저장소 변수 DEPLOY_BASE_URL이 비어 있습니다"; exit 1; }
+
+      - name: 코드 가져오기
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # 이미지 태그는 전체 SHA로 통일한다 (짧은 SHA로 수동 실행해도 같은 태그가 되게)
+      - name: 전체 SHA
+        run: echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      # 수동 실행은 develop에 머지되어 CI가 성공한 커밋만 받는다 (리뷰, CI를 거치지 않은 커밋 배포 방지)
+      # AWS 자격 증명을 받기 전에 확인한다. 확인되지 않은 커밋의 빌드 스크립트가 자격 증명에 닿지 않게
+      - name: CI 통과 확인 (수동 실행)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count="$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&status=success" --jq '.total_count')"
+          if [[ "${count:-0}" -lt 1 ]]; then
+            echo "이 커밋은 develop push로 실행된 CI 성공 기록이 없어 배포하지 않습니다: $SHA"
+            echo "develop에 머지되어 CI가 성공한 커밋(또는 이전에 배포된 커밋)을 지정하세요"
+            exit 1
+          fi
+          echo "CI 성공 기록 확인: $SHA"
+
+      - name: AWS 자격 증명 (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: ECR 로그인
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      # ECR 태그는 덮어쓸 수 없다(IMMUTABLE). 이미 올라간 커밋(재배포, 롤백)은 빌드를 건너뛴다
+      - name: 이미지가 이미 있는지 확인
+        id: images
+        run: |
+          missing=""
+          for m in $MODULES; do
+            docker manifest inspect "$ECR_REGISTRY/ipo/$m:$SHA" > /dev/null 2>&1 || missing="$missing $m"
+          done
+          echo "missing=${missing# }" >> "$GITHUB_OUTPUT"
+          echo "새로 빌드할 이미지: ${missing:- 없음}"
+
+      - name: JDK 21 설정
+        if: steps.images.outputs.missing != ''
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Gradle 설정
+        if: steps.images.outputs.missing != ''
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      # 테스트는 CI가 이미 통과시킨 커밋이라 다시 돌리지 않는다
+      - name: jar 빌드
+        if: steps.images.outputs.missing != ''
+        run: ./gradlew build -x test
+
+      - name: 이미지 빌드, 푸시
+        if: steps.images.outputs.missing != ''
+        run: |
+          for m in ${{ steps.images.outputs.missing }}; do
+            image="$ECR_REGISTRY/ipo/$m:$SHA"
+            docker build --build-arg MODULE="$m" -t "$image" .
+            docker push "$image"
+          done
+
+      # 서버의 레포를 먼저 배포 커밋으로 맞춘 뒤 그 커밋의 deploy.sh를 실행한다
+      - name: EC2 배포 (SSM Run Command)
+        run: |
+          # SSM Run Command는 HOME이 비어 있는 환경에서 root로 실행되어 git, docker 설정 위치를 정해 준다
+          cmd="export HOME=/root && cd /opt/ipo && git fetch --quiet origin && git checkout --quiet --detach $SHA && ECR_REGISTRY=$ECR_REGISTRY AWS_REGION=$AWS_REGION bash deploy/deploy.sh $SHA"
+          params="$(jq -cn --arg c "$cmd" '{commands: [$c], executionTimeout: ["900"]}')"
+          command_id="$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${SHA:0:12}" \
+            --parameters "$params" \
+            --query Command.CommandId --output text)"
+          echo "명령 ID: $command_id"
+
+          status=""
+          for _ in $(seq 1 180); do
+            sleep 5
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$EC2_INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)"
+            case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+
+          echo "----- 서버 출력"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$EC2_INSTANCE_ID" \
+            --query StandardOutputContent --output text || true
+          echo "----- 서버 오류 출력"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$EC2_INSTANCE_ID" \
+            --query StandardErrorContent --output text || true
+
+          echo "결과: $status"
+          [[ "$status" == "Success" ]]
+
+      # 비밀번호가 담긴 스모크는 서버 안에서 deploy.sh가 실행했다 (HTTP로 인터넷에 비밀번호를 보내지 않으려고)
+      # 여기서는 인터넷에서 공개 주소로 실제로 들어오는지만 본다 (보안 그룹, 고정 IP, 게이트웨이 공개). 자격 증명은 보내지 않는다
+      - name: 공개 주소 확인 (Swagger 200, 토큰 없는 API 401)
+        env:
+          BASE_URL: ${{ vars.DEPLOY_BASE_URL }}
+        run: |
+          base="${BASE_URL%/}"
+          code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base$1" || true; }
+          s=""
+          for _ in $(seq 1 12); do
+            s="$(code /swagger-ui/index.html)"
+            [[ "$s" == 200 ]] && break
+            sleep 5
+          done
+          [[ "$s" == 200 ]] || { echo "Swagger 화면 응답이 200이 아닙니다: $s"; exit 1; }
+          s="$(code /api/v1/ipos)"
+          [[ "$s" == 401 ]] || { echo "토큰 없는 API 응답이 401이 아닙니다: $s"; exit 1; }
+          echo "공개 주소 정상: Swagger 200, 토큰 없는 API 401"

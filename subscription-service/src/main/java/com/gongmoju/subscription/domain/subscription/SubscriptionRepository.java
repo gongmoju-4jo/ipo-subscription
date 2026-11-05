@@ -52,6 +52,25 @@ public interface SubscriptionRepository {
      */
     Optional<Instant> findLastReserveRequestPublishedAt(UUID subscriptionId);
 
+    /**
+     * 반환 재요청 대상 조회 (이벤트 명세 3-5, 상태 전이도의 멈춘 SAGA 정리).
+     * 마지막 요청 시각이 {@code lastRequestedBefore}보다 이르고 요청 횟수가 {@code maxAttempts} 미만인 {@code COMPENSATING}, {@code CANCEL_REQUESTED} 청약 ID를
+     * 오래된 순으로 최대 {@code limit}건 조회함. 미발행 {@code margin.void-requested} Outbox 항목이 있는 청약은 제외함.
+     */
+    List<UUID> findStaleVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit);
+
+    /**
+     * 반환 재요청 최대 횟수에 이른 청약 조회 (알림 대상). {@link #findStaleVoidIds}와 같은 상태, 시각 조건에서 요청 횟수가 {@code maxAttempts} 이상인 청약 ID를
+     * 오래된 순으로 최대 {@code limit}건 조회함. 재요청 대상 조회와 나눈 이유는 최대 횟수에 이른 청약은 계속 남아 재요청 대상의 건수 제한을 채우지 않게 하기 위함.
+     */
+    List<UUID> findExhaustedVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit);
+
+    /**
+     * 반환 재요청 최대 횟수에 이른 청약의 총 건수. {@link #findExhaustedVoidIds}와 같은 조건이며 건수 제한이 없음.
+     * 상세 조회는 앞쪽 {@code limit}건만 가져오므로, 대상이 그보다 많을 때 빠진 건수를 알리는 데 씀.
+     */
+    long countExhaustedVoid(Instant lastRequestedBefore, int maxAttempts);
+
     // 공모주의 청약 중 주어진 상태들의 건수 (마감 조건의 진행 중 SAGA 건수, ipo.closed의 confirmedCount, 배정 완료 때 배정 대상 청약 수)
     long countByIpoIdAndStatusIn(UUID ipoId, Collection<SubscriptionStatus> statuses);
 

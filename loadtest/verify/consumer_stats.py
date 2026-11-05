@@ -39,6 +39,7 @@ import urllib.request
 CONSUMER = "account-margin-reserve"
 LAG_Q = 'sum(kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"})'
 LISTENER_Q = 'sum by (result) (spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"})'
+LISTENER_SCRAPE_Q = 'max(timestamp(spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"}))'
 LAG_SAMPLES_Q = 'max(count_over_time(kafka_consumer_fetch_manager_records_lag{{topic="margin_reserve-requested"}}[{d}s]))'
 STEP = 5
 SAMPLE_RATIO = 0.9
@@ -124,11 +125,13 @@ def prom_get(base, path, params):
 
 
 def query_prom(run, base, get=prom_get):
-    """(원본 응답 dict, 랙 [(t, v)], 리스너 {result: [(t, v)]}, 저장 샘플 수). 랙 시계열이 없으면 RuntimeError"""
+    """(원본 응답 dict, 랙 [(t, v)], 리스너 {result: [(t, v)]}, 저장 샘플 수, 리스너 최종 수집 시각). 랙 시계열이 없으면 RuntimeError"""
     w0, w1 = run["start"], run["end"] + run["drain"]
     rng = {"start": w0, "end": w1, "step": STEP}
     raw = {"lag": get(base, "/api/v1/query_range", {"query": LAG_Q, **rng}),
-           "listener": get(base, "/api/v1/query_range", {"query": LISTENER_Q, **rng}),
+           # 누적값은 5초마다 수집되므로 소진 확인 뒤 한 번 더 수집된 값(+STEP)까지 읽는다. 실행 사이 GAP(>= STEP) 동안 요청이 없어 다음 실행은 섞이지 않는다
+           "listener": get(base, "/api/v1/query_range", {"query": LISTENER_Q, **rng, "end": w1 + STEP}),
+           "listener_scrape": get(base, "/api/v1/query", {"query": LISTENER_SCRAPE_Q, "time": w1 + STEP}),
            "lag_samples": get(base, "/api/v1/query", {"query": LAG_SAMPLES_Q.format(d=w1 - w0), "time": w1})}
     lag_res = raw["lag"]["data"]["result"]
     if not lag_res:
@@ -140,7 +143,19 @@ def query_prom(run, base, get=prom_get):
         raise RuntimeError(f"{run['run']}: 리스너 시계열이 없음 ({LISTENER_Q})")
     smp = raw["lag_samples"]["data"]["result"]
     samples = int(float(smp[0]["value"][1])) if smp else 0
-    return raw, lag, listener, samples
+    sc = raw["listener_scrape"]["data"]["result"]
+    scrape = float(sc[0]["value"][1]) if sc else 0.0
+    return raw, lag, listener, samples, scrape
+
+
+def clock_offsets(container, base):
+    """분석 시점의 시계 차이(초): DB 컨테이너 - 이 PC, Prometheus - 이 PC. 측정 시점 값이 아니다"""
+    t0 = dt.datetime.now().timestamp()
+    db_now = float(psql("select extract(epoch from clock_timestamp())", container)[0][0])
+    t1 = dt.datetime.now().timestamp()
+    prom_now = float(prom_get(base, "/api/v1/query", {"query": "time()"})["data"]["result"][0])
+    t2 = dt.datetime.now().timestamp()
+    return dict(db=db_now - (t0 + t1) / 2, prom=prom_now - (t1 + t2) / 2)
 
 
 # ---------- 계산 ----------
@@ -173,7 +188,7 @@ def judge_run(lag_load):
     return dict(lag_max=peak, lag_end=end, lag_slope=sl, rising=rising)
 
 
-def analyze(run, db, lag, listener, samples):
+def analyze(run, db, lag, listener, samples, scrape):
     load = run["end"] - run["start"]
     window = run["end"] + run["drain"] - run["start"]
     lag_load = [(t, v) for t, v in lag if t <= run["end"]]
@@ -189,7 +204,14 @@ def analyze(run, db, lag, listener, samples):
                 processed=db["processed"], processed_load_rate=rate_load, rejected=db["rejected"],
                 republished=db["reserved"] - db["success"], other=db["processed"] - db["success"] - db["rejected"] - (db["reserved"] - db["success"]),
                 received=received, failure=fail, error_pct=(fail / received * 100) if received else 0.0,
-                samples=samples, samples_expected=window // STEP, **j)
+                samples=samples, samples_expected=window // STEP, listener_scrape=scrape, **j)
+
+
+def check_scrape(r, run):
+    w1 = run["end"] + run["drain"]
+    if r["listener_scrape"] <= w1:
+        return f"{r['run']}: 리스너 최종 수집 시각이 소진 확인({kst(w1)}) 이전 → 마지막 처리분이 전체 수신에서 빠졌을 수 있음"
+    return None
 
 
 def check_samples(r):
@@ -221,7 +243,7 @@ def kst(t):
     return dt.datetime.fromtimestamp(t, dt.timezone(dt.timedelta(hours=9))).strftime("%H:%M:%S")
 
 
-def render(batch, env, runs, results, stages, problems):
+def render(batch, env, runs, results, stages, problems, clock=None):
     yn = lambda b: "예" if b else "아니오"
     L = [f"# 증거금 인출 Consumer 처리량 ({batch})", "", "## 측정 환경 (env.txt)", ""] + [f"- `{x}`" for x in env] + [""]
     L += ["## 정의", "",
@@ -253,7 +275,23 @@ def render(batch, env, runs, results, stages, problems):
         L.append(f"| {r['run']} | {kst(run['start'])}~{kst(run['end'])}+{run['drain']}s | {r['success']} | {r['success_rate']:.1f} | {r['processed']} | "
                  f"{r['rejected']} | {r['republished']} | {r['other']} | {r['received']:.0f} | {r['failure']:.0f} | {r['lag_max']:.0f}/{r['lag_end']:.0f} | "
                  f"{r['lag_slope']:.2f} | {yn(r['rising'])} | {r['samples']}/{r['samples_expected']} |")
-    L += ["", "- 랙은 Consumer가 fetch할 때 계산한 값이다. 처리 중 멈춘 Consumer는 늦게 갱신되므로 소진 대기(커밋 기준 랙 0)와 같이 본다", ""]
+    L += ["", "## 시간 기준", "",
+          "| 실행 | DB 집계 구간 | 고유 처리(부하 중) 구간 | 랙 조회 구간 | 리스너 누적값 기준 | 리스너 최종 수집 시각 |",
+          "| --- | --- | --- | --- | --- | --- |"]
+    for run, r in zip(runs, results):
+        w1 = run["end"] + run["drain"]
+        L.append(f"| {r['run']} | {kst(run['start'])} ~ {kst(w1)} | {kst(run['start'])} ~ {kst(run['end'])} | "
+                 f"{kst(run['start'])} ~ {kst(w1)} (5초 간격 평가) | {kst(run['start'])} 직전 수집 → {kst(w1 + STEP)} 직전 수집 | "
+                 f"{kst(r['listener_scrape']) if r['listener_scrape'] else '없음'} |")
+    L += ["", "- DB 집계: margin.created_at, processed_event.processed_at, outbox.created_at이 구간 안인 행 (양 끝 포함). 시각은 서비스 컨테이너(JVM) 시계",
+          "- 구간 경계(k6 시작, 종료, 소진 확인)는 official.sh가 이 PC 시계로 정수 초 단위로 기록",
+          "- Prometheus: 5초마다 수집. 랙은 평가 시각 직전 수집값이라 최대 5초 늦다. 리스너 누적값은 구간 끝 뒤 첫 수집까지 읽어서 DB 구간보다 최대 5초 길다",
+          "- 한계: 두 지표의 시간 기준이 달라 같은 구간의 건수가 경계에서 최대 수 초 어긋날 수 있다. 실행 사이 GAP(요청 없음) 동안은 처리할 메시지가 없어 "
+          "GAP이 5초 이상이면 건수는 섞이지 않는다. 5초 단위 시계열(인출.csv)을 나란히 볼 때는 이 차이를 감안한다",
+          "- 랙은 Consumer가 fetch할 때 계산한 값이다. 처리 중 멈춘 Consumer는 늦게 갱신되므로 소진 대기(커밋 기준 랙 0)와 같이 본다"]
+    if clock:
+        L.append(f"- 시계 차이 (분석 시점, 측정 시점 값 아님): DB 컨테이너 - 이 PC {clock['db']:+.2f}초, Prometheus - 이 PC {clock['prom']:+.2f}초")
+    L.append("")
     if problems:
         L += ["## 문제", ""] + [f"- {p}" for p in problems] + [""]
     return "\n".join(L)
@@ -270,7 +308,7 @@ def write_csv(path, runs, series):
                             f"{ok[t]:g}" if t in ok else "", f"{fail[t]:g}" if t in fail else "", buckets.get(t - t % STEP, 0)])
 
 
-def main(argv=None, db=query_db, prom=query_prom):
+def main(argv=None, db=query_db, prom=query_prom, clock=clock_offsets):
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch", required=True)
     ap.add_argument("--results", default=os.path.join(HERE, "..", "results"))
@@ -286,13 +324,12 @@ def main(argv=None, db=query_db, prom=query_prom):
         results, series, raws, problems = [], [], {}, []
         for run in runs:
             d = db(run, a.container)
-            raw, lag, listener, samples = prom(run, a.prometheus)
+            raw, lag, listener, samples, scrape = prom(run, a.prometheus)
             raws[run["run"]] = raw
-            r = analyze(run, d, lag, listener, samples)
+            r = analyze(run, d, lag, listener, samples, scrape)
             results.append(r); series.append((lag, listener, d["buckets"]))
-            p = check_samples(r)
-            if p:
-                problems.append(p)
+            problems += [p for p in (check_samples(r), check_scrape(r, run)) if p]
+        offsets = clock(a.container, a.prometheus)
     except (OSError, ValueError, KeyError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as e:
         print(f"consumer_stats.py: {e}", file=sys.stderr)
         return 1
@@ -300,7 +337,7 @@ def main(argv=None, db=query_db, prom=query_prom):
         json.dump(raws, f, ensure_ascii=False)
     write_csv(os.path.join(out, "인출.csv"), runs, series)
     with open(os.path.join(out, "인출.md"), "w", encoding="utf-8") as f:
-        f.write(render(a.batch, env, runs, results, stage_rows(results), problems))
+        f.write(render(a.batch, env, runs, results, stage_rows(results), problems, offsets))
     for p in problems:
         print(f"consumer_stats.py: {p}", file=sys.stderr)
     return 1 if problems else 0

@@ -134,17 +134,18 @@ class Main(unittest.TestCase):
         return dict(success=1000, processed=1010, processed_load=900, rejected=5, reserved=1003, first=run["start"] + 1.0,
                     last=run["start"] + 11.0, buckets={run["start"] - run["start"] % 5: 400})
 
-    def fake_prom(self, lag=(0, 0, 0, 0), samples=3, listener=True):
+    def fake_prom(self, lag=(0, 0, 0, 0), samples=3, listener=True, scrape_after=3):
         def f(run, base):
             pts = lag_points(lag, run["start"])
             lis = {"success": [(run["start"], 0.0), (run["start"] + 15, 1010.0)]} if listener else {}
             if not lis:
                 raise RuntimeError("리스너 시계열이 없음")
-            return {"raw": run["run"]}, pts, lis, samples
+            return {"raw": run["run"]}, pts, lis, samples, run["end"] + run["drain"] + scrape_after
         return f
 
     def run_main(self, **kw):
-        return cs.main(["--batch", "b1", "--results", self.root], db=kw.get("db", self.fake_db), prom=kw.get("prom", self.fake_prom()))
+        return cs.main(["--batch", "b1", "--results", self.root], db=kw.get("db", self.fake_db), prom=kw.get("prom", self.fake_prom()),
+                       clock=lambda c, b: dict(db=0.25, prom=-0.5))
 
     def test_normal_outputs(self):
         self.assertEqual(self.run_main(), 0)
@@ -188,6 +189,30 @@ class Main(unittest.TestCase):
         run = dict(run="r", start=T0, end=T0 + 10, drain=5)
         with self.assertRaises(RuntimeError):
             cs.query_prom(run, "http://x", get=lambda base, path, params: call(path, params))
+
+    def test_listener_read_one_scrape_after_window(self):
+        # 소진 확인 뒤 수집된 누적값까지 읽어야 마지막 처리분이 빠지지 않는다
+        seen = {}
+        def call(base, path, params):
+            if "listener" in params.get("query", "") and path.endswith("query_range"):
+                seen["end"] = params["end"]
+            return prom_resp([{"metric": {"result": "success"}, "values": [[T0, "1"]]}]) if path.endswith("query_range") else prom_resp([{"value": [T0, "3"]}])
+        run = dict(run="r", start=T0, end=T0 + 10, drain=5)
+        cs.query_prom(run, "http://x", get=call)
+        self.assertEqual(seen["end"], T0 + 15 + cs.STEP)
+
+    def test_time_basis_is_written(self):
+        self.assertEqual(self.run_main(), 0)
+        md = read(os.path.join(self.out, "인출.md"))
+        self.assertIn("## 시간 기준", md)
+        self.assertIn(cs.kst(T0 + 100 + 18), md)  # r1 리스너 최종 수집 = 소진 확인(T0+100+15) + 3초
+        self.assertIn("DB 컨테이너 - 이 PC +0.25초", md)
+        self.assertIn("한계: 두 지표의 시간 기준이 달라", md)
+
+    def test_listener_scrape_before_window_end_fails(self):
+        # 소진 확인 뒤 수집이 없으면 마지막 처리분이 빠졌을 수 있어 실패
+        self.assertEqual(self.run_main(prom=self.fake_prom(scrape_after=0)), 1)
+        self.assertIn("리스너 최종 수집 시각이 소진 확인", read(os.path.join(self.out, "인출.md")))
 
     def test_sample_gap_fails(self):
         # 측정 구간 15초 / 5초 = 기대 3개. 2개는 90% 미만 → 실패

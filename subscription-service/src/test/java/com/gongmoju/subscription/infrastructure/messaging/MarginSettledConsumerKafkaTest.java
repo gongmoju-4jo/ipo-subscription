@@ -1,6 +1,7 @@
 package com.gongmoju.subscription.infrastructure.messaging;
 
 import com.gongmoju.subscription.application.subscription.SubscriptionRefundService;
+import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -23,6 +24,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -34,13 +36,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.verify;
 
 /**
- * Kafka를 거쳐 {@code margin.settled} Consumer가 청약을 {@code REFUNDED}로 바꾸고, 중복 결과를 무시하고, 잘못된 메시지를 재시도 없이 DLT로 보내는지
+ * Kafka를 거쳐 {@code margin.settled} Consumer가 청약을 {@code REFUNDED}로 바꾸고, 중복 결과를 무시하고, 낙관적 락 충돌은 재시도해서 처리하고, 잘못된 메시지를 재시도 없이 DLT로 보내는지
  * 실제 Kafka와 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
  * 메시지 키를 테스트마다 다른 계좌 ID(토픽 키와 같은 값)로 보내서 같은 토픽을 공유해도 서로 영향이 없고, DLT도 이 키로 구분함.
  * 클래스가 끝나면 컨텍스트를 닫아서({@code @DirtiesContext}), 종료된 Kafka 컨테이너에 리스너와 Producer가 계속 접속을 시도하지 않게 함.
@@ -86,6 +94,10 @@ class MarginSettledConsumerKafkaTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    // 낙관적 락 충돌 재시도 테스트에서 청약 조회 직후에 끼어들기 위함. 끼어들지 않는 테스트에서는 실제 메서드를 그대로 호출함 (테스트가 끝나면 초기화됨)
+    @MockitoSpyBean
+    private SubscriptionRepository subscriptionRepository;
 
     private UUID ipoId;
     private UUID accountId;
@@ -197,6 +209,38 @@ class MarginSettledConsumerKafkaTest {
                 .containsEntry("allocated_quantity", 3L)
                 .containsEntry("allocated_amount", 45_000L)
                 .containsEntry("refund_amount", MARGIN_AMOUNT - 45_000);
+        assertThat(readDlt(Duration.ofSeconds(3), Integer.MAX_VALUE)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("처리 중에 다른 트랜잭션이 같은 청약을 먼저 바꿔 낙관적 락 충돌이 나면, Consumer가 재시도해서 REFUNDED로 끝나고 DLT로 가지 않는다")
+    void consume_retriesAndRefunds_whenOptimisticLockConflicts() {
+        // given: 첫 조회 직후 한 번만, 다른 스레드(다른 DB 연결)에서 같은 청약의 version을 올리고 커밋함 (다른 Consumer가 먼저 커밋한 상황).
+        // 같은 스레드에서 올리면 Consumer 트랜잭션의 연결을 같이 써서 충돌이 아니라 같은 트랜잭션 안의 변경이 됨
+        AtomicBoolean conflictInjected = new AtomicBoolean(false);
+        doAnswer(invocation -> {
+            Object result = invocation.callRealMethod();
+            if (subscriptionId.equals(invocation.getArgument(0)) && conflictInjected.compareAndSet(false, true)) {
+                CompletableFuture.runAsync(() -> jdbcTemplate.update(
+                        "UPDATE subscription SET version = version + 1 WHERE subscription_id = ?", subscriptionId)).join();
+            }
+            return result;
+        }).when(subscriptionRepository).findById(any());
+        UUID eventId = UUID.randomUUID();
+
+        // when
+        send(validJson(eventId, 45_000, MARGIN_AMOUNT - 45_000));
+
+        // then: 첫 시도는 커밋할 때 낙관적 락 충돌로 롤백되고(처리 기록도 롤백), 재시도에서 바뀐 version을 읽어 환불 완료함
+        await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> assertThat(status()).isEqualTo("REFUNDED"));
+        assertThat(conflictInjected).isTrue();
+        verify(subscriptionRepository, atLeast(2)).findById(subscriptionId);
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+                "SELECT refund_amount, version FROM subscription WHERE subscription_id = ?", subscriptionId);
+        assertThat(row)
+                .containsEntry("refund_amount", MARGIN_AMOUNT - 45_000)
+                .containsEntry("version", 2L);
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM processed_event WHERE event_id = ?", Integer.class, eventId)).isEqualTo(1);
         assertThat(readDlt(Duration.ofSeconds(3), Integer.MAX_VALUE)).isEmpty();
     }
 

@@ -411,7 +411,7 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
 # 워밍업: 측정 앞의 독립 단계. WARM_RATE로 일정한 부하를 걸고(모든 요청이 확정되게 공모주를 돌림),
 # verify/warmup.py가 응답 시간 추세가 평평해졌다고 판정하면 k6를 멈춘다. 그 뒤 소진을 확인하고 쉰다
 run_warmup() {
-  local run="$BATCH-W" first t0 t1 d drc kpid wrc krc
+  local run="$BATCH-W" first t0 t1 d drain_end drc kpid wrc krc
   first="${WARM_IPOS%%,*}"
   ensure_token $((WARM_MAX + 300))
   mkdir -p "$DIR/results/$run"
@@ -438,14 +438,15 @@ run_warmup() {
   [ -f "$DIR/results/$run/summary.json" ] || die 8 "$run summary.json 없음"
   d="$(drain "$WARM_IPOS" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
-  echo "$run,W,warmup,,$WARM_RATE,$((t1 - t0)),,$(printf '%s' "$WARM_IPOS" | tr ',' ';'),$t0,$t1,$d" >> "$MANIFEST"
+  drain_end="$(date +%s)"
+  echo "$run,W,warmup,,$WARM_RATE,$((t1 - t0)),,$(printf '%s' "$WARM_IPOS" | tr ',' ';'),$t0,$t1,$d,$drain_end" >> "$MANIFEST"
   slowq_run "$run"
   say "워밍업 끝: $((t1 - t0))초, 요청 $(json_metric "$DIR/results/$run/summary.json" http_reqs count 2>/dev/null)건, $(tail -1 "$OUT/warmup.csv" | cut -d, -f4)ms (warmup.csv). 소진 대기=${d}초. ${GAP}초 대기 (요청 없음)"
   sleep "$GAP"
 }
 
 run_s0() { # 인자: run_id, phase(warmup|measure)
-  local run="$1" phase="$2" ipo t0 t1 d drc rate
+  local run="$1" phase="$2" ipo t0 t1 d drain_end drc rate
   ensure_token 300
   [ "$S0_NEXT" -lt "${#S0_IPOS[@]}" ] || die 11 "S0 공모주가 모자람"
   ipo="${S0_IPOS[$S0_NEXT]}"; S0_NEXT=$((S0_NEXT + 1))
@@ -454,7 +455,8 @@ run_s0() { # 인자: run_id, phase(warmup|measure)
   t1="$(date +%s)"
   d="$(drain "$ipo" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
-  echo "$run,S0,$phase,,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d" >> "$MANIFEST"
+  drain_end="$(date +%s)"
+  echo "$run,S0,$phase,,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d,$drain_end" >> "$MANIFEST"
   slowq_run "$run"
   LAST_AVG="$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg)" || die 1 "$run 평균 응답을 읽지 못함"
   rate="$(json_metric "$DIR/results/$run/summary.json" http_reqs rate)" || rate="?"
@@ -468,7 +470,7 @@ plan_ipos() { # 인자: plan 파일, 속도, 반복 번호
 }
 
 run_s1() { # 인자: 속도, 반복 번호, 마지막 실행이면 1
-  local rate="$1" rep="$2" last="$3" run ipos first t0 t1 d drc
+  local rate="$1" rep="$2" last="$3" run ipos first t0 t1 d drain_end drc
   run="$BATCH-S1-$rate-r$rep"
   ipos="$(plan_ipos "$PLAN" "$rate" "$rep")" || die 11 "S1 ${rate}건/초 ${rep}회차 공모주 목록 없음"
   first="${ipos%%,*}"
@@ -480,7 +482,8 @@ run_s1() { # 인자: 속도, 반복 번호, 마지막 실행이면 1
   t1="$(date +%s)"
   d="$(drain "$ipos" "$DRAIN_TIMEOUT")"; drc=$?
   [ "$drc" -eq 0 ] || die 6 "$run 소진 대기 실패 (1 시간 초과, 2 조회 실패, 3 인자): $drc"
-  echo "$run,S1,measure,$rep,$rate,$DUR,$((rate * DUR)),$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d" >> "$MANIFEST"
+  drain_end="$(date +%s)"
+  echo "$run,S1,measure,$rep,$rate,$DUR,$((rate * DUR)),$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d,$drain_end" >> "$MANIFEST"
   slowq_run "$run"
   say "$run 처리량=$(json_metric "$DIR/results/$run/summary.json" http_reqs rate 2>/dev/null)건/초 avg=$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg 2>/dev/null)ms 소진 대기=${d}초"
   if [ "$last" != 1 ]; then say "${GAP}초 대기 (요청 없음)"; sleep "$GAP"; fi
@@ -638,7 +641,7 @@ main() {
     done
   done
   say "공모주 생성: 워밍업 ${warm_cost}개(공모가 $S1_PRICE), S0 ${#S0_IPOS[@]}개(공모가 $S0_PRICE), S1 $(wc -l < "$PLAN" | tr -d ' ')묶음(단계 ${#ST[@]}개 x ${S1_REPEAT}회, 묶음당 $(awk 'NR == 1 {print gsub(/,/, ",") + 1}' "$PLAN")~$(awk 'END {print gsub(/,/, ",") + 1}' "$PLAN")개, 공모가 $S1_PRICE)"
-  echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s" > "$MANIFEST"
+  echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s,drain_end" > "$MANIFEST"
   # 첫 실행의 쿼리 통계에 준비 단계(공모주 생성 등)가 섞이지 않게 비운다. 이후 실행마다 slowq_run이 남기고 비운다
   slowq "$OUT/.slow-queries-reset.out" 1 || die 9 "쿼리 통계 초기화 실패 (.slow-queries-reset.out)"
 

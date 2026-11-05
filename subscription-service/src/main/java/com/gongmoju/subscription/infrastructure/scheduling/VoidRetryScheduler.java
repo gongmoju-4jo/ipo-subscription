@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 /**
@@ -109,10 +110,7 @@ class VoidRetryScheduler {
                 }
             }
             if (logged > 0) {
-                long total = Math.max(countExhausted(lastRequestedBefore, logged), logged);
-                log.error("반환 재요청 최대 횟수 도달 청약 요약. 총 {}건, 상세 로그 {}건, 상세에서 빠진 {}건. 빠진 청약은 DB에서 조회: "
-                                + "status IN ('COMPENSATING', 'CANCEL_REQUESTED') AND attempts >= {} AND last_requested_at < now() - 응답 시간 (오래된 순 뒤쪽)",
-                        total, logged, total - logged, properties.maxAttempts());
+                logSummary(lastRequestedBefore, logged);
             }
             lastAlertAt = now;
         } catch (RuntimeException e) {
@@ -120,13 +118,29 @@ class VoidRetryScheduler {
         }
     }
 
-    // 총 건수 조회가 실패해도 상세 로그는 이미 남았으므로 알림을 막지 않음 (상세 건수를 총 건수로 대신함)
-    private long countExhausted(Instant lastRequestedBefore, long fallback) {
+    // 요약 로그. 총 건수 조회가 실패하면 총 건수와 빠진 건수를 확정해서 기록하지 않고 확인 불가로 표시함
+    // (상세 건수를 총 건수로 대신하면 실제 대상이 더 있어도 "빠진 0건"으로 보임)
+    private void logSummary(Instant lastRequestedBefore, int logged) {
+        OptionalLong total = countExhausted(lastRequestedBefore);
+        String lookup = "status IN ('COMPENSATING', 'CANCEL_REQUESTED') AND attempts >= " + properties.maxAttempts()
+                + " AND last_requested_at < now() - 응답 시간 (오래된 순 뒤쪽)";
+        if (total.isPresent()) {
+            long all = Math.max(total.getAsLong(), logged);
+            log.error("반환 재요청 최대 횟수 도달 청약 요약. 총 {}건, 상세 로그 {}건, 상세에서 빠진 {}건. 빠진 청약은 DB에서 조회: {}",
+                    all, logged, all - logged, lookup);
+        } else {
+            log.error("반환 재요청 최대 횟수 도달 청약 요약. 총 건수 조회에 실패해 총 건수와 상세에서 빠진 건수는 확인 불가. 상세 로그 {}건. "
+                    + "상세에서 빠진 청약이 있을 수 있으니 DB에서 조회: {}", logged, lookup);
+        }
+    }
+
+    // 총 건수 조회가 실패해도 상세 로그는 이미 남았으므로 알림을 막지 않음. 실패하면 값을 만들지 않고 빈 값을 돌려줌
+    private OptionalLong countExhausted(Instant lastRequestedBefore) {
         try {
-            return subscriptionRepository.countExhaustedVoid(lastRequestedBefore, properties.maxAttempts());
+            return OptionalLong.of(subscriptionRepository.countExhaustedVoid(lastRequestedBefore, properties.maxAttempts()));
         } catch (RuntimeException e) {
-            log.warn("반환 재요청 최대 횟수 도달 총 건수를 조회하지 못함. 상세 건수로 대신함.", e);
-            return fallback;
+            log.warn("반환 재요청 최대 횟수 도달 총 건수를 조회하지 못함.", e);
+            return OptionalLong.empty();
         }
     }
 }

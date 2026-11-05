@@ -174,8 +174,8 @@ class VoidRetrySchedulerTest {
     }
 
     @Test
-    @DisplayName("총 건수 조회가 실패해도 예외를 밖으로 던지지 않고 상세 로그와 상세 건수 기준 요약 로그를 남긴다")
-    void retryStaleVoid_fallsBackToDetailCount_whenCountFails() {
+    @DisplayName("총 건수 조회가 실패하면 예외를 던지지 않고 상세 로그를 남기며, 요약 로그에는 총 건수와 빠진 건수를 확인 불가로 표시하고 상세 건수만 기록한다")
+    void retryStaleVoid_marksTotalUnknown_whenCountFails() {
         // given
         UUID exhausted = UUID.randomUUID();
         when(subscriptionRepository.findExhaustedVoidIds(THRESHOLD, MAX_ATTEMPTS, BATCH_SIZE)).thenReturn(List.of(exhausted));
@@ -189,7 +189,10 @@ class VoidRetrySchedulerTest {
         List<ILoggingEvent> errors = errorLogs();
         assertThat(errors).hasSize(2);
         assertThat(errors.get(0).getFormattedMessage()).contains(exhausted.toString());
-        assertThat(errors.get(1).getFormattedMessage()).contains("총 1건", "빠진 0건");
+        String summary = errors.get(1).getFormattedMessage();
+        assertThat(summary).contains("확인 불가", "상세 로그 1건");
+        // 조회에 실패했는데 총 건수나 빠진 건수를 확정해서 기록하면 안 됨 (실제 대상이 더 있어도 "빠진 0건"으로 보이기 때문)
+        assertThat(summary).doesNotContain("총 1건", "빠진 0건");
     }
 
     @Test

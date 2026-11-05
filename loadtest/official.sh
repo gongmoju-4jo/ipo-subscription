@@ -52,6 +52,8 @@
 #                   PostgreSQL, Kafka, k6를 포함한 모든 컨테이너의 CPU, 메모리를 docker-stats.raw에 남기고, 후처리에서
 #                   docker-stats.csv와 자원.md(실행마다 k6 구간의 컨테이너별 최대)로 바꾼다. 조회도 CPU를 쓰므로 개선 전후는 같은 값으로 비교한다
 # 쿼리 통계: 실행마다 소진 확인 뒤 pg_stat_statements(loadtest/sql/slow-queries.sql)를 results/<run_id>/slow-queries.txt에 남기고 비운다
+# autovacuum: 첫 실행 직전과 실행마다 소진 확인 뒤 테이블별 autovacuum, autoanalyze 누적 횟수를 남기고(autovacuum-before.csv,
+#   results/<run_id>/autovacuum.csv), 후처리에서 실행별 차이를 autovacuum.md로 정리한다 (verify/autovacuum.py)
 #   (그 실행의 요청과 소진까지의 Consumer 쿼리. 회차 사이 토큰 재발급이 끼면 그 로그인 쿼리도 다음 실행에 섞인다)
 #
 # 종료 코드: 0 정상 / 2 안정 판정 미도달 / 3 토큰 / 4 예수금 / 5 버전(dirty, jar 불일치) / 6 소진 대기 / 7 기동 / 8 k6 / 9 사전 점검
@@ -94,7 +96,7 @@ SYN_RUNS=4                 # S3, S4 회원이 청약하는 횟수 = 경로 예�
 SYN_AMOUNT=150000          # S4 행동 CSV를 만든 청약 금액 (공모가 15,000원 x 10주. judge.py도 이 금액으로 기대값을 계산한다)
 
 BATCH=""; OUT=""; LOG=""; MANIFEST=""; PLAN=""; LOCK="$DIR/results/.official.lock"; LOCK_OWNED=""
-PY=""; COMPOSE=(); K6_NET=""; TOKEN_AT=0; TOKEN_N=0; S0_IPOS=(); S0_NEXT=0; WARM_IPOS=""; LAST_AVG=""; USERS=0; STATS_PID=""; SLOWQ_FAILS=0
+PY=""; COMPOSE=(); K6_NET=""; TOKEN_AT=0; TOKEN_N=0; S0_IPOS=(); S0_NEXT=0; WARM_IPOS=""; LAST_AVG=""; USERS=0; STATS_PID=""; SLOWQ_FAILS=0; AUTOVAC_FAILS=0
 HAS_S1=0; HAS_S3=0; HAS_S4=0; S3_IPOS=(); S3_NEXT=0; S4_IPOS=(); S4_NEXT=0; S4_USERS=0
 
 # ---------- 공통 ----------
@@ -378,6 +380,25 @@ slowq_run() { # 인자: run_id
   SLOWQ_FAILS=$((SLOWQ_FAILS + 1)); return 0
 }
 
+# autovacuum, autoanalyze 누적 횟수 (pg_stat_user_tables). PostgreSQL은 바꾸거나 지운 행의 옛 버전(죽은 행)을 남기고
+# autovacuum이 백그라운드에서 치운다 (autoanalyze는 쿼리 계획용 통계 갱신). 측정 중 행 변경이 많아 도중에 자동으로 돌고,
+# 돌 때 CPU, IO를 써서 그 실행이 느려질 수 있다. 누적값만 남는 통계라 실행마다 찍어 두고, 후처리에서 앞 기록과의 차이로
+# 어느 실행과 겹쳤는지 정리한다 (verify/autovacuum.py → autovacuum.md)
+autovac() { # 인자: 출력 파일 (autovacuum.csv). 조회 실패, 빈 결과면 실패
+  local out
+  out="$(docker exec -i "$PG_CONTAINER" psql -U postgres -d ipo -v ON_ERROR_STOP=1 -qtA -F ',' -c \
+    "select schemaname || '.' || relname, n_live_tup, n_dead_tup, autovacuum_count, autoanalyze_count, coalesce(extract(epoch from last_autovacuum)::bigint::text, ''), coalesce(extract(epoch from last_autoanalyze)::bigint::text, '') from pg_stat_user_tables order by 1")" || return 1
+  out="$(printf '%s\n' "$out" | tr -d '\r' | awk 'NF')"
+  [ -n "$out" ] || return 1
+  { echo "table,live_tup,dead_tup,autovacuum_count,autoanalyze_count,last_autovacuum,last_autoanalyze"; printf '%s\n' "$out"; } > "$1"
+}
+# 실행 하나가 끝나고 소진까지 확인한 뒤 부른다. 실패해도 측정은 이어 가고, 후처리에서 실패로 센다 (종료 코드 10)
+autovac_run() { # 인자: run_id
+  autovac "$DIR/results/$1/autovacuum.csv" && return 0
+  say "$1 autovacuum 기록 실패 (results/$1/autovacuum.csv)"
+  AUTOVAC_FAILS=$((AUTOVAC_FAILS + 1)); return 0
+}
+
 # 컨테이너별 CPU, 메모리 상한과 JVM 옵션을 env.txt에 남긴다 ("자원 <이름> cpu=<코어> mem=<바이트> ..."). 0은 상한 없음
 record_limits() {
   local c line
@@ -469,6 +490,7 @@ run_warmup() {
   drain_end="$(date +%s)"
   echo "$run,W,warmup,,$WARM_RATE,$((t1 - t0)),,$(printf '%s' "$WARM_IPOS" | tr ',' ';'),$t0,$t1,$d,$drain_end" >> "$MANIFEST"
   slowq_run "$run"
+  autovac_run "$run"
   say "워밍업 끝: $((t1 - t0))초, 요청 $(json_metric "$DIR/results/$run/summary.json" http_reqs count 2>/dev/null)건, $(tail -1 "$OUT/warmup.csv" | cut -d, -f4)ms (warmup.csv). 소진 대기=${d}초. ${GAP}초 대기 (요청 없음)"
   sleep "$GAP"
 }
@@ -581,6 +603,7 @@ run_one() { # 인자: 시나리오, run_id, phase(warmup|measure)
   drain_end="$(date +%s)"
   echo "$run,$scen,$phase,,,,$((S0_VUS * S0_ITERS)),$ipo,$t0,$t1,$d,$drain_end" >> "$MANIFEST"
   slowq_run "$run"
+  autovac_run "$run"
   LAST_AVG="$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg)" || die 1 "$run 평균 응답을 읽지 못함"
   rate="$(json_metric "$DIR/results/$run/summary.json" http_reqs rate)" || rate="?"
   say "$run ($phase) 처리량=${rate}건/초 avg=${LAST_AVG}ms 소진 대기=${d}초. ${GAP}초 대기 (요청 없음)"
@@ -608,6 +631,7 @@ run_s1() { # 인자: 속도, 반복 번호, 마지막 실행이면 1
   drain_end="$(date +%s)"
   echo "$run,S1,measure,$rep,$rate,$DUR,$((rate * DUR)),$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d,$drain_end" >> "$MANIFEST"
   slowq_run "$run"
+  autovac_run "$run"
   say "$run 처리량=$(json_metric "$DIR/results/$run/summary.json" http_reqs rate 2>/dev/null)건/초 avg=$(json_metric "$DIR/results/$run/summary.json" http_req_duration avg 2>/dev/null)ms 소진 대기=${d}초"
   if [ "$last" != 1 ]; then say "${GAP}초 대기 (요청 없음)"; sleep "$GAP"; fi
 }
@@ -652,6 +676,11 @@ post_process() {
      --s4-prefix "$S4_PREFIX" > "$OUT/판정.md" 2> "$OUT/판정.err" \
     || { say "후처리: judge.py 실패 (판정.err)"; fails=$((fails + 1)); }
   [ "$SLOWQ_FAILS" -eq 0 ] || { say "후처리: 쿼리 통계 조회 실패 ${SLOWQ_FAILS}번 (진행.log)"; fails=$((fails + SLOWQ_FAILS)); }
+  # 실행별 autovacuum, autoanalyze (앞 기록과의 차이). 기록이 없는 실행이 있으면 실패로 센다
+  py "$(pypath "$DIR/verify/autovacuum.py")" "$(pypath "$MANIFEST")" --results "$(pypath "$DIR/results")" --before "$(pypath "$OUT/autovacuum-before.csv")" \
+    > "$OUT/autovacuum.md" 2> "$OUT/autovacuum.err" \
+    || { say "후처리: autovacuum 정리 실패 (autovacuum.err)"; fails=$((fails + 1)); }
+  [ "$AUTOVAC_FAILS" -eq 0 ] || { say "후처리: autovacuum 기록 실패 ${AUTOVAC_FAILS}번 (진행.log)"; fails=$((fails + AUTOVAC_FAILS)); }
   if [ "$STATS_INTERVAL" -gt 0 ]; then
     py "$(pypath "$DIR/verify/docker_stats.py")" "$(pypath "$OUT/docker-stats.raw")" --manifest "$(pypath "$MANIFEST")" --env "$(pypath "$OUT/env.txt")" \
       --csv "$(pypath "$OUT/docker-stats.csv")" --md "$(pypath "$OUT/자원.md")" 2> "$OUT/자원.err" \
@@ -812,6 +841,7 @@ main() {
   echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s,drain_end" > "$MANIFEST"
   # 첫 실행의 쿼리 통계에 준비 단계(공모주 생성 등)가 섞이지 않게 비운다. 이후 실행마다 slowq_run이 남기고 비운다
   slowq "$OUT/.slow-queries-reset.out" 1 || die 9 "쿼리 통계 초기화 실패 (.slow-queries-reset.out)"
+  autovac "$OUT/autovacuum-before.csv" || die 9 "autovacuum 기록 실패 (pg_stat_user_tables, autovacuum-before.csv)"
 
   # 4. 워밍업(독립 단계, 시간 기준) → [S3, S4 경로 예열] → S0(, S3, S4 번갈아) 측정 3회
   run_warmup

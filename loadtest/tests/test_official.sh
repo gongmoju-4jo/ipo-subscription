@@ -456,7 +456,36 @@ unset -f py bash
 [ "$rc" = 0 ] && ok "post_process: S3, S4 실행으로 끝까지 돈다" || bad "post_process S3 rc" "$rc"
 [ "$(grep check_requests.py "$CALLS" | grep -c -- "--expect-requests 1000")" = 2 ] && ok "post_process: S3, S4 요청 분류에도 예상 요청 수(1000)를 넘긴다" || bad "post_process S3 expect" "$(grep check_requests "$CALLS")"
 grep -q -- "judge.py.*--s4-prefix zz" "$CALLS" && ok "post_process: judge.py에 S4_PREFIX를 넘긴다" || bad "post_process s4-prefix" "$(grep judge "$CALLS")"
+grep "autovacuum.py" "$CALLS" | grep -q -- "manifest.csv --results .*results --before .*autovacuum-before.csv" \
+  && ok "post_process: autovacuum.py로 실행별 autovacuum을 정리한다 (manifest, results, 첫 실행 직전 기록)" || bad "post_process autovacuum" "$(grep autovacuum "$CALLS")"
+# autovacuum.py가 실패하거나(기록 없는 실행) 실행 중 기록이 실패했으면 후처리 실패로 센다
+py()   { [[ "$*" == *autovacuum.py* ]] && return 1; return 0; }
+bash() { return 0; }
+( post_process ) 2>/dev/null; rc=$?
+[ "$rc" = 1 ] && ok "post_process: autovacuum.py 실패는 후처리 실패 (rc 1)" || bad "post_process autovacuum 실패" "rc=$rc"
+py()   { return 0; }
+AUTOVAC_FAILS=2; ( post_process ) 2>/dev/null; rc=$?; AUTOVAC_FAILS=0
+[ "$rc" = 2 ] && ok "post_process: 실행 중 autovacuum 기록 실패 수를 후처리 실패로 센다 (rc 2)" || bad "post_process AUTOVAC_FAILS" "rc=$rc"
+unset -f py bash
+py() { "$PY" -X utf8 "$@"; }   # unset -f py가 official.sh의 py도 지우므로 되돌린다
 DIR="$DIR_SAVE"; OUT="$OUT_SAVE"; MANIFEST="$MANIFEST_SAVE"
+
+# autovac: pg_stat_user_tables 누적 횟수 기록. 조회 실패, 빈 결과는 실패 (0으로 넘기지 않음), CRLF 출력은 정리
+AV="$(mktemp -d)"
+( docker() { printf 'account.margin,10,2,1,3,1793887501,\r\nsubscription.outbox,5,0,0,1,,1793887816\r\n'; }   # 표준입력을 읽지 않는다 (autovac은 넘기는 입력이 없다)
+  autovac "$AV/ok.csv"; echo "$?" > "$AV/rc-ok"
+  docker() { echo "connection refused" >&2; return 2; }
+  autovac "$AV/fail.csv"; echo "$?" > "$AV/rc-fail"
+  docker() { printf '\r\n'; }
+  autovac "$AV/empty.csv"; echo "$?" > "$AV/rc-empty" ) 2>/dev/null
+[ "$(cat "$AV/rc-ok")" = 0 ] && [ "$(head -1 "$AV/ok.csv")" = "table,live_tup,dead_tup,autovacuum_count,autoanalyze_count,last_autovacuum,last_autoanalyze" ] \
+  && [ "$(sed -n 2p "$AV/ok.csv")" = "account.margin,10,2,1,3,1793887501," ] && [ "$(tr -dc '\r' < "$AV/ok.csv" | wc -c | tr -d ' ')" = 0 ] \
+  && ok "autovac: 머리줄 + 테이블별 행, CRLF 정리" || bad "autovac 정상" "rc=$(cat "$AV/rc-ok") $(cat -A "$AV/ok.csv" 2>&1 | head -3)"
+[ "$(cat "$AV/rc-fail")" = 1 ] && [ ! -e "$AV/fail.csv" ] && ok "autovac: docker 실패 → 실패, 파일 안 만듦" || bad "autovac 실패" "rc=$(cat "$AV/rc-fail")"
+[ "$(cat "$AV/rc-empty")" = 1 ] && [ ! -e "$AV/empty.csv" ] && ok "autovac: 빈 결과 → 실패" || bad "autovac 빈 결과" "rc=$(cat "$AV/rc-empty")"
+AF="$(mktemp -d)"
+( DIR="$AF"; mkdir -p "$AF/results/b-S0-r1"; autovac() { return 1; }; autovac_run b-S0-r1; echo "$AUTOVAC_FAILS" > "$AF/n" ) 2>/dev/null
+[ "$(cat "$AF/n")" = 1 ] && ok "autovac_run: 기록 실패는 측정을 멈추지 않고 실패 수만 센다" || bad "autovac_run" "$(cat "$AF/n")"
 
 # ---- Mac 기본 bash 3.2: 변수 바로 뒤에 ASCII가 아닌 문자(한글 등)가 붙으면 이름의 일부로 읽어 set -u에서 멈춘다 → 항상 ${VAR} ----
 na_scan() { # 인자: 저장소 루트. 변수 바로 뒤에 비ASCII 문자가 붙은 줄을 "파일:줄"로 출력

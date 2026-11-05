@@ -28,7 +28,7 @@
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
 | `loadtest/verify/consumer_stats.py` | 정식 측정이 끝난 뒤 따로 실행. S1의 증거금 인출 Consumer 처리량, 랙 추이, 오류율, 병목 의심 단계 (`인출.md`, `인출.csv`, `인출-prometheus.json`). `python loadtest/verify/consumer_stats.py --batch <이름>` |
-| `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/synthetic/` | S3, S4 Synthetic Data: LLM 프롬프트와 응답 원문, 행동 CSV, 생성 코드, 검증(`validate.py`). 6장, `loadtest/synthetic/README.md` |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 (`--behavior`로 S3 두 번째 계좌, S4 입금액을 행동 CSV에서 읽음) |
 | `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
@@ -41,6 +41,7 @@
 | `loadtest/stage_table.py` | S1 단계별 표 생성 (목표 속도, 실제 처리량, 지연, 실패율) |
 | `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
 | `loadtest/sql/slow-queries.sql` | 슬로우 쿼리 확인 |
+| `loadtest/verify/autovacuum.py` | 정식 측정 실행별 autovacuum, autoanalyze 정리 (`autovacuum.md`) |
 
 모니터링은 `docker-compose up`에 함께 올라옵니다: Prometheus `http://localhost:9090`, Grafana `http://localhost:3000` (계정 `admin`, 비밀번호는 `.env`의 `GRAFANA_ADMIN_PASSWORD`). Grafana에 "측정 대시보드"가 자동으로 등록됩니다.
 
@@ -190,6 +191,7 @@ SCENARIOS=S0,S3,S4 BASELINE_DIR=loadtest/data/baseline-s34 bash loadtest/officia
 9. 측정이 끝난 DB를 `db-after.dump`로 남깁니다(`DB_DUMP=1`). 다음 측정은 기준 스냅샷으로 되돌리므로 이번 측정의 원본 행은 여기에만 남습니다.
 
 - 쿼리 통계: 첫 실행 직전에 `pg_stat_statements`를 비우고(`loadtest/sql/slow-queries.sql`), 실행마다 소진 확인 뒤 그 실행의 통계를 `slow-queries.txt`에 남기고 다시 비웁니다. 요청과 소진까지의 Consumer 쿼리가 들어가고, 실행 사이에 토큰 재발급이 끼면 그 로그인 쿼리도 다음 실행에 섞입니다. 조회가 실패해도 측정은 이어 가고 후처리 실패(종료 코드 10)로 셉니다. `compose.perf.yml`로 띄우지 않아 확장을 쓸 수 없으면 시작 전에 멈춥니다(종료 코드 9).
+- autovacuum: PostgreSQL은 바꾸거나 지운 행의 옛 버전(죽은 행)을 남기고, autovacuum이 쌓인 죽은 행을 백그라운드에서 치웁니다 (autoanalyze는 쿼리 계획용 통계 갱신). 측정 중 청약 상태 변경, outbox 발행 표시처럼 행 변경이 많아 측정 도중에 자동으로 돌고, 돌 때 CPU, IO를 써서 그 실행이 느려질 수 있습니다. 통계(`pg_stat_user_tables`)에는 누적 횟수와 마지막 시각만 남아서, 첫 실행 직전과 실행마다 소진 확인 뒤 테이블별 누적 횟수를 남기고(`autovacuum-before.csv`, 실행별 `autovacuum.csv`) 후처리에서 앞 기록과의 차이로 실행마다 돈 테이블을 `autovacuum.md`에 정리합니다. 차이에는 앞 실행 뒤 대기 시간도 들어가고, 통계 반영이 몇 초 늦을 수 있어 경계 근처의 1회는 앞뒤 실행으로 밀릴 수 있습니다. 기록이 실패해도 측정은 이어 가고 후처리 실패(종료 코드 10)로 셉니다.
 - **모든 부하 실행(S0 회차, S1 단계) 뒤에 이번 공모주의 `PENDING`/`COMPENSATING` 0, 필수 Consumer 그룹 lag 0, outbox 미발행 0을 확인하고 `GAP`초 쉰 뒤 다음 실행을 합니다.** 앞 실행의 처리 대기가 다음 실행의 G2에 섞이지 않게 하는 것은 소진 확인이 맡습니다. `GAP`(기본 30초)은 보고서의 서버 지표 구간(요청 구간 앞뒤 10초, Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도입니다. JVM GC(G1은 쉬는 동안 스스로 돌지 않음)와 DB 체크포인트는 대기로 피할 수 없습니다. 개선 전후를 비교할 때는 같은 `GAP`을 씁니다.
 - psql, Kafka, git, 토큰 재발급, k6 조회가 실패하면 0으로 보지 않고 중단합니다. Consumer lag은 `LOG-END-OFFSET - CURRENT-OFFSET`으로 계산하고(커밋 오프셋이 `-`인데 메시지가 있으면 대기로 셉니다), 필수 그룹(`REQUIRED_GROUPS`)이 없으면 실패입니다.
 - 토큰이 다음 실행 중에 만료될 것 같으면 실행 사이(요청 없는 구간)에 재발급하고 `GAP`초 쉽니다. 재발급 시점은 `진행.log`에 남습니다.
@@ -331,6 +333,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `docker-stats.raw` | docker stats 원본 (`<epoch초>\t<JSON>` 한 줄씩, 조회 실패는 `ERROR` 줄) |
 | `docker-stats.csv` | 위 원본을 숫자로 바꾼 표 (컨테이너별 CPU %(100% = 1코어), 메모리 사용·상한 바이트, PIDs, 네트워크, 디스크) |
 | `slow-queries-before.txt` | 측정 시작 전 `pg_stat_statements` 누적 (비우기 전, 기록용) |
+| `autovacuum-before.csv`, `autovacuum.md` | 첫 실행 직전 테이블별 autovacuum, autoanalyze 누적 횟수 / 실행별로 그 사이에 돈 테이블과 횟수 (4장) |
 | `자원.md`, `자원.err` | 실행마다 k6 구간의 컨테이너별 CPU 최대·평균, CPU 상한 대비, 메모리 최대. k6는 `k6-<run_id>` 컨테이너 |
 
 | 실행별 파일 | 내용 |
@@ -343,6 +346,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `report.md` | 회차 보고서 (k6 요약, 결과 분류, 서비스별 서버 지표) |
 | `prometheus.json` | 보고서의 서버 지표 질의와 응답 원본 |
 | `slow-queries.txt` | 이 실행 동안의 쿼리 통계 (총 실행 시간, 평균 실행 시간 상위 10개. 정식 측정) |
+| `autovacuum.csv` | 이 실행이 끝나고 소진 확인 뒤 테이블별 행 수, 죽은 행 수, autovacuum, autoanalyze 누적 횟수와 마지막 시각(epoch) (정식 측정) |
 
 - 합격 기준은 처리량 200건/초 이상, 평균 500ms 이하, 오류율 1% 미만이고, 목표 기준은 400건/초 이상, 평균 250ms 이하, p95 500ms 이하, 오류 0입니다. 기본은 합격 기준이고 `-e THRESHOLD=goal`로 목표 기준을 씁니다. 기준은 측정 전에 정하고 측정 후에는 바꾸지 않습니다.
 - 기준을 어기면 종료 코드 99입니다. **`summary.json`의 `thresholds`는 `true`가 위반, `false`가 통과**입니다.
@@ -387,7 +391,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
@@ -396,6 +400,7 @@ python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)
+python loadtest/tests/test_autovacuum.py  # 실행별 autovacuum 차이 (새 테이블, 기록 없는 실행, 통계 초기화, 형식 오류)
 python loadtest/tests/test_synthetic.py   # 행동 CSV 규칙과 기대 결과, 생성 코드 재실행 결과가 커밋한 CSV와 같은지, 생성 코드가 응답 원문과 같은지
 ```
 

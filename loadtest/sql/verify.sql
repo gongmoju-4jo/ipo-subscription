@@ -1,4 +1,4 @@
--- 정합성 검증 SQL 15종 (11~15는 배정, 정산 뒤 검사). 슈퍼유저로 접속해서 실행한다.
+-- 정합성 검증 SQL 19종 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족이 섞인 S3, S4용). 슈퍼유저로 접속해서 실행한다.
 -- 사용: psql -v ipo="'<이번 회차 공모주 ID>'" -f verify.sql    (verify.sh가 대신 실행한다)
 -- skip_global 변수를 주면 전체 계좌 기준인 2, 3번을 건너뛴다 (verify.sh가 공모주 여러 개를 한 번에 검사할 때 두 번째 공모주부터)
 \pset pager off
@@ -62,4 +62,24 @@ WITH req AS (SELECT COALESCE(SUM(requested_quantity), 0) AS requested FROM subsc
 SELECT m.subscription_id FROM account.margin m JOIN subscription.ipo i ON i.ipo_id = m.ipo_id WHERE m.ipo_id = :ipo AND i.status = 'ALLOCATED' AND m.status = 'PENDING';
 \else
 \echo '== 11~15. (건너뜀: 이 공모주의 배정 라운드가 DONE이 아니거나 공모주가 ALLOCATED가 아니다. 배정, 정산이 끝난 뒤 다시 실행한다)'
+\endif
+
+-- 16~19: 재전송, 이중청약, 잔액 부족 (S3, S4). 모두 위반만 행으로 나온다 (기대 0행). 어느 시나리오에서 돌려도 맞아야 하는 조건이다
+\echo '== 16. 같은 requestId의 청약이 2행 이상 (기대: 0행. 재전송이 새 청약으로 저장됨)'
+SELECT request_id, count(*) FROM subscription.subscription WHERE ipo_id = :ipo GROUP BY request_id HAVING count(*) > 1;
+
+\echo '== 17. 같은 청약의 증거금이 2개 이상 (기대: 0행. 재전송이나 메시지 중복으로 두 번 인출됨)'
+SELECT subscription_id, count(*) FROM account.margin WHERE ipo_id = :ipo GROUP BY subscription_id HAVING count(*) > 1;
+
+\echo '== 18. 회원당 유효 청약(REJECTED, CANCELLED 제외)이 2건 이상 (기대: 0행. 다른 계좌로 한 이중청약이 둘 다 유효함)'
+SELECT user_id, count(*) FROM subscription.subscription WHERE ipo_id = :ipo AND status NOT IN ('REJECTED', 'CANCELLED') GROUP BY user_id HAVING count(*) > 1;
+
+-- 19: 잔액 부족 거절이 없는 공모주에서는 대상이 없어 0행이 통과로 오해될 수 있으므로 건너뛴다고 출력한다.
+--     입금액 그대로인지(돈이 전혀 안 움직였는지)는 행동 CSV를 아는 judge.py가 확인한다
+SELECT EXISTS (SELECT 1 FROM subscription.subscription WHERE ipo_id = :ipo AND status = 'REJECTED' AND reject_reason = 'INSUFFICIENT_BALANCE') AS has_short \gset
+\if :has_short
+\echo '== 19. 잔액 부족으로 거절됐는데 계좌 예수금이 청약 금액 이상 (기대: 0행. 돈이 있는데 거절됐거나, 거절 뒤 돈이 들어옴)'
+SELECT s.subscription_id, s.account_id, a.cash_balance, s.margin_amount FROM subscription.subscription s JOIN account.account a ON a.account_id = s.account_id WHERE s.ipo_id = :ipo AND s.status = 'REJECTED' AND s.reject_reason = 'INSUFFICIENT_BALANCE' AND a.cash_balance >= s.margin_amount;
+\else
+\echo '== 19. (건너뜀: 이 공모주에 잔액 부족 거절이 없다. S4가 아니면 정상)'
 \endif

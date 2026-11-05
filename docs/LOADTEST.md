@@ -23,7 +23,7 @@
 | --- | --- |
 | `compose.perf.yml` | 컨테이너별 CPU, 메모리 상한과 JVM 힙 고정, 슬로우 쿼리 설정 |
 | `loadtest/official.sh` | 정식 측정 전체 실행 (빌드, 배포, 버전 기록, S0, S1, 후처리, 판정). 4장 |
-| `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정 (`판정.md`) |
+| `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정, S3, S4 정합성 판정과 S0 대비 (`판정.md`) |
 | `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). 3-4절 |
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
@@ -35,7 +35,7 @@
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js` |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
-| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 15종 실행 (11~15는 배정, 정산 뒤 검사. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
+| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 19종 실행 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족 검사. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
 | `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
 | `loadtest/stage_table.py` | S1 단계별 표 생성 (목표 속도, 실제 처리량, 지연, 실패율) |
 | `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
@@ -195,6 +195,20 @@ bash loadtest/official.sh --batch official-1103-a     # 결과: loadtest/results
 - 소진 시간은 마지막 요청 접수 이후 마지막 확정까지(`MAX(confirmed_at) - MAX(received_at)`)입니다. 확정 수가 요청 수와 다르면(오류, 거절, 미처리가 섞이면) G2는 무효입니다.
 - `판정.md`의 S1 한계 지점은 G1 또는 G2가 처음 깨지는 단계입니다.
 
+S3, S4 (Synthetic Data) 판정 기준. 회차마다 유효성, 정합성, 성능을 따로 판정하고 하나로 합치지 않습니다.
+
+| | 기준 | 깨지면 |
+| --- | --- | --- |
+| 기대값 | 행동 CSV를 `synthetic/validate.py`로 집계 (요청 수, 청약 행, 확정, 사유별 거절, 증거금). CSV가 규칙을 어기거나 manifest의 예상 요청 수와 다르면 판정 전체를 멈춤 | `judge.py` 실패 |
+| 유효성 | 요청 수 = 기대 요청 수(1,000) | **무효** (시험이 잘못됨. G1, G2, 정합성 모두 판정하지 않음) |
+| 정합성 | 청약 행, 확정, 사유별 거절, 증거금 수가 기대값과 같음 + 미처리(`PENDING`, `COMPENSATING`, `CANCEL_REQUESTED`) 0. S4는 예수금 부족 투자자의 예수금이 행동 CSV 입금액 그대로이고 청약증거금 0 | **불합격** (시스템 결함. 무효와 다르다). HTTP 오류가 있으면 접수되지 않은 요청이 섞여 **판정 불가** |
+| 성능 | G1은 S0과 같음(처리량 포함, 부하 모양이 같다). G2는 확정 건만, 확정 수가 기대 확정 수와 다르면 G2 무효 | G1, G2 불합격 |
+
+- 대표값은 measure 3회 중앙값입니다. 3회가 모두 유효해야 G1, G2를 판정하고, 정합성은 3회 모두 통과해야 통과입니다. 경로 예열 회차(`warmup`)도 정합성은 판정합니다 (정합성은 예열과 관계없이 맞아야 한다).
+- 거절 지연(접수 → 거절, `updated_at - received_at`)은 참고 지표로만 보여 줍니다. 청약에 거절 시각 컬럼이 없어 대신 쓰는 값입니다.
+- `판정.md`에 "S0 대비" 표가 붙습니다 (S3, S4 중앙값 - S0 중앙값). 합격선 없이 수치로만 봅니다.
+- 정합성 SQL 16~19번(`verify.sql`)은 같은 조건을 행 단위로 보여 줍니다 (같은 requestId 2행, 증거금 2개, 회원당 유효 청약 2건, 돈이 있는데 잔액 부족 거절). judge는 건수로, SQL은 어느 행이 문제인지로 봅니다.
+
 종료 코드: 0 정상, 2 워밍업이 최대 시간 안에 정상 상태에 닿지 않음 또는 판정 실패, 3 토큰, 4 예수금, 5 버전(dirty, jar 불일치), 6 소진 대기, 7 기동, 8 k6, 9 사전 점검, 10 부하는 끝났고 후처리 일부 실패, 11 공모주 생성, 12 잠금·결과 폴더, 13 도구 없음, 14 기준 상태 복원 실패
 
 결과를 쓸 때 같이 적는 한계: k6와 서비스가 같은 PC, Prometheus 5초 수집, docker stats 5초 간격 순간값(조회 1번에 약 2~3초, 조회도 CPU를 씀), 토큰 재발급의 로그인 요청, S1은 공모가 `S1_PRICE`원 종목 (금액만 다르고 처리 경로는 같다고 보지만 확인하지 않았습니다)
@@ -296,7 +310,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `warmup.csv` | 워밍업 구간마다 끝 시각, 경과 초, 요청 수, 평균 응답 ms, 분당 기울기 %, 분당 기울기 ms, 연속 통과 수, 판정 |
 | `db-after.dump` | 측정이 끝난 DB 덤프 (`pg_dump -Fc --create`. `pg_restore --create -d postgres`로 되살린다) |
 | `s1-plan.txt` | S1 단계·반복별 공모주 ID (`속도 반복번호 공모주,공모주,...`) |
-| `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점) |
+| `판정.md` | G1, G2 판정 (실행별 표, S0 중앙값, S1 단계별, 한계 지점). S3, S4가 있으면 회차별 정합성 표, 시나리오별 중앙값, S0 대비 표 |
 | `docker-stats.raw` | docker stats 원본 (`<epoch초>\t<JSON>` 한 줄씩, 조회 실패는 `ERROR` 줄) |
 | `docker-stats.csv` | 위 원본을 숫자로 바꾼 표 (컨테이너별 CPU %(100% = 1코어), 메모리 사용·상한 바이트, PIDs, 네트워크, 디스크) |
 | `slow-queries-before.txt` | 측정 시작 전 `pg_stat_statements` 누적 (비우기 전, 기록용) |
@@ -361,7 +375,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
 bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
-python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자)
+python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_synthetic.py   # 행동 CSV 규칙과 기대 결과, 생성 코드 재실행 결과가 커밋한 CSV와 같은지, 생성 코드가 응답 원문과 같은지
 ```

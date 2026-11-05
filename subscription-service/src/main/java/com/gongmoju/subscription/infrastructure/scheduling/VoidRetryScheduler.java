@@ -101,7 +101,14 @@ class VoidRetryScheduler {
             }
             int logged = 0;
             for (UUID subscriptionId : exhausted) {
-                VoidRetryResult result = voidRetryService.handle(subscriptionId, lastRequestedBefore, properties.maxAttempts());
+                VoidRetryResult result;
+                try {
+                    result = voidRetryService.handle(subscriptionId, lastRequestedBefore, properties.maxAttempts());
+                } catch (RuntimeException e) {
+                    // 재요청 루프와 같이 한 건의 오류가 뒤쪽 청약의 상세 로그와 요약 로그를 막지 않게 함. 이 청약은 상세에서 빠진 건수에 포함됨
+                    log.error("반환 재요청 최대 횟수 도달 청약 확인 중 오류. 다음 알림 주기에 다시 확인함. subscriptionId={}", subscriptionId, e);
+                    continue;
+                }
                 if (result.outcome() == VoidRetryResult.Outcome.MAX_ATTEMPTS_REACHED) {
                     logged++;
                     log.error("반환 재요청이 최대 횟수에 도달했지만 계좌 응답이 없음. 자동으로 종료하거나 마감하지 않으니 운영자 확인 필요 "
@@ -109,10 +116,12 @@ class VoidRetryScheduler {
                             subscriptionId, result.status(), result.cancelReason(), result.attempts(), result.lastRequestedAt());
                 }
             }
+            // 상세 로그가 한 건이라도 남았을 때만 알림 시각을 기록함. 전부 오류이거나 전부 해소돼 한 건도 알리지 못했으면 기록하지 않아 다음 주기에 바로 다시 확인함
+            // (오류로 알림을 못 냈는데 알림 간격만큼 막히지 않게 함). 일부만 오류이면 알림 간격 뒤에 다시 확인됨
             if (logged > 0) {
                 logSummary(lastRequestedBefore, logged);
+                lastAlertAt = now;
             }
-            lastAlertAt = now;
         } catch (RuntimeException e) {
             log.error("반환 재요청 최대 횟수 도달 알림 확인 중 오류. 다음 주기에 다시 시도함.", e);
         }

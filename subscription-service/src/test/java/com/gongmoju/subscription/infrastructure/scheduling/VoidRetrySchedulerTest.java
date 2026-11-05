@@ -196,6 +196,28 @@ class VoidRetrySchedulerTest {
     }
 
     @Test
+    @DisplayName("알림 대상 한 건의 확인 중 오류가 나도 뒤쪽 청약의 상세 로그와 요약 로그는 남기고, 오류 난 청약은 상세에서 빠진 건수에 포함된다")
+    void retryStaleVoid_isolatesErrorPerExhausted_andStillLogsRemainingAndSummary() {
+        // given
+        UUID broken = UUID.randomUUID();
+        UUID next = UUID.randomUUID();
+        when(subscriptionRepository.findExhaustedVoidIds(THRESHOLD, MAX_ATTEMPTS, BATCH_SIZE)).thenReturn(List.of(broken, next));
+        when(subscriptionRepository.countExhaustedVoid(THRESHOLD, MAX_ATTEMPTS)).thenReturn(2L);
+        when(voidRetryService.handle(eq(broken), any(), anyInt())).thenThrow(new IllegalStateException("일시 DB 오류"));
+        when(voidRetryService.handle(eq(next), any(), anyInt())).thenReturn(result(Outcome.MAX_ATTEMPTS_REACHED, MAX_ATTEMPTS));
+
+        // when
+        scheduler.retryStaleVoid(NOW);
+
+        // then: 오류 로그 1줄, 뒤쪽 청약의 상세 로그 1줄, 요약 로그 1줄
+        List<ILoggingEvent> errors = errorLogs();
+        assertThat(errors).hasSize(3);
+        assertThat(errors.get(0).getFormattedMessage()).contains("확인 중 오류", broken.toString());
+        assertThat(errors.get(1).getFormattedMessage()).contains(next.toString());
+        assertThat(errors.get(2).getFormattedMessage()).contains("총 2건", "상세 로그 1건", "빠진 1건");
+    }
+
+    @Test
     @DisplayName("알림 대상이 처리 직전에 상태가 바뀌어(예: 응답이 와서 CANCELLED) 최대 횟수 도달이 아니면 ERROR 로그를 남기지 않는다")
     void retryStaleVoid_doesNotLogError_whenExhaustedNoLongerReached() {
         // given
@@ -237,6 +259,57 @@ class VoidRetrySchedulerTest {
 
         // then
         verify(subscriptionRepository, times(2)).findExhaustedVoidIds(any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("알림 대상을 전부 확인하지 못해(오류) 상세 로그가 한 건도 남지 않았으면 알림 시각을 기록하지 않아 다음 주기에 바로 다시 확인한다")
+    void retryStaleVoid_checksAgainNextCycle_whenNothingLoggedBecauseOfErrors() {
+        // given
+        UUID broken = UUID.randomUUID();
+        when(subscriptionRepository.findExhaustedVoidIds(any(), anyInt(), anyInt())).thenReturn(List.of(broken));
+        when(voidRetryService.handle(eq(broken), any(), anyInt())).thenThrow(new IllegalStateException("일시 DB 오류"));
+
+        // when
+        scheduler.retryStaleVoid(NOW);
+        scheduler.retryStaleVoid(NOW.plusSeconds(5));
+
+        // then: 알림 간격(5분)을 기다리지 않고 다음 주기에 다시 조회함
+        verify(subscriptionRepository, times(2)).findExhaustedVoidIds(any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("알림 대상이 처리 직전에 모두 해소되어 상세 로그가 남지 않았으면 알림 시각을 기록하지 않아 다음 주기에 바로 다시 확인한다")
+    void retryStaleVoid_checksAgainNextCycle_whenNothingLoggedBecauseAllResolved() {
+        // given
+        UUID resolved = UUID.randomUUID();
+        when(subscriptionRepository.findExhaustedVoidIds(any(), anyInt(), anyInt())).thenReturn(List.of(resolved));
+        when(voidRetryService.handle(eq(resolved), any(), anyInt())).thenReturn(result(Outcome.NOT_VOIDING_IGNORED, 0));
+
+        // when
+        scheduler.retryStaleVoid(NOW);
+        scheduler.retryStaleVoid(NOW.plusSeconds(5));
+
+        // then
+        verify(subscriptionRepository, times(2)).findExhaustedVoidIds(any(), anyInt(), anyInt());
+        assertThat(errorLogs()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("일부만 오류여서 상세 로그가 한 건이라도 남았으면 알림 시각을 기록해 알림 간격 안에서는 다시 조회하지 않는다")
+    void retryStaleVoid_waitsForInterval_whenSomeLoggedAndSomeFailed() {
+        // given
+        UUID broken = UUID.randomUUID();
+        UUID logged = UUID.randomUUID();
+        when(subscriptionRepository.findExhaustedVoidIds(any(), anyInt(), anyInt())).thenReturn(List.of(broken, logged));
+        when(voidRetryService.handle(eq(broken), any(), anyInt())).thenThrow(new IllegalStateException("일시 DB 오류"));
+        when(voidRetryService.handle(eq(logged), any(), anyInt())).thenReturn(result(Outcome.MAX_ATTEMPTS_REACHED, MAX_ATTEMPTS));
+
+        // when
+        scheduler.retryStaleVoid(NOW);
+        scheduler.retryStaleVoid(NOW.plusSeconds(5));
+
+        // then: 로그를 남긴 알림은 알림 간격(5분) 안에서 반복하지 않음 (성공한 청약의 상세 로그가 5초마다 반복되지 않게 함)
+        verify(subscriptionRepository, times(1)).findExhaustedVoidIds(any(), anyInt(), anyInt());
     }
 
     @Test

@@ -27,8 +27,9 @@
 | `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). 3-4절 |
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
-| `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py` 테스트 (Docker, DB 없이 실행). 9장 |
-| `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 |
+| `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/synthetic/` | S3, S4 Synthetic Data: LLM 프롬프트와 응답 원문, 행동 CSV, 생성 코드, 검증(`validate.py`). 6장, `loadtest/synthetic/README.md` |
+| `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 (`--behavior`로 S3 두 번째 계좌, S4 입금액을 행동 CSV에서 읽음) |
 | `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
@@ -80,10 +81,14 @@ cp .env.example .env     # GRAFANA_ADMIN_PASSWORD에 직접 정한 값을 넣는
 | 용도 | 명령 (로컬 실행) |
 | --- | --- |
 | S0, S1, S2 | `python loadtest/seed/seed_users.py --run-id r1` |
-| S3 (100번~199번 회원에게 두 번째 계좌) | `python loadtest/seed/seed_users.py --run-id r1 --second-account-count 100` |
-| S4 (10% 잔액 부족, 별도 묶음) | `python loadtest/seed/seed_users.py --run-id r1 --prefix lb --low-balance-ratio 0.1 --out loadtest/data/users-s4.csv` |
+| S3 (행동 CSV의 `SECOND_ACCOUNT` 투자자에게 두 번째 계좌) | `python loadtest/seed/seed_users.py --run-id s34-acc2 --behavior loadtest/synthetic/s3-behavior.csv --amount 100000000` |
+| S4 (잔액 부족 묶음, 투자자별 입금액은 행동 CSV) | `python loadtest/seed/seed_users.py --run-id s34-lb --prefix lb --behavior loadtest/synthetic/s4-behavior.csv --out loadtest/data/users-s4.csv` |
 
-S0~S3는 같은 묶음(`loadtest/data/users.csv`)을 씁니다. S3를 하려면 `--second-account-count 100`으로 시드해야 합니다.
+S0~S3는 같은 묶음(`loadtest/data/users.csv`)을 씁니다. S3를 하려면 S3 행동 CSV로 한 번 더 시드해 두 번째 계좌를 엽니다.
+
+- `--behavior`는 시드 전에 `synthetic/validate.py` 규칙으로 행동 CSV를 검사하고, 위반이 있으면 회원을 만들지 않고 멈춥니다.
+- S3 시드는 두 번째 계좌에 `--amount`를 넣습니다. 기본 묶음의 다른 계좌와 같은 금액(1억)으로 넣어야 정식 측정의 최소 예수금 확인에서 멈추지 않습니다. 새 `--run-id`라서 첫 계좌에도 같은 금액이 한 번 더 입금됩니다.
+- S4 시드는 투자자마다 행동 CSV의 입금액을 넣습니다 (`--amount`는 쓰지 않음). 0번부터 `--users`-1번까지 모든 회원의 입금액이 CSV에 있어야 합니다.
 
 컨테이너로 실행하려면 같은 명령을 `python:3.12-slim`으로 감쌉니다.
 
@@ -129,6 +134,23 @@ docker-compose stop kafka-ui        # 1단계에서 상한 없이 뜬 kafka-ui�
 - 스냅샷은 `loadtest/data/`(커밋하지 않음)에 있습니다. meta에 상태(회원 수, 계좌 수, 예수금 합계, 원장 수, 청약 0)와 sha256이 남고, 복원할 때 둘 다 확인합니다.
 - `baseline.sh restore`는 계좌, 청약, 배정 서비스를 멈추고 데이터베이스 `ipo`를 지운 뒤 스냅샷으로 다시 만들고(`ANALYZE`, `CHECKPOINT` 포함), Kafka 볼륨을 비워 토픽을 다시 만든 다음 서비스를 띄웁니다. 복원 뒤 상태가 meta와 다르면 실패합니다. 정식 측정(`official.sh`)이 시작할 때 자동으로 실행합니다.
 - 회원 CSV(`loadtest/data/users.csv`)는 스냅샷을 만들 때의 시드 결과라 계좌 ID가 스냅샷과 같습니다. 회원을 다시 시드했으면 스냅샷도 다시 만듭니다.
+
+#### S3, S4 기준 스냅샷 (한 번)
+
+S3, S4는 두 번째 계좌와 잔액 부족 묶음이 더 필요해서, 위 스냅샷을 바탕으로 별도 폴더에 따로 만듭니다. 위 스냅샷은 그대로 둡니다.
+
+```bash
+bash loadtest/baseline.sh restore   # 위 스냅샷으로 되돌린다 (지금 DB는 사라진다. 필요하면 먼저 dump)
+docker-compose up -d                # 시드는 자원 상한 없이
+python loadtest/seed/seed_users.py --run-id s34-acc2 --behavior loadtest/synthetic/s3-behavior.csv --amount 100000000 --base-url http://127.0.0.1:8080
+python loadtest/seed/seed_users.py --run-id s34-lb --prefix lb --behavior loadtest/synthetic/s4-behavior.csv --out loadtest/data/users-s4.csv --base-url http://127.0.0.1:8080
+BASELINE_DIR=loadtest/data/baseline-s34 bash loadtest/baseline.sh save
+docker-compose -f docker-compose.yml -f compose.perf.yml up -d
+docker-compose stop kafka-ui
+```
+
+- 확인: 기본 묶음 계좌 1,060개(두 번째 계좌 60개), 잔액 부족 묶음 회원 1,000명 중 예수금 150,000원 미만 97명, 청약 0
+- 계좌 개설은 같은 requestId면 기존 계좌를 돌려주므로 `users.csv`의 첫 계좌 ID는 위 스냅샷과 같습니다. 두 번째 계좌(`accountId2`)는 이 스냅샷에만 있습니다
 
 ## 4. 정식 측정 (official.sh)
 
@@ -212,12 +234,25 @@ python loadtest/report.py --run-id $RUN                                         
 | S0 | 회원 1,000명이 각 1건 (100명 × 10회, 1초에 걸쳐 시작) | 새 공모주 | `users.csv` | 전부 202 |
 | S1 | 도착률 고정 단계 부하 (`STAGES` 기본 100,200,300,433,600,800건/초, 단계마다 전환 `RAMP` 10초 + 유지 `HOLD` 90초, 앞에 `WARMUP` 60초). 정식 측정은 한 속도 고정(`RATE`, `DURATION`)을 단계마다 따로 실행 | 새 공모주 (`IPO_IDS`면 여러 개) | `users.csv` | 전부 202 |
 | S2 | S0과 같은 구성으로 마감된 공모주에 요청 | `new_ipo.sh --closed` | `users.csv` | 전부 422 `SUBSCRIPTION_CLOSED` |
-| S3 | 정상 800 + 같은 requestId 재전송 100 + 두 번째 계좌 100 | 새 공모주 | `users.csv` (두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음 |
-| S4 | S0과 같은 구성, 10% 회원이 잔액 부족 | 새 공모주 | `users-s4.csv` | 전부 202 (잔액 부족 판정은 Consumer) |
+| S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약 거절은 Consumer |
+| S4 | Synthetic Data `s4-behavior.csv`: 투자자 1,000명 x 1건, 97명 예수금 부족 (S0과 같은 100명 x 10회) | 새 공모주 | `users-s4.csv` (S4 행동 CSV의 입금액으로 시드) | 전부 202 (잔액 부족 판정은 Consumer) |
 
 - **S1과 S2의 조건(요청 속도, 유지 시간, 요청 구성)은 임시 값입니다.** 첫 측정 전에 확정하고, 측정을 시작한 뒤에는 바꾸지 않습니다.
-- S3의 비율은 가정한 값이라 `S3_RESEND`, `S3_SECOND`, `S3_SECOND_FROM`으로 바꿀 수 있습니다.
-- S0~S4 모두 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`).
+- S0~S2는 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`). S3, S4는 요청 수가 행동 CSV 행 수(1,000)와 같아야 해서 줄이면 시작 전에 멈춥니다.
+
+### S3, S4 Synthetic Data
+
+S3, S4의 요청 구성은 LLM으로 만든 행동 CSV(`loadtest/synthetic/`)를 따릅니다 (발제 필수 항목 "가상 사용자 기반의 부하 테스트 시나리오 생성"). 부하 모양(100명 x 10회, 1초에 걸쳐 시작)과 청약 수량은 S0과 같고, 누가 어떤 행동을 하는지만 다릅니다. 프롬프트와 응답 원문, 규칙, 기대 결과는 `loadtest/synthetic/README.md`에 있습니다.
+
+| 시나리오 | 요청 수 | 청약 행 | 확정 | 거절 | 증거금 |
+| --- | --- | --- | --- | --- | --- |
+| S3 | 1,000 | 920 | 860 | 60 `ALREADY_SUBSCRIBED` | 860 |
+| S4 | 1,000 | 1,000 | 903 | 97 `INSUFFICIENT_BALANCE` | 903 |
+
+- 행동 CSV의 i번째 행이 i번째 요청입니다 (VU `i / 10 + 1`의 `i % 10`번째). `vuser`는 회원 CSV의 행 번호입니다.
+- S3: `RESEND`는 같은 투자자의 `NORMAL`과 같은 requestId(`RUN_ID`와 투자자 번호로 만든 값이라 회차끼리 겹치지 않음), `SECOND_ACCOUNT`는 두 번째 계좌(`accountId2`)와 다른 requestId로 보냅니다.
+- k6는 요청을 보내기 전에 데이터를 확인하고 맞지 않으면 바로 멈춥니다 (종료 코드 107): 행 수와 요청 수, S3는 `SECOND_ACCOUNT` 투자자의 두 번째 계좌, S4는 회원 CSV가 잔액 부족 묶음(`lb`)인지. S4를 기본 묶음으로 돌리면 S0과 같은 요청이 나가 "거절 0"이 결함처럼 보이기 때문입니다.
+- 행동 CSV를 바꾸면 `python loadtest/synthetic/validate.py s3`(또는 `s4`)로 검사하고, S3, S4 기준 스냅샷을 다시 만듭니다 (3-4절).
 
 ### S1 단계 부하와 단계별 표
 
@@ -303,6 +338,8 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `STATS_INTERVAL` | `5` | `official.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
+| `BEHAVIOR_CSV` | `../synthetic/<시나리오>-behavior.csv` | `s3.js`, `s4.js` (`-e BEHAVIOR_CSV=...`, 행동 CSV 경로. k6 스크립트 기준 상대 경로) |
+| `S4_PREFIX` | `lb` | `s4.js` (잔액 부족 묶음의 loginId 접두사. 회원 CSV가 이 묶음이 아니면 시작 전에 멈춤) |
 | `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `verify.sh`, `precheck.sh`, `official.sh`(하위 스크립트와 `judge.py --container`에 같은 값을 넘긴다) |
 | `KAFKA_CONTAINER` | `ipo-kafka` | `precheck.sh`, `baseline.sh` |
 | `EUREKA_URL` | `http://localhost:8761` | `precheck.sh` |
@@ -318,7 +355,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
@@ -326,6 +363,7 @@ bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조�
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
+python loadtest/tests/test_synthetic.py   # 행동 CSV 규칙과 기대 결과, 생성 코드 재실행 결과가 커밋한 CSV와 같은지, 생성 코드가 응답 원문과 같은지
 ```
 
 - `loadtest/tests/fixtures/consumer-groups.txt`는 `kafka-consumer-groups.sh --describe --all-groups`의 실제 출력, `docker-stats.raw`는 `docker stats --no-stream --format '{{json .}}'`의 실제 출력입니다. 출력 형식이 바뀌면 새로 받아 바꿉니다.

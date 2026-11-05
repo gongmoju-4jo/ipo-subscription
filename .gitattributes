@@ -2,3 +2,5 @@
 *.sh text eol=lf
 *.bat text eol=crlf
 *.jar binary
+# Synthetic Data 행동 CSV는 생성 코드(csv.writer, CRLF) 결과와 바이트 단위로 같아야 한다 (tests/test_synthetic.py). OS마다 개행을 바꾸지 않는다
+loadtest/synthetic/*.csv -text

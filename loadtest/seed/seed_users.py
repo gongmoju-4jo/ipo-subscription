@@ -3,16 +3,20 @@
 
 사용 예 (Gateway 경유):
   python seed_users.py --run-id r1                       # S0, S1, S2용 회원 1,000명
-  python seed_users.py --run-id r1 --second-account-count 100   # S3용: 100번~199번 회원에게 두 번째 계좌
-  python seed_users.py --run-id r1 --prefix lb --low-balance-ratio 0.1 --out ../data/users-s4.csv   # S4용: 10% 잔액 부족
+  python seed_users.py --run-id s34-acc2 --behavior ../synthetic/s3-behavior.csv --amount 100000000   # S3용: 행동 CSV의 SECOND_ACCOUNT 투자자에게 두 번째 계좌
+  python seed_users.py --run-id s34-lb --prefix lb --behavior ../synthetic/s4-behavior.csv --out ../data/users-s4.csv   # S4용: 행동 CSV의 입금액
   python seed_users.py --run-id r1 --refresh-tokens      # 토큰만 다시 발급 (토큰은 1시간 만료)
 
 - 회원은 회차마다 새로 만들지 않고 재사용한다 (삭제하지 않는 규칙). 가입, 계좌 개설은 이미 있으면 그대로 쓴다.
 - 예수금은 회차(--run-id)마다 한 번 입금한다. 같은 run-id로 다시 실행해도 중복 입금되지 않는다 (requestId 고정).
+- --behavior: Synthetic Data 행동 CSV (loadtest/synthetic/). 시드 전에 synthetic/validate.py 규칙으로 검사하고, 위반이 있으면 아무것도 만들지 않는다.
+  S3 CSV(action 열)는 SECOND_ACCOUNT 투자자에게 두 번째 계좌를 열고 --amount를 입금한다.
+  S4 CSV(deposit 열)는 투자자마다 그 입금액을 넣고, 0번부터 --users-1번까지 모든 회원의 입금액이 있어야 한다.
 - CSV 열: loginId,userId,accountId,accountId2,token (비밀번호가 아니라 토큰이 들어 있으므로 커밋하지 않는다)
 """
 import argparse
 import csv
+import importlib.util
 import json
 import os
 import sys
@@ -63,8 +67,8 @@ def rid(*parts):
 def seed_one(args, idx):
     base, password = args.base_url, args.password
     login_id = f"{args.prefix}{idx:04d}"
-    low = idx >= args.users - int(round(args.users * args.low_balance_ratio))
-    second = args.second_account_from <= idx < args.second_account_from + args.second_account_count
+    second = idx in args.second_vusers
+    amount = args.deposits.get(idx, args.amount)
 
     if not args.refresh_tokens:
         s, _ = call(base, "POST", "/api/v1/users", {"loginId": login_id, "password": password, "name": "loadtest"})
@@ -85,13 +89,40 @@ def seed_one(args, idx):
             raise RuntimeError(f"{login_id} {kind} 개설 실패: {s}")
         d = j["data"]
         accounts.append((d.get("accountId") or d.get("id"), d["userId"]))
-        amount = args.low_amount if low else args.amount
         s, _ = call(base, "POST", f"/api/v1/accounts/{accounts[-1][0]}/deposits",
                     {"requestId": rid(login_id, kind, args.run_id), "amount": amount}, token)
         if s not in (200, 201):
             raise RuntimeError(f"{login_id} {kind} 입금 실패: {s}")
     return {"loginId": login_id, "userId": accounts[0][1], "accountId": accounts[0][0],
             "accountId2": accounts[1][0] if len(accounts) > 1 else "", "token": token}
+
+
+def load_behavior(path, users):
+    """행동 CSV를 synthetic/validate.py 규칙으로 검사하고 (두 번째 계좌 투자자 집합, 투자자별 입금액)을 돌려준다.
+    열(action 또는 deposit)로 S3, S4를 고른다. 위반이 있으면 ValueError (회원을 만들기 전에 멈춘다)."""
+    vpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "synthetic", "validate.py")
+    spec = importlib.util.spec_from_file_location("synthetic_validate", vpath)
+    validate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validate)
+    with open(path, encoding="utf-8", newline="") as f:
+        header = next(csv.reader(f), [])
+    scenario = "S3" if "action" in header else "S4"
+    rows = validate.load(path, scenario)
+    if scenario == "S3":
+        errors, exp = validate.check_s3(rows, total=len(rows), users=users)
+    else:
+        errors, exp = validate.check_s4(rows, total=len(rows), users=users)
+    if errors:
+        raise ValueError(f"행동 CSV 위반 {len(errors)}건 ({path}): " + "; ".join(errors[:5]))
+    if scenario == "S3":
+        second = set(exp["detail"]["second_account_vusers"])
+        print(f"행동 CSV(S3): 두 번째 계좌 {len(second)}명")
+        return second, {}
+    deposits = {int(v): d for v, d in exp["detail"]["deposits"].items()}
+    if set(deposits) != set(range(users)):
+        raise ValueError(f"행동 CSV(S4)에 0~{users - 1}번 회원의 입금액이 모두 있어야 한다 ({path}, {len(deposits)}명)")
+    print(f"행동 CSV(S4): 예수금 부족 {len(exp['detail']['short_vusers'])}명")
+    return set(), deposits
 
 
 def main():
@@ -101,15 +132,17 @@ def main():
     ap.add_argument("--users", type=int, default=1000)
     ap.add_argument("--prefix", default="lt", help="loginId 접두사. 시나리오 묶음(cohort)마다 다르게 쓴다")
     ap.add_argument("--password", default=os.environ.get("LOADTEST_PASSWORD", "loadtest1234"))
-    ap.add_argument("--amount", type=int, default=1_000_000, help="회원당 입금액 (청약 수량 x 공모가 이상이어야 한다)")
-    ap.add_argument("--low-balance-ratio", type=float, default=0.0, help="S4: 뒤쪽 이 비율의 회원은 잔액을 부족하게 입금")
-    ap.add_argument("--low-amount", type=int, default=1_000)
-    ap.add_argument("--second-account-from", type=int, default=100)
-    ap.add_argument("--second-account-count", type=int, default=0, help="S3: 이 수만큼의 회원에게 두 번째 계좌")
+    ap.add_argument("--amount", type=int, default=1_000_000, help="계좌마다 넣는 입금액 (청약 수량 x 공모가 이상이어야 한다). S4 행동 CSV를 주면 CSV의 입금액을 쓴다")
+    ap.add_argument("--behavior", help="Synthetic Data 행동 CSV (S3: 두 번째 계좌 대상, S4: 투자자별 입금액)")
     ap.add_argument("--threads", type=int, default=16)
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "users.csv"))
     ap.add_argument("--refresh-tokens", action="store_true", help="토큰만 다시 발급해 기존 CSV를 갱신")
     args = ap.parse_args()
+    if args.amount < 1:
+        raise ValueError(f"--amount는 1 이상: {args.amount}")
+    args.second_vusers, args.deposits = set(), {}
+    if args.behavior and not args.refresh_tokens:
+        args.second_vusers, args.deposits = load_behavior(args.behavior, args.users)
 
     out = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)

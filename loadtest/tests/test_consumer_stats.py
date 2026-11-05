@@ -328,23 +328,41 @@ class Main(unittest.TestCase):
         self.assertEqual(self.run_main(prom=prom), 1)
         self.assertFalse(os.path.exists(os.path.join(self.out, "인출.md")))
 
-    def test_partition_query_uses_window(self):
-        seen = {}
+    def partition_call(self, counts, seen=None):
+        # counts: 평가 시각 → 파티션 수 (없는 시각은 값 없음)
         def call(base, path, params):
             q = params.get("query", "")
             if "count by (partition)" in q:
-                seen["q"], seen["t"] = q, params["time"]
-                return prom_resp([{"value": [T0, "6"]}])
+                if seen is not None:
+                    seen.update(path=path, start=params["start"], end=params["end"], step=params["step"])
+                return prom_resp([{"metric": {}, "values": [[t, str(n)] for t, n in counts.items()]}])
+            if path.endswith("query_range") and "records_lag" in q:
+                t = params["start"]
+                return prom_resp([{"metric": {}, "values": [[t + i * cs.STEP, "0"] for i in range(4)]}])
             if path.endswith("query_range"):
-                return prom_resp([{"metric": {"result": "success"}, "values": [[T0, "1"]]}])
+                return prom_resp([{"metric": {"result": "success"}, "values": [[params["start"], "1"]]}])
             if "listener" in q and "timestamp" not in q:
                 return prom_resp([{"metric": {"result": "success"}, "value": [T0, "1"]}])
             return prom_resp([{"value": [T0, "3"]}])
-        run = dict(run="r", start=T0, end=T0 + 10, drain=5, w1=T0 + 15, stop=T0 + 16, exact=True)
-        *_, partitions = cs.query_prom(run, "http://x", get=call)
+        return call
+
+    def test_partition_query_uses_lag_eval_times(self):
+        # 시작이 5초 경계가 아니어도(T0+2) 랙 조회와 같은 시각(start부터 STEP 간격)으로 조회
+        seen = {}
+        start = T0 + 2
+        run = dict(run="r", start=start, end=start + 10, drain=5, w1=start + 15, stop=start + 16, exact=True)
+        *_, partitions = cs.query_prom(run, "http://x", get=self.partition_call({start + i * 5: 6 for i in range(4)}, seen))
+        self.assertEqual(seen, dict(path="/api/v1/query_range", start=start, end=start + 15, step=cs.STEP))
         self.assertEqual(partitions, 6)
-        self.assertIn("[15s:5s]", seen["q"])
-        self.assertEqual(seen["t"], T0 + 15)
+
+    def test_partition_missing_at_one_eval_time(self):
+        # 랙 평가 시각 중 한 번이라도 파티션 값이 없거나 적으면 최솟값에 반영
+        start = T0 + 2
+        run = dict(run="r", start=start, end=start + 10, drain=5, w1=start + 15, stop=start + 16, exact=True)
+        *_, missing = cs.query_prom(run, "http://x", get=self.partition_call({start: 6, start + 5: 6, start + 15: 6}))
+        self.assertEqual(missing, 0)
+        *_, fewer = cs.query_prom(run, "http://x", get=self.partition_call({start + i * 5: (5 if i == 2 else 6) for i in range(4)}))
+        self.assertEqual(fewer, 5)
 
     def test_sample_gap_fails(self):
         # 측정 구간 15초 / 5초 = 기대 3개. 2개는 90% 미만 → 실패

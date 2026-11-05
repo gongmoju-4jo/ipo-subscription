@@ -43,8 +43,8 @@ CONSUMER = "account-margin-reserve"
 LAG_Q = 'sum(kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"})'
 LISTENER_Q = 'sum by (result) (spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"})'
 LISTENER_SCRAPE_Q = 'max(timestamp(spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"}))'
-# 구간 중 랙을 보고한 파티션 수의 최솟값. Consumer가 죽어 파티션 시계열이 사라지면 합계 랙이 작게 나와 병목을 놓친다
-LAG_PARTITIONS_Q = 'min_over_time(count(count by (partition) (kafka_consumer_fetch_manager_records_lag{{topic="margin_reserve-requested"}}))[{d}s:{step}s])'
+# 평가 시각마다 랙을 보고한 파티션 수. Consumer가 죽어 파티션 시계열이 사라지면 합계 랙이 작게 나와 병목을 놓친다
+LAG_PARTITIONS_Q = 'count(count by (partition) (kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"}))'
 LAG_SAMPLES_Q = 'max(count_over_time(kafka_consumer_fetch_manager_records_lag{{topic="margin_reserve-requested"}}[{d}s]))'
 STEP = 5
 SAMPLE_RATIO = 0.9
@@ -145,7 +145,8 @@ def query_prom(run, base, get=prom_get):
            "listener_end": get(base, "/api/v1/query", {"query": LISTENER_Q, "time": stop + STEP}),
            "listener_scrape": get(base, "/api/v1/query", {"query": LISTENER_SCRAPE_Q, "time": stop + STEP}),
            "lag_samples": get(base, "/api/v1/query", {"query": LAG_SAMPLES_Q.format(d=w1 - w0), "time": w1}),
-           "lag_partitions": get(base, "/api/v1/query", {"query": LAG_PARTITIONS_Q.format(d=w1 - w0, step=STEP), "time": w1})}
+           # 랙 조회와 같은 평가 시각(start부터 STEP 간격)으로 본다
+           "lag_partitions": get(base, "/api/v1/query_range", {"query": LAG_PARTITIONS_Q, **rng})}
     lag_res = raw["lag"]["data"]["result"]
     if not lag_res:
         raise RuntimeError(f"{run['run']}: 랙 시계열이 없음 ({LAG_Q})")
@@ -163,7 +164,9 @@ def query_prom(run, base, get=prom_get):
     sc = raw["listener_scrape"]["data"]["result"]
     scrape = float(sc[0]["value"][1]) if sc else 0.0
     pr = raw["lag_partitions"]["data"]["result"]
-    partitions = int(float(pr[0]["value"][1])) if pr else 0
+    counts = {int(float(t)): int(float(v)) for t, v in pr[0]["values"]} if pr else {}
+    # 랙 평가 시각마다 파티션 수를 본다. 그 시각에 값이 없으면(시계열이 모두 사라짐) 0개로 센다
+    partitions = min((counts.get(t, 0) for t, _ in lag), default=0)
     return raw, lag, listener, samples, scrape, partitions
 
 

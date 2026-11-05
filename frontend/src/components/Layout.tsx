@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { LogoMark } from './Logo';
 
 export function Layout() {
   const { session, logout } = useAuth();
@@ -9,7 +10,7 @@ export function Layout() {
       <header className="topbar">
         <div className="topbar-inner">
           <NavLink to="/" className="brand">
-            <span className="brand-mark">공</span>
+            <LogoMark />
             공모주사조
           </NavLink>
           <nav className="nav">

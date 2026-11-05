@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAccounts, useLedger, keys } from '../api/queries';
 import { accountApi } from '../api/endpoints';
 import { ApiError, newRequestId } from '../api/client';
-import { Card, Empty, ErrorBox, Loading, Money, NotConnected, RecentExchanges } from '../components/ui';
+import { Card, Empty, ErrorBox, Loading, Money, RecentExchanges } from '../components/ui';
 import { formatDateTime, formatWon } from '../lib/format';
 import { ledgerTypeLabel } from '../lib/status';
 
@@ -113,19 +113,19 @@ export function AccountPage() {
                 <div className="hint">같은 입금을 두 번 눌러도 요청 ID가 같아서 한 번만 반영돼요</div>
               </div>
             </Card>
-            <Card title={<>거래 내역 <span className="pill-ops">시연용 운영 조회</span></>}>
+            <Card title="거래 내역">
               {ledger.isLoading ? (
                 <Loading />
               ) : ledger.error ? (
-                <NotConnected what="원장 거래 내역" why="백엔드에 원장 조회 API가 아직 없어요. 시연용 운영 조회 서버(`npm run ops`)를 실행하면 보여요" />
-              ) : (ledger.data ?? []).length === 0 ? (
+                <ErrorBox error={ledger.error} title="거래 내역을 불러오지 못했어요" />
+              ) : (ledger.data?.items ?? []).length === 0 ? (
                 <Empty title="거래 내역이 없어요" />
               ) : (
                 <div className="table-wrap">
                   <table className="table">
                     <thead><tr><th>시각</th><th>거래</th><th className="r">금액</th><th className="r">거래 후 예수금</th><th className="r">거래 후 증거금</th></tr></thead>
                     <tbody>
-                      {ledger.data!.slice(0, 15).map((l, i) => (
+                      {ledger.data!.items.slice(0, 15).map((l, i) => (
                         <tr key={i}>
                           <td>{formatDateTime(l.createdAt)}</td>
                           <td>{ledgerTypeLabel[l.type] ?? l.type}</td>

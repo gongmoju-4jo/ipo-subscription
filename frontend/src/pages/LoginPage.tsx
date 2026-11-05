@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { authApi } from '../api/endpoints';
 import { ApiError } from '../api/client';
+import { LogoMark } from '../components/Logo';
 
 export function LoginPage() {
   const { session, login } = useAuth();
@@ -37,7 +38,7 @@ export function LoginPage() {
       <div className="auth-card stack">
         <div style={{ textAlign: 'center' }}>
           <div className="brand" style={{ justifyContent: 'center', fontSize: 22 }}>
-            <span className="brand-mark">공</span>공모주사조
+            <LogoMark size={36} />공모주사조
           </div>
           <p className="muted" style={{ marginTop: 8 }}>마감 직전에도 밀리지 않는 청약</p>
         </div>

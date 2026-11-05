@@ -133,6 +133,18 @@ export interface SubscriptionResponse extends SubscriptionSummaryResponse {
   refundAmount: number | null;
 }
 
+// 원장 (account-service GET /api/v1/accounts/{id}/ledger)
+export type LedgerEntryType = 'DEPOSIT' | 'MARGIN_PENDING' | 'MARGIN_POST' | 'MARGIN_VOID' | 'REFUND';
+export interface LedgerEntryResponse {
+  ledgerEntryId: string;
+  type: LedgerEntryType;
+  amount: number;
+  cashBalanceAfter: number;
+  marginBalanceAfter: number;
+  subscriptionId: string | null;
+  createdAt: string;
+}
+
 // 배정 (allocation-service)
 export interface AllocationResponse {
   ipoId: string;

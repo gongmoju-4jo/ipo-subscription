@@ -4,6 +4,7 @@ import type {
   AccountSummaryResponse,
   AllocationResponse,
   DepositResponse,
+  LedgerEntryResponse,
   IpoResponse,
   IpoSummaryResponse,
   LoginRequest,
@@ -27,6 +28,7 @@ export const authApi = {
 export const accountApi = {
   list: () => api.get<PageResponse<AccountSummaryResponse>>('/api/v1/accounts?size=50'),
   get: (accountId: string) => api.get<AccountResponse>(`/api/v1/accounts/${accountId}`),
+  ledger: (accountId: string) => api.get<PageResponse<LedgerEntryResponse>>(`/api/v1/accounts/${accountId}/ledger?size=50`),
   open: () => api.post<AccountResponse>('/api/v1/accounts', { requestId: newRequestId() }),
   // requestId를 화면에서 받아 같은 입금을 다시 눌러도 한 번만 반영되게 한다
   deposit: (accountId: string, amount: number, requestId: string) =>

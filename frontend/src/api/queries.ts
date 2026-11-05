@@ -13,7 +13,7 @@ export const keys = {
   subscriptions: ['subscriptions'] as const,
   subscription: (id: string) => ['subscription', id] as const,
   allocation: (id: string) => ['allocation', id] as const,
-  ledger: (id: string) => ['ops', 'ledger', id] as const,
+  ledger: (id: string) => ['ledger', id] as const,
   trace: (id: string) => ['ops', 'trace', id] as const,
   opsSummary: ['ops', 'summary'] as const,
 };
@@ -48,9 +48,10 @@ export const useAllocation = (id: string, enabled: boolean) =>
     retry: false,
   });
 
-// 시연용 운영 조회 (연결 안 되면 error로 남고 화면은 "확인 불가"를 보여준다)
 export const useLedger = (accountId: string | undefined) =>
-  useQuery({ queryKey: keys.ledger(accountId ?? ''), queryFn: () => opsApi.ledger(accountId!), enabled: !!accountId, retry: false });
+  useQuery({ queryKey: keys.ledger(accountId ?? ''), queryFn: () => accountApi.ledger(accountId!), enabled: !!accountId });
+
+// 시연용 운영 조회 (연결 안 되면 error로 남고 화면은 "확인 불가"를 보여준다)
 
 export const useTrace = (id: string, live: boolean) =>
   useQuery({ queryKey: keys.trace(id), queryFn: () => opsApi.trace(id), retry: false, refetchInterval: live ? 2000 : false });

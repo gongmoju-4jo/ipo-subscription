@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { LogoMark } from './Logo';
+import { ApiInspector } from '../demo/ApiInspector';
 
 export function Layout() {
   const { session, logout } = useAuth();
@@ -38,6 +39,7 @@ export function Layout() {
       <main className="page">
         <Outlet />
       </main>
+      <ApiInspector />
     </>
   );
 }

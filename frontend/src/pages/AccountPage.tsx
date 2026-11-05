@@ -3,9 +3,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAccounts, useLedger, keys } from '../api/queries';
 import { accountApi } from '../api/endpoints';
 import { ApiError, newRequestId } from '../api/client';
-import { Card, Empty, ErrorBox, Loading, Money, RecentExchanges } from '../components/ui';
+import { Card, Empty, ErrorBox, Loading, Money } from '../components/ui';
 import { formatDateTime, formatWon } from '../lib/format';
 import { ledgerTypeLabel } from '../lib/status';
+import { DesignNote } from '../demo/DesignNote';
 
 const QUICK = [100_000, 500_000, 1_000_000];
 
@@ -111,6 +112,10 @@ export function AccountPage() {
                 {error !== null && <ErrorBox error={error} title="처리하지 못했어요" />}
                 <button className="btn btn-primary btn-block" onClick={deposit} disabled={busy || amount <= 0}>{busy ? '처리 중…' : `${formatWon(amount)} 입금하기`}</button>
                 <div className="hint">같은 입금을 두 번 눌러도 요청 ID가 같아서 한 번만 반영돼요</div>
+                <DesignNote title="잔고와 원장이 어긋나지 않는 이유">
+                  잔고를 바꾸는 곳은 계좌 서비스의 정해진 메서드 하나뿐이고, 잔고 변경과 원장 기록을 같은 트랜잭션에 저장해요. 원장은 추가만 하고 고치지 않아요.
+                  그래서 "계좌 잔고 = 마지막 원장의 거래 후 잔고" 검사로 언제든 맞는지 확인할 수 있어요.
+                </DesignNote>
               </div>
             </Card>
             <Card title="거래 내역">
@@ -142,7 +147,6 @@ export function AccountPage() {
           </div>
         </>
       )}
-      <RecentExchanges filter={(r) => r.path.startsWith('/api/v1/accounts')} />
     </div>
   );
 }

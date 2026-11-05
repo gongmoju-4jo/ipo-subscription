@@ -1,4 +1,5 @@
 import type { ApiEnvelope, ApiErrorBody } from './types';
+import { DEMO } from '../demo/flag';
 
 // 모든 백엔드 호출은 여기를 거친다. 화면 컴포넌트에서 fetch를 직접 쓰지 않는다
 // - Gateway(/api)는 JWT가 필요하다. 토큰은 tokenStore에서 꺼내 Authorization에 넣는다
@@ -32,16 +33,20 @@ export class ApiError extends Error {
   }
 }
 
-// 처리 상세 보기에 쓰려고 최근 요청, 응답을 몇 개 기억한다 (토큰, 비밀번호는 남기지 않음)
+// 시연용 API 기록 창에 보여줄 최근 요청, 응답 (DEMO일 때만 기록. 토큰, 비밀번호는 가림)
 export interface ExchangeRecord {
+  id: number;
   at: string;
   method: string;
   path: string;
   status: number;
+  durationMs: number;
+  requestHeaders: Record<string, string>;
   requestBody?: unknown;
   responseBody?: unknown;
 }
-const RECENT_LIMIT = 30;
+const RECENT_LIMIT = 100;
+let seq = 0;
 const recent: ExchangeRecord[] = [];
 const listeners = new Set<() => void>();
 export const exchangeLog = {
@@ -51,8 +56,9 @@ export const exchangeLog = {
     return () => listeners.delete(fn);
   },
 };
-function remember(rec: ExchangeRecord) {
-  recent.unshift(rec);
+function remember(rec: Omit<ExchangeRecord, 'id'>) {
+  if (!DEMO) return;
+  recent.unshift({ ...rec, id: ++seq });
   recent.length = Math.min(recent.length, RECENT_LIMIT);
   listeners.forEach((fn) => fn());
 }
@@ -70,11 +76,13 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
+  const shownHeaders = { ...headers, ...(headers.Authorization ? { Authorization: 'Bearer (가림)' } : {}) };
+  const started = performance.now();
   let res: Response;
   try {
     res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch {
-    remember({ at: new Date().toISOString(), method, path, status: 0, requestBody: redact(body) });
+    remember({ at: new Date().toISOString(), method, path, status: 0, durationMs: Math.round(performance.now() - started), requestHeaders: shownHeaders, requestBody: redact(body) });
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: '서버에 연결할 수 없습니다. 서비스가 실행 중인지 확인해 주세요.' }, path);
   }
 
@@ -87,7 +95,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
       json = undefined;
     }
   }
-  remember({ at: new Date().toISOString(), method, path, status: res.status, requestBody: redact(body), responseBody: redact(json?.data ?? json) });
+  remember({ at: new Date().toISOString(), method, path, status: res.status, durationMs: Math.round(performance.now() - started), requestHeaders: shownHeaders, requestBody: redact(body), responseBody: redact(json ?? text) });
 
   if (!res.ok || json?.success === false) {
     if (res.status === 401 && onUnauthorized) onUnauthorized();

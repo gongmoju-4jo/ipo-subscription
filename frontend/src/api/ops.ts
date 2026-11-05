@@ -48,8 +48,27 @@ export interface OpsSummary {
   checkedAt: string;
 }
 
+export interface DltMessage {
+  partition: number;
+  offset: string;
+  timestamp: string;
+  key: string | null;
+  value: string | null;
+  originalTopic: string | null;
+  originalOffset: string | null;
+  exceptionClass: string | null;
+  exceptionMessage: string | null;
+  causeClass: string | null;
+}
+
+export interface DltMessages {
+  topic: string;
+  total: number;
+  messages: DltMessage[];
+}
+
 export const opsApi = {
-  ledger: (accountId: string) => request<OpsLedgerRow[]>('GET', `/ops/accounts/${accountId}/ledger`),
+  dlt: (topic: string) => request<DltMessages>('GET', `/ops/dlt?topic=${encodeURIComponent(topic)}`),
   trace: (subscriptionId: string) => request<OpsTrace>('GET', `/ops/subscriptions/${subscriptionId}/trace`),
   summary: () => request<OpsSummary>('GET', '/ops/summary'),
 };

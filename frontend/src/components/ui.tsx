@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { ApiError, exchangeLog, type ExchangeRecord } from '../api/client';
+import type { ReactNode } from 'react';
+import { ApiError } from '../api/client';
 import type { Tone } from '../lib/status';
 
 export function Card({ title, extra, children, className = '' }: { title?: ReactNode; extra?: ReactNode; children: ReactNode; className?: string }) {
@@ -89,32 +89,5 @@ export function DevDetails({ summary = '처리 상세 보기', data, children }:
       {children}
       {data !== undefined && <pre className="code">{JSON.stringify(data, null, 2)}</pre>}
     </details>
-  );
-}
-
-// 이 화면에서 실제로 오간 API 요청, 응답 (토큰과 비밀번호는 가림)
-export function RecentExchanges({ filter }: { filter?: (r: ExchangeRecord) => boolean }) {
-  const [rows, setRows] = useState(exchangeLog.list());
-  useEffect(() => {
-    const off = exchangeLog.subscribe(() => setRows(exchangeLog.list()));
-    return () => {
-      off();
-    };
-  }, []);
-  const shown = filter ? rows.filter(filter) : rows;
-  return (
-    <DevDetails summary={`실제 API 요청과 응답 (${shown.length}건)`}>
-      {shown.length === 0 && <div className="hint" style={{ marginTop: 8 }}>아직 요청이 없어요</div>}
-      {shown.slice(0, 8).map((r, i) => (
-        <div key={i} style={{ marginTop: 10 }}>
-          <div className="row" style={{ fontSize: 13 }}>
-            <Badge tone={r.status >= 200 && r.status < 300 ? 'success' : r.status === 0 ? 'muted' : 'danger'}>{r.status || '연결 실패'}</Badge>
-            <code>{r.method} {r.path}</code>
-            <span className="muted">{new Date(r.at).toLocaleTimeString('ko-KR')}</span>
-          </div>
-          <pre className="code">{JSON.stringify({ request: r.requestBody, response: r.responseBody }, null, 2)}</pre>
-        </div>
-      ))}
-    </DevDetails>
   );
 }

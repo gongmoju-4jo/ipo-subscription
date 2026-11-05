@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useTrace } from '../api/queries';
 import { ApiError } from '../api/client';
-import { Badge, Card, NotConnected } from './ui';
+import { Badge, Card, NotConnected } from '../components/ui';
 import { formatTimeSec, formatWon, shortId } from '../lib/format';
 import { ledgerTypeLabel, topicLabel } from '../lib/status';
+import { DesignNote } from './DesignNote';
 
 // 청약 1건의 실제 처리 기록 (시연 전용 운영 조회 서버). 펼쳤을 때만 조회한다
 export function TracePanel({ subscriptionId, live }: { subscriptionId: string; live: boolean }) {
@@ -115,6 +116,9 @@ function TraceBody({ subscriptionId, live }: { subscriptionId: string; live: boo
           )}
         </div>
       </div>
+      <DesignNote title="이벤트가 유실되지 않는 이유 (Transactional Outbox)">
+        상태 변경과 보낼 이벤트를 같은 DB 트랜잭션에 저장(Outbox)하고, 발행기가 1초마다 Kafka로 보내요. Kafka가 잠깐 멈춰도 Outbox에 남아 있다가 복구되면 나가요 (통합 테스트에서 Kafka 정지 뒤 0.1초 만에 확정 확인).
+      </DesignNote>
       <div className="hint">조회 시각 {formatTimeSec(t.checkedAt)}{live ? ', 처리 중이라 2초마다 새로 고침' : ''}</div>
     </div>
   );

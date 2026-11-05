@@ -3,6 +3,9 @@ import { promQuery, type PromSample } from '../api/ops';
 import { useOpsSummary } from '../api/queries';
 import { Badge, Card, ErrorBox, Loading, NotConnected } from '../components/ui';
 import { formatNumber, formatTimeSec } from '../lib/format';
+import { DEMO } from '../demo/flag';
+import { DltPanel } from '../demo/DltPanel';
+import { DesignNote } from '../demo/DesignNote';
 
 // 시스템 현황: Prometheus 실제 지표 + 시연용 운영 조회(Outbox, DLT, 정합성)
 // 쿼리는 팀 Grafana 측정 대시보드(docker/grafana/dashboards/measurement.json)와 같은 식을 쓴다
@@ -97,39 +100,32 @@ export function SystemPage() {
           )}
         </Card>
 
-        <Card title={<>Outbox, DLT <span className="pill-ops">시연용 운영 조회</span></>}>
-          {ops.isLoading ? (
-            <Loading />
-          ) : ops.error ? (
-            <NotConnected what="Outbox, DLT" why="운영 조회 서버가 실행 중이 아니에요 (`npm run ops`)" />
-          ) : (
-            <div className="stack">
-              <table className="table">
-                <thead><tr><th>Outbox 미발행</th><th className="r">건수</th></tr></thead>
-                <tbody>
-                  {ops.data!.outboxUnpublished.map((o) => (
-                    <tr key={o.service}><td>{o.service}</td><td className="r num">{o.count === 0 ? <Badge tone="success">0</Badge> : <Badge tone="warn">{o.count}</Badge>}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-              {ops.data!.dlt === null ? (
-                <NotConnected what="DLT 메시지 수" why={ops.data!.dltError ?? 'Kafka에 연결할 수 없어요'} />
-              ) : (
+        {DEMO && (
+          <Card title={<>Outbox 미발행 <small>DB에 저장됐지만 아직 Kafka로 안 나간 이벤트</small> <span className="pill-ops">시연용 운영 조회</span></>}>
+            {ops.isLoading ? (
+              <Loading />
+            ) : ops.error ? (
+              <NotConnected what="Outbox" why="운영 조회 서버가 실행 중이 아니에요 (`npm run ops`)" />
+            ) : (
+              <div className="stack">
                 <table className="table">
-                  <thead><tr><th>DLT 토픽 (재시도를 다 실패한 메시지)</th><th className="r">메시지</th></tr></thead>
+                  <thead><tr><th>서비스</th><th className="r">미발행</th></tr></thead>
                   <tbody>
-                    {ops.data!.dlt.map((d) => (
-                      <tr key={d.topic}><td><code>{d.topic}</code></td><td className="r num">{d.messages === 0 ? <Badge tone="success">0</Badge> : <Badge tone="danger">{d.messages}</Badge>}</td></tr>
+                    {ops.data!.outboxUnpublished.map((o) => (
+                      <tr key={o.service}><td>{o.service}</td><td className="r num">{o.count === 0 ? <Badge tone="success">0</Badge> : <Badge tone="warn">{o.count}</Badge>}</td></tr>
                     ))}
                   </tbody>
                 </table>
-              )}
-              <div className="hint">조회 시각 {formatTimeSec(ops.data!.checkedAt)}</div>
-            </div>
-          )}
-        </Card>
+                <div className="hint">조회 시각 {formatTimeSec(ops.data!.checkedAt)}</div>
+              </div>
+            )}
+          </Card>
+        )}
       </div>
 
+      {DEMO && <DltPanel />}
+
+      {DEMO && (
       <Card title={<>금액 정합성 검사 <span className="pill-ops">시연용 운영 조회</span></>}>
         {ops.isLoading ? (
           <Loading />
@@ -155,7 +151,14 @@ export function SystemPage() {
           </div>
         )}
         {ops.data?.checks.some((c) => c.error) && <ErrorBox error={new Error(ops.data.checks.find((c) => c.error)!.error!)} title="일부 검사를 실행하지 못했어요" />}
+        <div style={{ marginTop: 12 }}>
+          <DesignNote title="금액이 맞는지 어떻게 증명하나">
+            loadtest/sql/verify.sql의 검사식을 지금 DB에 그대로 실행해요. 위반이 0이면 모든 계좌에서 잔고, 증거금, 원장, 정산 금액이 서로 맞는다는 뜻이에요.
+            부하 테스트 1,000건 뒤에도 같은 검사로 위반 0을 확인했어요 (통합 테스트 E2E-3).
+          </DesignNote>
+        </div>
       </Card>
+      )}
     </div>
   );
 }

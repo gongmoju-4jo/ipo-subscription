@@ -2,8 +2,10 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useAllocation, useSubscription } from '../api/queries';
 import { ApiError } from '../api/client';
 import type { SubscriptionResponse } from '../api/types';
-import { Badge, Card, ErrorBox, Loading, Money, RecentExchanges } from '../components/ui';
-import { TracePanel } from '../components/TracePanel';
+import { Badge, Card, ErrorBox, Loading, Money } from '../components/ui';
+import { TracePanel } from '../demo/TracePanel';
+import { DesignNote } from '../demo/DesignNote';
+import { DEMO } from '../demo/flag';
 import { formatDateTime, formatWon } from '../lib/format';
 import { cancelReasonLabel, inProgressStatuses, rejectReasonLabel, subscriptionStatusLabel } from '../lib/status';
 
@@ -79,7 +81,7 @@ export function SubscriptionDetailPage() {
       </div>
 
       <div className="grid grid-2">
-        <Card title="진행 상태">
+        <Card title="진행 상태" extra={null}>
           <div className="steps">
             {steps.map((step, i) => (
               <div key={i} className={`step ${step.state}`}>
@@ -90,6 +92,12 @@ export function SubscriptionDetailPage() {
                 </div>
               </div>
             ))}
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <DesignNote title="중간에 실패해도 돈이 묶이지 않는 이유">
+              청약(청약 서비스)과 증거금(계좌 서비스)은 DB가 달라 한 트랜잭션으로 묶을 수 없어요. 청약 서비스가 단계를 지휘하는 SAGA로 처리하고,
+              증거금을 인출한 뒤 확정에 실패하거나 계좌 응답이 늦으면 반환 요청(보상)을 보내 증거금 전액을 돌려줘요. 그래서 상태는 접수 중 → 확정 또는 반환 중 → 취소로만 움직여요.
+            </DesignNote>
           </div>
         </Card>
 
@@ -147,8 +155,7 @@ export function SubscriptionDetailPage() {
         </Card>
       )}
 
-      <TracePanel subscriptionId={subscriptionId} live={live} />
-      <RecentExchanges filter={(r) => r.path.includes(subscriptionId)} />
+      {DEMO && <TracePanel subscriptionId={subscriptionId} live={live} />}
     </div>
   );
 }

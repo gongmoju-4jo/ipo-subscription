@@ -223,6 +223,72 @@ async function summary() {
   return [200, { outboxUnpublished: outbox.map((o) => ({ service: o.service, count: Number(o.c) })), dlt, dltError, checks, checkedAt: new Date().toISOString() }];
 }
 
+// DLT 메시지 내용 (가장 최근 limit건). Spring이 붙인 실패 정보 헤더(원래 토픽, 예외 메시지 등)도 같이 돌려준다
+function decodeHeader(buf) {
+  if (!buf) return null;
+  const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+  const text = b.toString('utf8');
+  // 숫자 헤더(원래 파티션 4바이트, 오프셋, 타임스탬프 8바이트)는 이진값이라 숫자로 읽는다
+  if (/[\x00-\x08]/.test(text)) {
+    if (b.length === 4) return String(b.readInt32BE(0));
+    if (b.length === 8) return String(b.readBigInt64BE(0));
+  }
+  return text;
+}
+
+async function dltMessages(topic, limit) {
+  if (!/^[a-z0-9.\-]+\.DLT$/.test(topic)) return [400, { message: 'DLT 토픽 이름이 아니에요' }];
+  const admin = kafka.admin();
+  await admin.connect();
+  let offsets;
+  try {
+    offsets = await admin.fetchTopicOffsets(topic);
+  } finally {
+    await admin.disconnect().catch(() => {});
+  }
+  const total = offsets.reduce((a, o) => a + (Number(o.high) - Number(o.low)), 0);
+  if (total === 0) return [200, { topic, total: 0, messages: [] }];
+  const groupId = `ops-dlt-${crypto.randomUUID()}`;
+  const consumer = kafka.consumer({ groupId });
+  const messages = [];
+  const remaining = new Map(offsets.map((o) => [o.partition, Number(o.high) - Number(o.low)]));
+  await consumer.connect();
+  try {
+    await consumer.subscribe({ topic, fromBeginning: true });
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 5000);
+      consumer.run({
+        eachMessage: async ({ partition, message }) => {
+          const h = Object.fromEntries(Object.entries(message.headers ?? {}).map(([k, v]) => [k, decodeHeader(v)]));
+          messages.push({
+            partition,
+            offset: message.offset,
+            timestamp: new Date(Number(message.timestamp)).toISOString(),
+            key: message.key?.toString() ?? null,
+            value: message.value?.toString() ?? null,
+            originalTopic: h['kafka_dlt-original-topic'] ?? null,
+            originalOffset: h['kafka_dlt-original-offset'] ?? null,
+            exceptionClass: h['kafka_dlt-exception-fqcn'] ?? null,
+            exceptionMessage: h['kafka_dlt-exception-message'] ?? null,
+            causeClass: h['kafka_dlt-exception-cause-fqcn'] ?? null,
+          });
+          remaining.set(partition, (remaining.get(partition) ?? 1) - 1);
+          if ([...remaining.values()].every((n) => n <= 0)) {
+            clearTimeout(timer);
+            resolve();
+          }
+        },
+      });
+    });
+  } finally {
+    await consumer.disconnect().catch(() => {});
+    const admin2 = kafka.admin();
+    await admin2.connect().then(() => admin2.deleteGroups([groupId])).catch(() => {}).finally(() => admin2.disconnect().catch(() => {}));
+  }
+  messages.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  return [200, { topic, total, messages: messages.slice(0, limit) }];
+}
+
 function send(res, status, body) {
   const data = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -244,6 +310,11 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = url.pathname.match(/^\/ops\/subscriptions\/([^/]+)\/trace$/)) && UUID.test(m[1])) {
       const [s, b] = await trace(m[1], claims.sub);
+      return send(res, s, b);
+    }
+    // DLT 메시지 내용. 다른 사용자의 ID가 들어 있을 수 있어 운영에서는 ADMIN만 보도록 바꿔야 한다
+    if (url.pathname === '/ops/dlt') {
+      const [s, b] = await dltMessages(url.searchParams.get('topic') ?? '', 20);
       return send(res, s, b);
     }
     // 시스템 전체 집계 (개인 정보 없음). 운영에서는 ADMIN만 보도록 바꿔야 한다

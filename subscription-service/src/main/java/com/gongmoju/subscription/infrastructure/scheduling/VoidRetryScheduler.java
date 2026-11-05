@@ -90,6 +90,9 @@ class VoidRetryScheduler {
     // 최대 횟수에 이른 청약은 재요청 대상 조회와 따로 조회 (계속 남아 재요청 대상의 건수 제한을 채우지 않게 함). 알림 간격마다 한 번 확인.
     // 상세 로그는 오래된 순 앞쪽 batch 건수까지만 남기고(이 청약들이 자동으로 종료되지 않으면 다음 주기에도 같은 청약이 앞쪽임),
     // 총 건수와 상세에서 빠진 건수를 요약 로그로 남겨서 누락이 보이게 함. 빠진 청약은 DB에서 조회해야 함.
+    // 주의: 청약 정보(상태, 해제 사유, 요청 횟수, 마지막 요청 시각)를 얻으려고 재요청 서비스(handle)를 재사용함. 그래서 이 알림 경로는
+    // "handle은 최대 횟수에 이른 청약에서 상태, 요청 횟수, Outbox를 바꾸지 않는다"는 전제에 의존함 (VoidRetryAlertNoWriteTest가 확인).
+    // handle의 조건을 바꿀 때는 이 전제가 깨지지 않는지 확인할 것. 알림을 읽기 전용 조회(조회가 상세를 직접 반환)로 바꾸는 것은 DLT 알림 이슈에서 함께 검토함.
     private void alertExhausted(Instant now, Instant lastRequestedBefore) {
         if (lastAlertAt != null && now.isBefore(lastAlertAt.plus(alertInterval))) {
             return;

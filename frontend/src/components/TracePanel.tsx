@@ -1,0 +1,121 @@
+import { useState } from 'react';
+import { useTrace } from '../api/queries';
+import { ApiError } from '../api/client';
+import { Badge, Card, NotConnected } from './ui';
+import { formatTimeSec, formatWon, shortId } from '../lib/format';
+import { ledgerTypeLabel, topicLabel } from '../lib/status';
+
+// 청약 1건의 실제 처리 기록 (시연 전용 운영 조회 서버). 펼쳤을 때만 조회한다
+export function TracePanel({ subscriptionId, live }: { subscriptionId: string; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card
+      title={
+        <span className="row" style={{ gap: 8 }}>
+          처리 상세 <span className="pill-ops">시연용 운영 조회</span>
+        </span>
+      }
+      extra={<button className="btn btn-ghost btn-sm" onClick={() => setOpen((v) => !v)}>{open ? '접기' : '처리 상세 보기'}</button>}
+    >
+      {open ? <TraceBody subscriptionId={subscriptionId} live={live} /> : <div className="hint">Kafka 이벤트, Outbox 발행, 처리 기록(중복 방지), 원장을 실제 DB 기록으로 보여줘요</div>}
+    </Card>
+  );
+}
+
+function TraceBody({ subscriptionId, live }: { subscriptionId: string; live: boolean }) {
+  const trace = useTrace(subscriptionId, live);
+  if (trace.isLoading) return <div className="hint">불러오는 중…</div>;
+  if (trace.error) {
+    const e = trace.error;
+    const why = e instanceof ApiError && e.status === 403 ? '본인 청약만 볼 수 있어요' : '운영 조회 서버(frontend/ops-server)가 실행 중이 아니에요. `npm run ops`로 실행하면 보여요';
+    return <NotConnected what="처리 기록" why={why} />;
+  }
+  const t = trace.data!;
+  const events = [...t.events].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return (
+    <div className="stack">
+      <div className="notice gray" style={{ fontSize: 13 }}>
+        청약 접수(<code>subscription.requested</code>)는 Outbox 없이 API가 바로 발행하고 브로커 저장을 확인한 뒤 202를 줘서 이 표에는 없어요. 서로 다른 Kafka 토픽 사이에는 순서가 보장되지 않아요. 아래는 각 서비스 Outbox에 기록된 시각 순서예요. "소비"는 받는 쪽 처리 기록(processed_event)에 같은 이벤트 ID가 있다는 뜻이고, 이 기록 때문에 같은 이벤트가 두 번 와도 한 번만 반영돼요.
+      </div>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>단계</th>
+              <th>Kafka 토픽</th>
+              <th>보낸 서비스</th>
+              <th>메시지 키</th>
+              <th>이벤트 ID</th>
+              <th>기록</th>
+              <th>발행</th>
+              <th>소비</th>
+            </tr>
+          </thead>
+          <tbody>
+            {events.length === 0 && (
+              <tr><td colSpan={8} className="muted">아직 기록된 이벤트가 없어요</td></tr>
+            )}
+            {events.map((e) => (
+              <tr key={e.eventId}>
+                <td style={{ fontWeight: 700 }}>{topicLabel[e.topic] ?? e.topic}</td>
+                <td><code>{e.topic}</code></td>
+                <td>{e.service}</td>
+                <td><code>{shortId(e.messageKey)}</code></td>
+                <td><code>{shortId(e.eventId)}</code></td>
+                <td className="num">{formatTimeSec(e.createdAt)}</td>
+                <td>{e.publishedAt ? <Badge tone="success">발행 {formatTimeSec(e.publishedAt)}</Badge> : <Badge tone="warn">미발행</Badge>}</td>
+                <td>
+                  {e.consumedBy.length === 0 ? (
+                    <span className="muted">-</span>
+                  ) : (
+                    e.consumedBy.map((c) => (
+                      <div key={c.consumer} style={{ fontSize: 12 }}>
+                        <code>{c.consumer}</code> {formatTimeSec(c.processedAt)}
+                      </div>
+                    ))
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid grid-2">
+        <div>
+          <div className="card-title">증거금</div>
+          {t.margin ? (
+            <dl className="kv">
+              <dt>상태</dt><dd><code>{String(t.margin.status)}</code></dd>
+              <dt>금액</dt><dd className="num">{formatWon(Number(t.margin.amount))}</dd>
+              <dt>정산 금액</dt><dd className="num">{t.margin.posted_amount == null ? '-' : formatWon(Number(t.margin.posted_amount))}</dd>
+            </dl>
+          ) : (
+            <div className="hint">증거금 행 없음 (인출되지 않음)</div>
+          )}
+        </div>
+        <div>
+          <div className="card-title">이 청약의 원장</div>
+          {t.ledger.length === 0 ? (
+            <div className="hint">원장 기록 없음 (돈이 움직이지 않음)</div>
+          ) : (
+            <table className="table">
+              <thead><tr><th>거래</th><th className="r">금액</th><th className="r">거래 후 예수금</th><th className="r">거래 후 증거금</th></tr></thead>
+              <tbody>
+                {t.ledger.map((l, i) => (
+                  <tr key={i}>
+                    <td>{ledgerTypeLabel[l.type] ?? l.type}</td>
+                    <td className="r num">{formatWon(l.amount)}</td>
+                    <td className="r num">{formatWon(l.cashBalanceAfter)}</td>
+                    <td className="r num">{formatWon(l.marginBalanceAfter)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      <div className="hint">조회 시각 {formatTimeSec(t.checkedAt)}{live ? ', 처리 중이라 2초마다 새로 고침' : ''}</div>
+    </div>
+  );
+}

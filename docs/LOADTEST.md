@@ -172,6 +172,10 @@ SCENARIOS=S0,S3,S4 BASELINE_DIR=loadtest/data/baseline-s34 bash loadtest/officia
 | `S0,S1,S3,S4` | 위 순서 뒤 S1 단계 | 위와 같음 |
 
 - 번갈아 실행하는 이유: 세션을 나누면 세션 간 편차가 섞이고, 시나리오별로 몰아서 돌리면 세션 중 DB 증가와 JVM 상태 변화가 한 시나리오에만 쏠립니다.
+- 번갈아 도는 순서는 `MEASURE_ORDER`(기본 `S0,S3,S4`)로 정합니다. 실행하는 시나리오를 한 번씩 정확히 적어야 하고 아니면 시작 전에 멈춥니다. 측정 3회는 모두 같은 순서이고, 경로 예열은 순서와 관계없이 먼저 합니다. 워밍업 직후 첫 측정이 늘 같은 시나리오면 그 시나리오만 불리할 수 있어서, 세션 세 번을 `S0,S3,S4` / `S3,S4,S0` / `S4,S0,S3`으로 나눠 첫 측정을 돌려 씁니다. 순서는 `env.txt`의 `설정 MEASURE_ORDER=`에 남습니다.
+  ```bash
+  MEASURE_ORDER=S3,S4,S0 SCENARIOS=S0,S3,S4 BASELINE_DIR=loadtest/data/baseline-s34 bash loadtest/official.sh --batch official-s34-b
+  ```
 - 경로 예열 이유: 워밍업은 모든 요청이 확정되는 경로라 이중청약, 잔액 부족 거절 경로가 데워지지 않은 채 첫 측정에 들어갑니다. 경로 예열 회차는 구간 `warmup`으로 남고, 성능은 참고값이지만 정합성은 판정합니다.
 - S3, S4는 시작 전(부하 전)에 데이터를 확인하고 맞지 않으면 멈춥니다 (종료 코드 4): 행동 CSV 규칙(이 측정의 청약 금액, 4회 기준), S3 투자자의 두 번째 계좌, S4 회원 CSV가 잔액 부족 묶음인지, DB의 잔액 부족 묶음 예수금이 행동 CSV대로인지. S4 행동 CSV는 청약 금액 150,000원(`S0_PRICE` x `QUANTITY`) 기준이라 금액을 바꾸면 시작하지 않습니다.
 - `S0,S3,S4`는 S1이 없어 약 25~35분입니다 (추정. 워밍업 3~15분 포함). S1이 없으므로 `consumer_stats.py`(S1 전용)는 해당하지 않습니다.

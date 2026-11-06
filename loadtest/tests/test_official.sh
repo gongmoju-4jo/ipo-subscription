@@ -365,6 +365,37 @@ S4 b-S4-r2 measure
 S0 b-S0-r3 measure
 S4 b-S4-r3 measure" plan_runs
 
+# MEASURE_ORDER: 번갈아 도는 순서를 세션마다 돌려 쓴다 (워밍업 직후 첫 측정이 늘 같은 시나리오가 되지 않게)
+po() { parse_order "$1" 2>/dev/null && echo "$ORDER_LIST"; }
+plan_ord() { MEASURE_ORDER="$1" plan_runs; }
+HAS_S3=1; HAS_S4=1
+expect_out "parse_order: 비우면 S0 S3 S4" 0 "S0 S3 S4" po ""
+expect_out "parse_order: S3,S4,S0" 0 "S3 S4 S0" po "S3,S4,S0"
+expect_out "parse_order: S4,S0,S3" 0 "S4 S0 S3" po "S4,S0,S3"
+for v in "S0,S3" "S0,S3,S4,S0" "S0,S3,S3,S4" "S0,S3,S4,S1" "S0,S3,S5" "s0,s3,s4"; do
+  expect_out "parse_order: '$v' → 실패 (실행하는 시나리오를 한 번씩 정확히)" 1 "" po "$v"
+done
+HAS_S3=0
+expect_out "parse_order: S4만 있으면 S4,S0" 0 "S4 S0" po "S4,S0"
+expect_out "parse_order: 실행하지 않는 S3는 쓸 수 없다" 1 "" po "S0,S3,S4"
+HAS_S3=1; BATCH=b
+expect_out "plan_runs: MEASURE_ORDER=S3,S4,S0 → 경로 예열은 그대로, 측정은 S3, S4, S0 순서로 3회" 0 "S3 b-S3-W warmup
+S4 b-S4-W warmup
+S3 b-S3-r1 measure
+S4 b-S4-r1 measure
+S0 b-S0-r1 measure
+S3 b-S3-r2 measure
+S4 b-S4-r2 measure
+S0 b-S0-r2 measure
+S3 b-S3-r3 measure
+S4 b-S4-r3 measure
+S0 b-S0-r3 measure" plan_ord "S3,S4,S0"
+HAS_S4=1
+first_measure() { MEASURE_ORDER="$1" plan_runs | sed -n 3p; }
+expect_out "plan_runs: MEASURE_ORDER=S4,S0,S3의 첫 측정은 S4" 0 "S4 b-S4-r1 measure" first_measure "S4,S0,S3"
+expect_out "plan_runs: MEASURE_ORDER를 비우면 첫 측정은 S0" 0 "S0 b-S0-r1 measure" first_measure ""
+HAS_S3=0; HAS_S4=0
+
 # run_plan: 반복 안에서 표준입력을 읽는 명령(docker exec -i)이 있어도 실행이 빠지지 않는다
 RP="$(mktemp)"
 ( HAS_S3=1; HAS_S4=1   # 가짜 run_one이 밖으로 새지 않게 서브셸에서
@@ -376,7 +407,7 @@ RP="$(mktemp)"
 HAS_S1=0; HAS_S3=0; HAS_S4=0
 
 # main: 잘못된 SCENARIOS, S4_PREFIX, S4 청약 금액은 빌드, 복원 전에 막는다 (결과 폴더도 만들지 않음)
-for bad_env in "SCENARIOS=S1" "SCENARIOS=S0,S9" "S4_PREFIX=LB" "S4_PREFIX=" "SCENARIOS=S0,S4 S0_PRICE=10000"; do
+for bad_env in "SCENARIOS=S1" "SCENARIOS=S0,S9" "S4_PREFIX=LB" "S4_PREFIX=" "SCENARIOS=S0,S4 S0_PRICE=10000" "SCENARIOS=S0,S3,S4 MEASURE_ORDER=S0,S3" "SCENARIOS=S0,S3,S4 MEASURE_ORDER=S3,S4,S0,S1" "SCENARIOS=S0,S3 MEASURE_ORDER=S4,S0,S3"; do
   out="$( ( for kv in $bad_env; do eval "$kv"; done
             DIR="$(fake_dir)"; mkdir() { echo STOP; exit 0; }; main --batch zz-args ) 2>&1 )"; rc=$?
   [ "$rc" = 1 ] && [[ "$out" != *STOP* ]] && ok "main: $bad_env → 시작 전에 종료 코드 1" || bad "main $bad_env" "rc=$rc out=$out"

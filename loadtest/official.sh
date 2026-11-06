@@ -31,7 +31,10 @@
 #                   S3, S4는 S0과 같은 100명 x 10회이고 요청 구성은 행동 CSV를 따른다. 경로 예열은 워밍업(모두 확정 경로)이 데우지 못한
 #                   거절 경로(이중청약, 잔액 부족)를 첫 측정 전에 한 번 지나가게 하는 것이고, 판정은 참고(정합성은 판정)
 #                   S3, S4는 두 번째 계좌와 잔액 부족 묶음이 있는 기준 스냅샷이 필요하다 (BASELINE_DIR, docs/LOADTEST.md 3-4절)
-#   S4_PREFIX=lb    S4 잔액 부족 묶음의 loginId 접두사 (seed_users.py --prefix). 회원 CSV는 loadtest/data/users-s4.csv
+#   MEASURE_ORDER=  측정 3회 안에서 S0, S3, S4를 도는 순서 (예: S3,S4,S0). 비우면 S0, S3, S4. 실행하는 시나리오를 한 번씩 정확히 적는다
+#                   워밍업 직후 첫 측정은 늘 같은 시나리오가 맡아 그 시나리오만 불리할 수 있어서, 세션마다 순서를 돌려 쓴다
+#                   (세 세션: S0,S3,S4 / S3,S4,S0 / S4,S0,S3). 경로 예열(S3, S4)은 순서와 관계없이 먼저 한다
+#   S4_PREFIX=lb   S4 잔액 부족 묶음의 loginId 접두사 (seed_users.py --prefix). 회원 CSV는 loadtest/data/users-s4.csv
 #   GAP=30          실행 사이 대기(초). 앞 실행의 처리 대기는 소진 확인으로 없애고, 이 대기는 보고서의 서버 지표 구간
 #                   (요청 구간 앞뒤 10초 + Prometheus 5초 수집)이 앞뒤 실행과 섞이지 않게 하는 용도다. GC, DB 체크포인트는 대기로 피할 수 없다
 #                   개선 전후를 비교할 때는 같은 값을 쓴다
@@ -90,7 +93,7 @@ TOKEN_MAX_S=$((55 * 60))   # 토큰 만료 1시간보다 5분 일찍 끊는다
 STATS_INTERVAL="${STATS_INTERVAL:-5}"
 RESTORE="${RESTORE:-1}"; DB_DUMP="${DB_DUMP:-1}"
 K6_CPUS=2; K6_MEMORY=1g    # k6 컨테이너 상한 (모든 실행 같음. env.txt에 기록)
-SCENARIOS="${SCENARIOS:-S0,S1}"; S4_PREFIX="${S4_PREFIX:-lb}"
+SCENARIOS="${SCENARIOS:-S0,S1}"; S4_PREFIX="${S4_PREFIX:-lb}"; MEASURE_ORDER="${MEASURE_ORDER:-}"; ORDER_LIST=""
 S4_CSV="$DIR/data/users-s4.csv"
 SYN_RUNS=4                 # S3, S4 회원이 청약하는 횟수 = 경로 예열 1 + 측정 3 (S4 행동 CSV의 입금액 조건, synthetic/validate.py --runs)
 SYN_AMOUNT=150000          # S4 행동 CSV를 만든 청약 금액 (공모가 15,000원 x 10주. judge.py도 이 금액으로 기대값을 계산한다)
@@ -448,7 +451,7 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
     echo "설정 P95_LIMIT=$P95_LIMIT DRAIN_LIMIT=$DRAIN_LIMIT DRAIN_TIMEOUT=$DRAIN_TIMEOUT SKIP_BUILD=${SKIP_BUILD:-0} ALLOW_DIRTY=${ALLOW_DIRTY:-0}"
     echo "설정 REQUIRED_GROUPS=$REQUIRED_GROUPS"
     echo "설정 STATS_INTERVAL=$STATS_INTERVAL K6_CPUS=$K6_CPUS K6_MEMORY=$K6_MEMORY RESTORE=$RESTORE DB_DUMP=$DB_DUMP"
-    echo "설정 SCENARIOS=$SCENARIOS S4_PREFIX=$S4_PREFIX SYN_RUNS=$SYN_RUNS BASELINE_DIR=${BASELINE_DIR:-$DIR/data/baseline}"
+    echo "설정 SCENARIOS=$SCENARIOS MEASURE_ORDER=${ORDER_LIST// /,} S4_PREFIX=$S4_PREFIX SYN_RUNS=$SYN_RUNS BASELINE_DIR=${BASELINE_DIR:-$DIR/data/baseline}"
     # 어떤 행동 데이터로 측정했는지 (Synthetic Data는 커밋한 CSV를 쓰지만, 같은 커밋인지와 별개로 파일 자체를 남긴다)
     [ "$HAS_S3" = 1 ] && echo "행동 CSV s3-behavior.csv sha256=$(sha256_file "$DIR/synthetic/s3-behavior.csv" 2>/dev/null || echo 조회실패)"
     [ "$HAS_S4" = 1 ] && echo "행동 CSV s4-behavior.csv sha256=$(sha256_file "$DIR/synthetic/s4-behavior.csv" 2>/dev/null || echo 조회실패)"
@@ -514,16 +517,37 @@ parse_scenarios() { # 인자: 쉼표로 구분한 시나리오
   return 0
 }
 
+# MEASURE_ORDER("S3,S4,S0" 등)를 읽어 ORDER_LIST(공백으로 구분)를 정한다. 비우면 S0, S3, S4 (실행하는 것만)
+# 지정하면 이번에 실행하는 시나리오(S0, 그리고 SCENARIOS에 있는 S3, S4)를 한 번씩 정확히 적어야 한다. HAS_S3, HAS_S4를 먼저 정해 둔다
+parse_order() { # 인자: 쉼표로 구분한 순서 (비어 있을 수 있음)
+  local want="S0" s seen="," got=""
+  [ "$HAS_S3" = 1 ] && want="$want S3"
+  [ "$HAS_S4" = 1 ] && want="$want S4"
+  if [ -z "${1:-}" ]; then ORDER_LIST="$want"; return 0; fi
+  for s in ${1//,/ }; do
+    case " $want " in *" $s "*) ;; *) echo "MEASURE_ORDER에는 이번에 실행하는 시나리오만 쓴다 ($want): $s" >&2; return 1 ;; esac
+    case "$seen" in *",$s,"*) echo "MEASURE_ORDER에 ${s}가 두 번 있음: $1" >&2; return 1 ;; esac
+    seen="$seen$s,"; got="$got $s"
+  done
+  for s in $want; do
+    case "$seen" in *",$s,"*) ;; *) echo "MEASURE_ORDER에 ${s}가 없음 (실행하는 시나리오: $want): $1" >&2; return 1 ;; esac
+  done
+  ORDER_LIST="${got# }"
+  return 0
+}
+
 # 워밍업 뒤 S0, S3, S4의 실행 순서를 "시나리오 run_id 구간" 줄로 낸다 (S1은 그 뒤 따로)
 # S3, S4는 경로 예열 1회 뒤 S0과 번갈아 3회씩 (몰아서 돌리면 세션 중 DB 증가, JVM 변화가 한 시나리오에 쏠린다)
+# 번갈아 도는 순서는 MEASURE_ORDER (기본 S0, S3, S4). 세 번의 측정은 모두 같은 순서다
 plan_runs() {
-  local i
+  local i s
+  parse_order "${MEASURE_ORDER:-}" || return 1
   [ "$HAS_S3" = 1 ] && echo "S3 $BATCH-S3-W warmup"
   [ "$HAS_S4" = 1 ] && echo "S4 $BATCH-S4-W warmup"
   for i in 1 2 3; do
-    echo "S0 $BATCH-S0-r$i measure"
-    [ "$HAS_S3" = 1 ] && echo "S3 $BATCH-S3-r$i measure"
-    [ "$HAS_S4" = 1 ] && echo "S4 $BATCH-S4-r$i measure"
+    for s in $ORDER_LIST; do
+      echo "$s $BATCH-$s-r$i measure"
+    done
   done
   return 0
 }
@@ -707,6 +731,7 @@ main() {
     || { echo "워밍업 인자 범위: WARM_BUCKET>=5, WARM_WINDOW>=3, WARM_CONSEC>=1, WARM_MAX>=WARM_MIN (지금 $WARM_BUCKET, $WARM_WINDOW, $WARM_CONSEC, $WARM_MIN~$WARM_MAX)" >&2; exit 1; }
   case "$RESTORE$DB_DUMP" in 00|01|10|11) ;; *) echo "RESTORE, DB_DUMP는 0 또는 1: RESTORE=$RESTORE DB_DUMP=$DB_DUMP" >&2; exit 1 ;; esac
   parse_scenarios "$SCENARIOS" || exit 1
+  parse_order "$MEASURE_ORDER" || exit 1
   case "$S4_PREFIX" in ''|*[!a-z0-9]*) echo "S4_PREFIX는 영문 소문자, 숫자: $S4_PREFIX" >&2; exit 1 ;; esac
   if [ "$HAS_S4" = 1 ] && [ $((S0_PRICE * QUANTITY)) -ne "$SYN_AMOUNT" ]; then
     echo "S4 행동 CSV는 청약 금액 ${SYN_AMOUNT}원 기준이다 (S0_PRICE x QUANTITY = $((S0_PRICE * QUANTITY))원). 금액을 바꾸려면 행동 CSV와 judge.py 기대값도 같이 바꾼다" >&2; exit 1

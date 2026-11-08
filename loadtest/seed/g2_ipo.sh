@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# G2 대량 환불 스냅샷용 공모주를 넣는다: 워밍업 공모주 W(케이스 A 모양)와 측정 공모주 M. ID를 "W1 <id>", "M <id>" 꼴로 출력한다.
+# G2 대량 환불 스냅샷용 공모주를 넣는다: 워밍업 공모주 W(케이스 A 모양)와 측정 공모주 M. "CASE <A|B>", "W1 <id>", "M <id>" 줄을 출력한다.
 #   - 일반청약 물량 = 청약 수 x 평균 청약 수량 / 69 (경쟁률 69:1, 주식 수 기준)를 반올림하고 홀수면 1을 더한다
 #     (균등 물량 = 물량 / 2이고 DB 제약이 균등 x 2 >= 물량이라 짝수여야 한다). A 평균 172주, B 평균 53주 (k6/g2-quantity.js)
 #     예: A 1,000건 → 2,494주, B 1,000건 → 768주
@@ -11,7 +11,7 @@
 #   --count: M의 청약 수. 케이스 B는 50의 배수 (수량 분포가 50건 단위)
 #   --warmups: W 개수 (연습 P1은 2). 0이면 W 없이 M만
 #   --warmup-count: W 하나의 청약 수 (케이스 A 모양)
-#   --out: 출력과 같은 내용("W1 <id>" 줄들, "M <id>")을 파일로도 쓴다
+#   --out: 출력과 같은 내용을 파일로도 쓴다. 회차 실행기(g2_run.sh)는 스냅샷 폴더의 ipo-ids.txt를 읽으므로 그 경로로 준다
 # 환경변수: PG_CONTAINER(ipo-postgres), PG_DB(ipo)
 # 종료 코드: 0 정상 / 1 사용법 / 4 DB 실패
 set -uo pipefail
@@ -76,7 +76,8 @@ is_uuid() { case "$1" in ????????-????-????-????-????????????) return 0 ;; *) re
 
 main() {
   parse_args "$@"
-  local lines="" i id rw rmq moved
+  local lines i id rw rmq moved
+  lines="CASE ${CASE}"$'\n'
   rw="$(retail_for A "$WARMUP_COUNT")"; rmq="$(retail_for "$CASE" "$COUNT")"
   for i in $(seq 1 "$WARMUPS"); do
     id="$(new_ipo "$NAME-W$i" "$rw")" && is_uuid "$id" || die 4 "W$i 공모주 넣기 실패: $id"

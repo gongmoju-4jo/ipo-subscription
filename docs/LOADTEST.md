@@ -23,12 +23,13 @@
 | --- | --- |
 | `compose.perf.yml` | 컨테이너별 CPU, 메모리 상한과 JVM 힙 고정, 슬로우 쿼리 설정 |
 | `loadtest/official.sh` | 정식 측정 전체 실행 (빌드, 배포, 버전 기록, S0, S1, 후처리, 판정). 4장 |
+| `loadtest/g2_run.sh` | 대량 환불(마감 → 배정 → 정산 → 환불) 회차 실행, 수집, 검증, 판정 (확정 청약 스냅샷을 순서대로). 4장 끝 |
 | `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정, S3, S4 정합성 판정과 S0 대비 (`판정.md`) |
 | `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). `ALLOW_SUBSCRIPTIONS=1 save`는 확정 청약이 쌓인 DB 저장. 3-4절 |
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
 | `loadtest/verify/consumer_stats.py` | 정식 측정이 끝난 뒤 따로 실행. S1의 증거금 인출 Consumer 처리량, 랙 추이, 오류율, 병목 의심 단계 (`인출.md`, `인출.csv`, `인출-prometheus.json`). `python loadtest/verify/consumer_stats.py --batch <이름>` |
-| `loadtest/tests/` | `official.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/tests/` | `official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/synthetic/` | S3, S4 Synthetic Data: LLM 프롬프트와 응답 원문, 행동 CSV, 생성 코드, 검증(`validate.py`). 6장, `loadtest/synthetic/README.md` |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 (`--behavior`로 S3 두 번째 계좌, S4 입금액을 행동 CSV에서 읽음) |
 | `loadtest/seed/seed_users_sql.sh` | 회원, 계좌, 예수금 입금을 SQL 한 트랜잭션으로 넣기 (회원이 많을 때. 토큰은 `seed_users.py --refresh-tokens`). 3-2절 |
@@ -202,9 +203,9 @@ docker exec ipo-postgres psql -U postgres -d ipo -tAc "select count(*) from subs
 bash loadtest/seed/seed_users_sql.sh --start 1000 --users 10000 --prefix lt --bcrypt-cost 4 --out loadtest/data/users-g2.csv
 # 2. 토큰 (1시간 만료라 청약 직전에). 1천 건이면 --users 1000, --out loadtest/data/users.csv
 python loadtest/seed/seed_users.py --run-id g2 --prefix lt --users 10000 --out loadtest/data/users-g2.csv --refresh-tokens
-# 3. 공모주 W, M (ID는 --out 파일에 "W1 <id>", "M <id>")
-bash loadtest/seed/g2_ipo.sh --case B --count 10000 --out loadtest/data/g2/B-10k.ids
-W=$(awk '$1=="W1"{print $2}' loadtest/data/g2/B-10k.ids); M=$(awk '$1=="M"{print $2}' loadtest/data/g2/B-10k.ids)
+# 3. 공모주 W, M. ID 파일은 스냅샷 폴더의 ipo-ids.txt로 둔다 (회차 실행기 g2_run.sh가 읽는다. "CASE B", "W1 <id>", "M <id>")
+bash loadtest/seed/g2_ipo.sh --case B --count 10000 --out loadtest/data/g2-B-10k/ipo-ids.txt
+W=$(awk '$1=="W1"{print $2}' loadtest/data/g2-B-10k/ipo-ids.txt); M=$(awk '$1=="M"{print $2}' loadtest/data/g2-B-10k/ipo-ids.txt)
 # 4. 청약: W는 앞 1,000명이 172주, M은 CSV 전원이 케이스 B 수량
 bash loadtest/run-k6.sh g2 --ipo "$W" --run-id g2-B-10k-W --users data/users-g2.csv -e CASE=A -e COUNT=1000
 bash loadtest/run-k6.sh g2 --ipo "$M" --run-id g2-B-10k-M --users data/users-g2.csv -e CASE=B
@@ -305,6 +306,63 @@ S3, S4 (Synthetic Data) 판정 기준. 회차마다 유효성, 정합성, 성능
 종료 코드: 0 정상, 2 워밍업이 최대 시간 안에 정상 상태에 닿지 않음 또는 판정 실패, 3 토큰, 4 예수금, 5 버전(dirty, jar 불일치), 6 소진 대기, 7 기동, 8 k6, 9 사전 점검, 10 부하는 끝났고 후처리 일부 실패, 11 공모주 생성, 12 잠금·결과 폴더, 13 도구 없음, 14 기준 상태 복원 실패
 
 결과를 쓸 때 같이 적는 한계: k6와 서비스가 같은 PC, Prometheus 5초 수집, docker stats 5초 간격 순간값(조회 1번에 약 2~3초, 조회도 CPU를 씀), 토큰 재발급의 로그인 요청, S1은 공모가 `S1_PRICE`원 종목 (금액만 다르고 처리 경로는 같다고 보지만 확인하지 않았습니다)
+
+### 대량 환불 측정 (g2_run.sh)
+
+청약 마감 뒤 배정, 정산, 환불이 끝날 때까지의 시간을 잽니다. 3-4절의 확정 청약 스냅샷을 준 순서대로 한 회차씩 돌립니다.
+
+```bash
+export MSYS_NO_PATHCONV=1
+bash loadtest/g2_run.sh --batch g2-1k-0110 --session S-1 g2-A-1k g2-B-1k g2-B-1k g2-A-1k g2-A-1k g2-B-1k
+```
+
+회차 하나 (사람 손 없이 돈다)
+
+1. 스냅샷 복원 (`baseline.sh restore`. 서비스가 재시작되어 JVM이 차가운 상태) → healthy, Eureka 등록 → `SETTLE_S`초
+2. 점검: M 확정 수, 처리 중 청약 0, 종료 시각이 지난 OPEN 공모주 0, DLT 수. 실패하면 INVALID로 적고 다음 회차
+3. 워밍업: W마다 종료 시각을 1초 전으로 바꿔 마감 → 환불 완료까지 대기 → `GAP`초
+4. 측정 전 기록 (테이블 행 수), docker stats 기록 시작
+5. 측정: M 종료 시각 UPDATE → 스케줄러가 실제 조건(유예 20초, 랙 0, 처리 중 0)으로 마감 → 환불 완료(REFUNDED = 확정 수)까지 대기
+6. 수집, 검증 (`verify.sql`을 M과 W 모두), 판정 → `manifest.csv`에 한 줄
+
+측정 정의
+
+| 항목 | 정의 |
+| --- | --- |
+| 시작 T0 | 청약 outbox `ipo.closed`의 `created_at` (마감 UPDATE 시각부터 T0까지는 정책 시간 `policy_s`로 따로 기록) |
+| 끝 T1 | M의 `margin.settled_at` 최댓값. `total_s` = T1 - T0, `thr` = 정산 수 / `total_s` |
+| 보조 T2 | 마지막 `margin.settled` 처리 시각 (청약 REFUNDED 표시). `mark_s` = T2 - T1 |
+| 구간 | `wait_s`(T0 → 배정 시작), `alloc_s`(배정 계산, 저장), `publish_s`(배정 끝 → 마지막 배정 결과 발행), `first_settle_s`(T0 → 첫 정산), `settle_s`(첫 정산 → 마지막 정산) |
+
+판정 (회차마다)
+
+| 열 | 값 | 조건 |
+| --- | --- | --- |
+| `status` | `VALID` | 아래 둘이 아님 |
+| | `INVALID` (시험이 잘못됨, 판정하지 않음) | 정산 수 또는 REFUNDED 수 ≠ 확정 수, DLT 증가, 측정 끝 outbox 미발행, 측정 중 W, M이 아닌 공모주 마감, 시작 점검 실패 |
+| | `UNMEASURABLE` (측정 불가) | 정산이 `STALL_S`초 동안 늘지 않음, `MAX_S`초 초과, 배정 FAILED, 컨테이너 재시작 또는 OOM, W 환불이 끝나지 않음 |
+| `integrity` | `PASS` / `FAIL` (시스템 결함) | `verify.sql` 2, 3, 5, 6, 8, 11 ~ 15번 위반(W는 5 ~ 15번), 0주 배정 수 ≠ `VOIDED` 수, `VOIDED` 수 ≠ `MARGIN_VOID` 원장 수, `POSTED` 수 ≠ `MARGIN_POST` 원장 수. 측정 불가면 `-` |
+
+결과: `loadtest/results/g2-<batch>/`
+
+| 파일 | 내용 |
+| --- | --- |
+| `manifest.csv` | 회차마다 한 줄: 세션, 순번, 스냅샷, 케이스, 확정 수, 시작, 끝, status, integrity, total_s, throughput, 이유. 같은 `--batch`로 다시 실행하면 순번을 이어 쓴다 |
+| `env.txt`, `batch.log` | git 커밋, 커밋 안 한 파일, 설정, 컨테이너 자원 상한, 컨테이너 jar sha256 / 전체 로그 |
+| `<순번>-<스냅샷>/result.txt` | W, M 측정값 한 줄씩 (key=value: 위 구간, `settled`, `refunded`, `posted`, `voided`, `zero`(0주 배정), 원장 수, `round`, `seed`(추첨 시드)) |
+| `<순번>-<스냅샷>/checks.txt` | 판정 근거 (확정 수, DLT 전후, 미발행, 다른 마감, verify 위반, 이유) |
+| `<순번>-<스냅샷>/verify-M.txt`, `verify-W<i>.txt` | `verify.sql` 원본 출력 |
+| `<순번>-<스냅샷>/bucket-publish.csv`, `bucket-settle.csv` | 1초마다 배정 결과 발행 수, 정산 수 |
+| `<순번>-<스냅샷>/docker-stats.raw` | M 마감부터 환불 완료까지 docker stats (`STATS_INTERVAL`초 간격, 4장과 같은 형식) |
+| `<순번>-<스냅샷>/tables-before.txt`, `processed.txt`, `log.txt` | 측정 직전 테이블 행 수, 처리 기록, 회차 로그 |
+
+- 측정 전에 직접 합니다 (실행기가 하지 않음): `compose.perf.yml`로 띄우기(3-3절), 다른 무거운 프로그램 끄기, WSL 시계 점검
+- 순서는 인자 순서 그대로입니다. 같은 건수 안에서 A, B를 ABBA 꼴로 섞고, 세션마다 첫 케이스를 바꿉니다
+- 회차 시간: 1천 건 케이스 B 한 회차가 약 5분 30초였습니다 (복원과 기동 약 3분, W 약 45초, 쉼 30초, M 약 40초, 검증)
+- 시작 전에 모든 스냅샷 폴더(덤프, meta의 `allow_subscriptions` 줄, `ipo-ids.txt`)를 검사하고, 하나라도 없으면 아무것도 하지 않습니다
+- 복원, 기동, 조회가 실패하면 배치를 멈춥니다 (종료 코드 4). 그 회차의 로그는 회차 폴더에 남습니다
+
+종료 코드: 0 모든 회차 VALID, PASS / 1 사용법, 스냅샷 폴더 / 2 INVALID 또는 UNMEASURABLE 회차 있음 / 3 정합성 FAIL 회차 있음 / 4 복원, 기동, 조회 실패로 중단 / 12 잠금(다른 `g2_run.sh` 실행 중), 결과 폴더
 
 ## 5. 회차를 하나씩 실행
 
@@ -439,7 +497,9 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `RESTORE`, `DB_DUMP` | `1`, `1` | `official.sh` (시작할 때 기준 스냅샷 복원, 끝난 뒤 DB 덤프. `RESTORE=0`은 `env.txt`에 남고 정식 결과로 쓰지 않음) |
 | `BASELINE_DIR` | `loadtest/data/baseline` | `baseline.sh`, `official.sh` (기준 스냅샷 위치) |
 | `ALLOW_SUBSCRIPTIONS` | 없음 | `baseline.sh save` (`1`이면 확정 청약이 있는 DB도 저장. 3-4절) |
-| `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |
+| `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장), `g2_run.sh` (W 환불 완료 뒤 M 마감까지 대기 초) |
+| `STALL_S`, `MAX_S`, `W_MAX_S`, `SETTLE_S` | `600`, `7200`, `3600`, `20` | `g2_run.sh` (진행 정지로 볼 초, M 대기 상한 초, W 대기 상한 초, 복원 뒤 healthy에서 점검까지 대기 초) |
+| `BASELINE_ROOT` | `loadtest/data` | `g2_run.sh` (스냅샷 이름을 찾는 폴더) |
 | `SCENARIOS` | `S0,S1` | `official.sh` (실행할 시나리오. S0 필수, S0, S1, S3, S4 중에서. 4장) |
 | `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
 | `S1_REPEAT` | `3` | `official.sh` (S1 단계마다 반복 측정 횟수. 팀 규칙은 최소 3회, 3 미만이면 판정이 참고값) |
@@ -448,7 +508,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `P95_LIMIT`, `DRAIN_LIMIT` | `15`, `15` | `official.sh` → `judge.py` (G2 합격 기준 초) |
 | `DRAIN_TIMEOUT` | `2400` | `official.sh` (소진 대기 상한 초) |
 | `REQUIRED_GROUPS` | `subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve` | `official.sh` (lag을 확인할 필수 Consumer 그룹) |
-| `STATS_INTERVAL` | `5` | `official.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
+| `STATS_INTERVAL` | `5` | `official.sh`, `g2_run.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
 | `BEHAVIOR_CSV` | `../synthetic/<시나리오>-behavior.csv` | `s3.js`, `s4.js` (`-e BEHAVIOR_CSV=...`, 행동 CSV 경로. k6 스크립트 기준 상대 경로) |
@@ -469,9 +529,10 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `k6/g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `k6/g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
+bash loadtest/tests/test_g2_run.sh        # 대량 환불 회차 실행기 (인자, ipo-ids.txt, 스냅샷 검사, 환불 대기의 정지·상한·실패, verify.sql 출력 읽기(실제 출력 고정 데이터 포함), 판정, manifest)
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
 bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, ALLOW_SUBSCRIPTIONS 저장 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
 bash loadtest/tests/test_seed_users_sql.sh   # SQL 회원 시드 (옵션 검사, loginId 규칙, BCrypt 비용 확인, 넣기 실패 시 CSV 없음)
@@ -485,7 +546,7 @@ python loadtest/tests/test_autovacuum.py  # 실행별 autovacuum 차이 (새 테
 python loadtest/tests/test_synthetic.py   # 행동 CSV 규칙과 기대 결과, 생성 코드 재실행 결과가 커밋한 CSV와 같은지, 생성 코드가 응답 원문과 같은지
 ```
 
-- `loadtest/tests/fixtures/consumer-groups.txt`는 `kafka-consumer-groups.sh --describe --all-groups`의 실제 출력, `docker-stats.raw`는 `docker stats --no-stream --format '{{json .}}'`의 실제 출력입니다. 출력 형식이 바뀌면 새로 받아 바꿉니다.
+- `loadtest/tests/fixtures/consumer-groups.txt`는 `kafka-consumer-groups.sh --describe --all-groups`의 실제 출력, `docker-stats.raw`는 `docker stats --no-stream --format '{{json .}}'`의 실제 출력, `g2-verify-M.txt`, `g2-verify-W.txt`는 대량 환불 1천 건 회차의 `verify.sql` 실제 출력입니다. 출력 형식이 바뀌면(verify.sql 절 추가 포함) 새로 받아 바꿉니다.
 - 테스트를 통과해도 실제 환경 경로(빌드, 재시작, k6, 후처리)는 확인되지 않습니다. 고친 뒤에는 4장의 시험 실행을 한 번 돌립니다.
 
 ## 10. 주의

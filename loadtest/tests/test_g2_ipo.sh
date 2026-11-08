@@ -47,12 +47,12 @@ reset_fakes() {
 }
 reset_fakes
 out="$( ( main --case B --count 1000 --warmups 2 --name t --out "$T/ids.txt" ) 2>/dev/null )"; rc=$?
-exp="W1 $U1"$'\n'"W2 $U2"$'\n'"M $U3"
-[ "$rc" = 0 ] && [ "$out" = "$exp" ] && [ "$(cat "$T/ids.txt")" = "$exp" ] && ok "main: 'W1 id', 'W2 id', 'M id' 출력, --out에도 같은 내용" || bad "main 출력" "rc=$rc out=$out"
+exp="CASE B"$'\n'"W1 $U1"$'\n'"W2 $U2"$'\n'"M $U3"
+[ "$rc" = 0 ] && [ "$out" = "$exp" ] && [ "$(cat "$T/ids.txt")" = "$exp" ] && ok "main: 'CASE B', 'W1 id', 'W2 id', 'M id' 출력, --out에도 같은 내용" || bad "main 출력" "rc=$rc out=$out"
 reset_fakes; ( main --case B --count 1000 --warmups 2 --name t ) > /dev/null 2>&1
 [ "$(cat "$T/calls")" = "t-W1 2494"$'\n'"t-W2 2494"$'\n'"t-M 768" ] && ok "main: W는 케이스 A 1,000건 물량(2,494), M은 케이스 B 물량(768)" || bad "main 물량" "$(cat "$T/calls")"
 reset_fakes; out="$( ( main --case A --count 1000 --warmups 0 --name t ) 2>/dev/null )"
-[ "$out" = "M $U1" ] && [ "$(cat "$T/calls")" = "t-M 2494" ] && ok "main: --warmups 0이면 M만" || bad "main W 0" "$out / $(cat "$T/calls")"
+[ "$out" = "CASE A"$'\n'"M $U1" ] && [ "$(cat "$T/calls")" = "t-M 2494" ] && ok "main: --warmups 0이면 M만" || bad "main W 0" "$out / $(cat "$T/calls")"
 reset_fakes; new_ipo() { echo "ERROR: insert failed"; return 0; }
 [ "$(rc_of main --case A --count 1000 --name t)" = 4 ] && ok "main: new_ipo가 UUID가 아닌 값을 내면 종료 코드 4" || bad "main uuid 아님" "$(rc_of main --case A --count 1000 --name t)"
 reset_fakes; new_ipo() { return 1; }

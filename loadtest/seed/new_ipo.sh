@@ -2,15 +2,17 @@
 # 이번 회차용 새 공모주를 넣고 ipoId를 출력한다. 공모주 등록 API가 없어서 SQL로 넣는다 (슈퍼유저로 접속).
 # 같은 종목을 다시 쓰면 회원 전원이 ALREADY_SUBSCRIBED가 되므로 회차마다 새 종목을 쓴다.
 #
-# 사용: ./new_ipo.sh [--name 이름] [--price 15000] [--min 10] [--max 10000] [--retail 100000] [--closed] [--count N]
+# 사용: ./new_ipo.sh [--name 이름] [--price 15000] [--min 10] [--max 10000] [--retail 100000] [--closed | --far] [--count N]
 #   --closed: 청약 기간이 이미 끝난 종목 (S2 마감 거절용)
+#   --far: 종료 시각이 10년 뒤인 종목, 환불일은 종료일 + 3일 (G2 대량 환불 스냅샷용. 스냅샷을 나중에 복원해도 저절로 마감되지 않게.
+#          측정할 때 종료 시각을 과거로 바꿔 마감시킨다)
 #   --count N: 공모주 N개를 SQL 한 번으로 넣고 ID를 한 줄에 하나씩 출력한다. 이름은 <이름>-1 ~ <이름>-N
 # 환경변수: PG_CONTAINER(기본 ipo-postgres), PG_USER(기본 postgres), PG_DB(기본 ipo)
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
 PG_CONTAINER="${PG_CONTAINER:-ipo-postgres}"; PG_USER="${PG_USER:-postgres}"; PG_DB="${PG_DB:-ipo}"
-NAME="loadtest-$(date +%m%d-%H%M%S)"; PRICE=15000; MIN=10; MAX=10000; RETAIL=100000; CLOSED=0; COUNT=""
+NAME="loadtest-$(date +%m%d-%H%M%S)"; PRICE=15000; MIN=10; MAX=10000; RETAIL=100000; CLOSED=0; FAR=0; COUNT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -20,6 +22,7 @@ while [ $# -gt 0 ]; do
     --max) MAX="$2"; shift 2 ;;
     --retail) RETAIL="$2"; shift 2 ;;
     --closed) CLOSED=1; shift ;;
+    --far) FAR=1; shift ;;
     --count) COUNT="$2"; shift 2 ;;
     *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
   esac
@@ -35,7 +38,10 @@ else
   N=1; NUMBERED=false
 fi
 
+[ "$CLOSED" = 1 ] && [ "$FAR" = 1 ] && { echo "--closed와 --far는 같이 쓸 수 없다" >&2; exit 1; }
+REFUND="(now() AT TIME ZONE 'Asia/Seoul')::date + 3"
 if [ "$CLOSED" = 1 ]; then START="now() - interval '2 days'"; END="now() - interval '1 hour'"
+elif [ "$FAR" = 1 ]; then START="now() - interval '1 hour'"; END="now() + interval '10 years'"; REFUND="((now() + interval '10 years') AT TIME ZONE 'Asia/Seoul')::date + 3"
 else START="now() - interval '1 hour'"; END="now() + interval '12 hours'"; fi
 
 docker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -qtA \
@@ -45,7 +51,7 @@ WITH ins AS (
                                 margin_rate, subscription_start_at, subscription_end_at, refund_date, status, version,
                                 created_at, created_by, updated_at, updated_by)
   SELECT gen_random_uuid(), CASE WHEN :numbered THEN :'name' || '-' || g ELSE :'name' END, :price, :retail, :retail / 2, :min, :max,
-         1.00, $START, $END, (now() AT TIME ZONE 'Asia/Seoul')::date + 3, 'OPEN', 0,
+         1.00, $START, $END, $REFUND, 'OPEN', 0,
          now(), 'SYSTEM:loadtest', now(), 'SYSTEM:loadtest'
   FROM generate_series(1, :n) AS g
   RETURNING ipo_id, name

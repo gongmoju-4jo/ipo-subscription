@@ -28,14 +28,15 @@
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
 | `loadtest/verify/consumer_stats.py` | 정식 측정이 끝난 뒤 따로 실행. S1의 증거금 인출 Consumer 처리량, 랙 추이, 오류율, 병목 의심 단계 (`인출.md`, `인출.csv`, `인출-prometheus.json`). `python loadtest/verify/consumer_stats.py --batch <이름>` |
-| `loadtest/tests/` | `official.sh`, `baseline.sh`, `seed_users_sql.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/tests/` | `official.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/synthetic/` | S3, S4 Synthetic Data: LLM 프롬프트와 응답 원문, 행동 CSV, 생성 코드, 검증(`validate.py`). 6장, `loadtest/synthetic/README.md` |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 (`--behavior`로 S3 두 번째 계좌, S4 입금액을 행동 CSV에서 읽음) |
 | `loadtest/seed/seed_users_sql.sh` | 회원, 계좌, 예수금 입금을 SQL 한 트랜잭션으로 넣기 (회원이 많을 때. 토큰은 `seed_users.py --refresh-tokens`). 3-2절 |
-| `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
+| `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--far`는 종료 시각이 10년 뒤인 공모주, `--count N`은 N개를 SQL 한 번으로) |
+| `loadtest/seed/g2_ipo.sh` | 대량 환불 스냅샷용 워밍업 공모주 W, 측정 공모주 M 삽입 (건수, 케이스로 일반청약 물량 계산, 다른 OPEN 공모주 종료 시각을 먼 미래로). 3-4절 |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
-| `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js` |
+| `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js`, 대량 환불 스냅샷용 청약 시드 `g2.js`(수량은 `g2-quantity.js`) |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
 | `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 19종 실행 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족 검사. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
 | `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
@@ -189,6 +190,34 @@ ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/<폴더> bash loadtest/baseline
 # 회차마다
 BASELINE_DIR=loadtest/data/<폴더> bash loadtest/baseline.sh restore
 ```
+
+대량 환불 측정 스냅샷은 기준 스냅샷 위에 회원(1천 건은 기존 1,000명 그대로), 워밍업 공모주 W(케이스 A 1,000건), 측정 공모주 M(케이스 A 또는 B, N건)을 넣고 모두 확정된 상태입니다. 아래는 1만 건 케이스 B 예시입니다.
+
+```bash
+export MSYS_NO_PATHCONV=1
+bash loadtest/baseline.sh restore                   # 기준 스냅샷 (회원 1,000명 lt0000 ~ lt0999). 지금 DB는 사라진다
+# 종료 시각이 지난 개발용 공모주가 마감될 때까지 기다린다 (0이 될 때까지)
+docker exec ipo-postgres psql -U postgres -d ipo -tAc "select count(*) from subscription.ipo where status='OPEN' and subscription_end_at <= now()"
+# 1. 회원: 1천 건이면 건너뛴다. 기존 1,000명 뒤에 SQL로 더한다 (3-2절, 토큰 발급이 빠르게 --bcrypt-cost 4)
+bash loadtest/seed/seed_users_sql.sh --start 1000 --users 10000 --prefix lt --bcrypt-cost 4 --out loadtest/data/users-g2.csv
+# 2. 토큰 (1시간 만료라 청약 직전에). 1천 건이면 --users 1000, --out loadtest/data/users.csv
+python loadtest/seed/seed_users.py --run-id g2 --prefix lt --users 10000 --out loadtest/data/users-g2.csv --refresh-tokens
+# 3. 공모주 W, M (ID는 --out 파일에 "W1 <id>", "M <id>")
+bash loadtest/seed/g2_ipo.sh --case B --count 10000 --out loadtest/data/g2/B-10k.ids
+W=$(awk '$1=="W1"{print $2}' loadtest/data/g2/B-10k.ids); M=$(awk '$1=="M"{print $2}' loadtest/data/g2/B-10k.ids)
+# 4. 청약: W는 앞 1,000명이 172주, M은 CSV 전원이 케이스 B 수량
+bash loadtest/run-k6.sh g2 --ipo "$W" --run-id g2-B-10k-W --users data/users-g2.csv -e CASE=A -e COUNT=1000
+bash loadtest/run-k6.sh g2 --ipo "$M" --run-id g2-B-10k-M --users data/users-g2.csv -e CASE=B
+# 5. 처리 중 청약이 0이 되면 저장
+docker exec ipo-postgres psql -U postgres -d ipo -tAc "select status, count(*) from subscription.subscription group by 1"
+ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/g2-B-10k bash loadtest/baseline.sh save
+```
+
+- 케이스 A는 모든 청약이 172주, 케이스 B는 회원 순번 50개 단위로 10주 35개, 50주 10개, 200주 4개, 1000주 1개(70 / 20 / 8 / 2%, 평균 53주)입니다. 같은 순번은 늘 같은 수량이고, B의 건수는 50의 배수여야 합니다
+- 일반청약 물량은 청약 수 x 평균 수량(A 172, B 53) / 69(경쟁률 69:1, 주식 수 기준)를 반올림하고, 홀수면 1을 더합니다 (균등 물량이 물량 / 2이고 DB 제약이 균등 x 2 ≥ 물량이라 짝수여야 합니다). 1,000건이면 A 2,494주, B 768주
+- `g2_ipo.sh`는 W, M을 종료 시각 10년 뒤(`new_ipo.sh --far`, 환불일은 종료일 + 3)로 넣고, 다른 `OPEN` 공모주도 종료 시각을 10년 뒤로 옮깁니다. 연습처럼 W가 2개 필요하면 `--warmups 2`
+- `g2.js`는 시드라서 G1 처리량, 응답 기준은 보지 않고, 202가 아닌 응답이 하나라도 있으면 실패합니다 (종료 코드 99). 시간 상한 없이 `COUNT`건(기본: CSV 전체)을 `VUS`(기본 50)명이 나눠 보냅니다
+- 계좌 예수금은 기준 스냅샷과 SQL 시드 기본값 모두 1억 원이라, 가장 큰 청약(M 1000주 1,500만 원 + W 172주 258만 원)도 잔액 부족이 나지 않습니다
 
 - 아래가 모두 0일 때만 저장합니다. 하나라도 있으면 종료 코드 2, 조회에 실패하면 종료 코드 4입니다
   - 처리 중 청약 (`PENDING`, `COMPENSATING`, `CANCEL_REQUESTED`)
@@ -440,12 +469,14 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `baseline.sh`, `seed_users_sql.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `k6/g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
 bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, ALLOW_SUBSCRIPTIONS 저장 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
 bash loadtest/tests/test_seed_users_sql.sh   # SQL 회원 시드 (옵션 검사, loginId 규칙, BCrypt 비용 확인, 넣기 실패 시 CSV 없음)
+bash loadtest/tests/test_g2_ipo.sh        # 대량 환불 공모주 (일반청약 물량 계산과 짝수, 옵션 검사, W와 M 물량, 실패 시 종료 코드, new_ipo.sh --far)
+node loadtest/tests/test_g2_quantity.mjs  # 대량 환불 청약 수량 (케이스 A 172주, 케이스 B 분포와 평균, 잘못된 입력). Node가 필요하다
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)

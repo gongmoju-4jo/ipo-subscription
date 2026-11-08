@@ -100,7 +100,7 @@ main() {
   local hash t0 res
   t0="$(date +%s)"
   hash="$(make_hash)" || die 4 "비밀번호 해시 생성 실패"
-  case "$hash" in '$2'?'$'"$(printf '%02d' "$COST")"'$'*) ;; *) die 4 "비밀번호 해시 형식이 이상함 (BCrypt 비용 $COST이 아님)" ;; esac
+  case "$hash" in '$2'?'$'"$(printf '%02d' "$COST")"'$'*) ;; *) die 4 "비밀번호 해시 형식이 이상함 (BCrypt 비용 ${COST}이 아님)" ;; esac
   say "회원 넣기: $(login_id "$PREFIX" "$START") ~ $(login_id "$PREFIX" $((USERS - 1))), 입금 $DEPOSITS"
   res="$(build_sql | psql_in "$PG_DB" -v prefix="$PREFIX" -v start="$START" -v last=$((USERS - 1)) -v deposits="$DEPOSITS" -v pwhash="$hash" | tr -d '\r')" \
     || die 4 "넣기 실패 (한 트랜잭션이라 넣은 것 없음): $res"

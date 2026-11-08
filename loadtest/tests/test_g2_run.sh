@@ -151,11 +151,66 @@ case "$r" in *"ipo-account-service(사라짐)"*) ok "marks_diff: 컨테이너가
 
 # ---- manifest_row ----
 MANIFEST="$T/m.csv"; SESSION=S-1; : > "$MANIFEST"
-manifest_row 3 g2-B-1k B 1000 "2026-11-08 20:00:00" "2026-11-08 20:05:00" VALID FAIL 10.5 95.2 "M verify.sql 위반: 13:2행, 12:1행"$'\n'"VOIDED 1 ≠ 2"
-[ "$(awk -F, '{print NF}' "$MANIFEST")" = 12 ] && [ "$(wc -l < "$MANIFEST" | tr -d ' ')" = 1 ] && grep -q "13:2행; 12:1행 | VOIDED" "$MANIFEST" \
-  && ok "manifest_row: 이유 안의 쉼표, 줄바꿈을 바꿔 한 줄 12열 유지" || bad "manifest_row" "$(cat "$MANIFEST")"
-: > "$MANIFEST"; manifest_row 1 s A 0 a b INVALID - - - "점검 실패"
-[ "$(cut -d, -f8-11 "$MANIFEST")" = "INVALID,-,-,-" ] && ok "manifest_row: 빈 측정값은 -" || bad "manifest_row 빈 값" "$(cat "$MANIFEST")"
+manifest_row 3 g2-B-1k B 1000 "2026-11-08 20:00:00" "2026-11-08 20:05:00" VALID FAIL 10.5 95.2 PASS "M verify.sql 위반: 13:2행, 12:1행"$'\n'"VOIDED 1 ≠ 2"
+[ "$(awk -F, '{print NF}' "$MANIFEST")" = 13 ] && [ "$(wc -l < "$MANIFEST" | tr -d ' ')" = 1 ] && grep -q ",PASS,M verify.sql 위반: 13:2행; 12:1행 | VOIDED" "$MANIFEST" \
+  && ok "manifest_row: 이유 안의 쉼표, 줄바꿈을 바꿔 한 줄 13열 유지 (멱등성 열 포함)" || bad "manifest_row" "$(cat "$MANIFEST")"
+: > "$MANIFEST"; manifest_row 1 s A 0 a b INVALID - - - - "점검 실패"
+[ "$(cut -d, -f8-12 "$MANIFEST")" = "INVALID,-,-,-,-" ] && ok "manifest_row: 빈 측정값은 -" || bad "manifest_row 빈 값" "$(cat "$MANIFEST")"
+
+# ---- 멱등성: Kafka 출력 읽기 (손으로 확인할 때 본 실제 출력 형식) ----
+ST_STABLE=$'\nGROUP                     COORDINATOR (ID)          ASSIGNMENT-STRATEGY  STATE                #MEMBERS\naccount-allocation-result kafka:29092  (1)          range                Stable               6'
+ST_EMPTY=$'\nGROUP                     COORDINATOR (ID)          ASSIGNMENT-STRATEGY  STATE                #MEMBERS\naccount-allocation-result kafka:29092  (1)                               Empty                0'
+[ "$(printf '%s\n' "$ST_STABLE" | parse_group_state)" = Stable ] && [ "$(printf '%s\n' "$ST_EMPTY" | parse_group_state)" = Empty ] \
+  && ok "parse_group_state: Stable, Empty (멤버가 없으면 ASSIGNMENT-STRATEGY 칸이 비어도 끝에서 두 번째 칸)" || bad "parse_group_state" "$(printf '%s\n' "$ST_EMPTY" | parse_group_state)"
+printf 'Error: x\n' | parse_group_state > /dev/null && bad "parse_group_state 오류" "통과함" || ok "parse_group_state: 그룹 줄이 없으면 실패"
+RESET_OK=$'\nGROUP                     TOPIC             PARTITION  NEW-OFFSET\naccount-allocation-result allocation.result 5          0\naccount-allocation-result allocation.result 0          0\naccount-allocation-result allocation.result 1          0'
+[ "$(printf '%s\n' "$RESET_OK" | parse_reset)" = 3 ] && ok "parse_reset: NEW-OFFSET이 모두 0이면 파티션 수" || bad "parse_reset" "$(printf '%s\n' "$RESET_OK" | parse_reset)"
+printf '%s\n' "${RESET_OK/1          0/1          7}" | parse_reset > /dev/null && bad "parse_reset 0 아님" "통과함" || ok "parse_reset: 0이 아닌 파티션이 있으면 실패"
+printf 'Error: Assignments can only be reset if the group is inactive\n' | parse_reset > /dev/null && bad "parse_reset 오류" "통과함" || ok "parse_reset: 그룹이 활성이라 거부된 출력은 실패"
+
+# ---- run_idempotency: Docker, DB를 가짜로 ----
+RD="$T/rd"; mkdir -p "$RD"
+idem_fakes() { # 인자: 다시 받은 뒤 상태(같음|다름), 리셋 출력, DLT 뒤
+  : > "$T/calls"; IDEM_AFTER="$1"; IDEM_RESET="$2"; IDEM_DLT1="$3"; echo 0 > "$T/stated"
+  idem_state() { local k; k="$(cat "$T/stated")"; echo $((k + 1)) > "$T/stated"; if [ "$k" = 0 ] || [ "$IDEM_AFTER" = same ]; then echo "cash=100 ledger=7"; else echo "cash=100 ledger=8"; fi; }
+  topic_messages() { echo 2000; }
+  kafka_dlt_total() { if [ -e "$T/dlt1" ]; then echo "$IDEM_DLT1"; else : > "$T/dlt1"; echo 0; fi; }
+  dup_logs() { echo 0; }
+  compose() { echo "compose $*" >> "$T/calls"; }
+  group_state() { echo Empty; }
+  kgroups() { echo "kgroups $*" >> "$T/calls"; printf '%s\n' "$IDEM_RESET"; }
+  wait_healthy() { return 0; }
+  group_lag() { echo 0; }
+  sleep() { :; }
+  rm -f "$T/dlt1"
+}
+idem_fakes same "$RESET_OK" 0
+run_idempotency "$RD" > /dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && head -1 "$RD/idempotency.txt" | grep -q "^result=PASS .*messages=2000 partitions=3" \
+  && [ "$(grep -c . "$T/calls")" = 3 ] && grep -q "^compose stop account-service" "$T/calls" && grep -q "reset-offsets --to-earliest --execute" "$T/calls" && tail -1 "$T/calls" | grep -q "compose start account-service" \
+  && ok "run_idempotency: 멈춤 → 오프셋 처음으로 → 시작, 상태가 같으면 PASS(0)" || bad "idem 통과" "rc=$rc $(cat "$T/calls") $(cat "$RD/idempotency.txt" 2>/dev/null)"
+idem_fakes diff "$RESET_OK" 0
+run_idempotency "$RD" > /dev/null 2>&1; rc=$?
+[ "$rc" = 1 ] && head -1 "$RD/idempotency.txt" | grep -q "^result=FAIL" && grep -q "^after  cash=100 ledger=8" "$RD/idempotency.txt" \
+  && ok "run_idempotency: 다시 받은 뒤 원장 수가 바뀌면 FAIL(1), 전후 상태를 남김" || bad "idem 위반" "rc=$rc"
+idem_fakes same "$RESET_OK" 3
+run_idempotency "$RD" > /dev/null 2>&1; rc=$?
+[ "$rc" = 1 ] && ok "run_idempotency: DLT가 늘면 FAIL(1)" || bad "idem DLT" "rc=$rc"
+idem_fakes same "Error: Assignments can only be reset if the group is inactive" 0
+run_idempotency "$RD" > /dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && tail -1 "$T/calls" | grep -q "compose start account-service" && ok "run_idempotency: 오프셋 되돌리기 실패면 2, account-service는 다시 띄움" || bad "idem 리셋 실패" "rc=$rc $(tail -1 "$T/calls")"
+idem_fakes same "$RESET_OK" 0; group_state() { echo Stable; }
+run_idempotency "$RD" > /dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && ! grep -q "reset-offsets" "$T/calls" && tail -1 "$T/calls" | grep -q "compose start account-service" \
+  && ok "run_idempotency: 그룹이 비지 않으면 되돌리지 않고 2, account-service는 다시 띄움" || bad "idem 그룹 활성" "rc=$rc $(cat "$T/calls")"
+idem_fakes same "$RESET_OK" 0; group_lag() { echo 5; }; IDEM_MAX_S=0
+run_idempotency "$RD" > /dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && ok "run_idempotency: 랙이 상한 안에 0이 되지 않으면 2 (다 받기 전 상태를 통과로 보지 않음)" || bad "idem 랙" "rc=$rc"
+IDEM_MAX_S=600
+idem_fakes same "$RESET_OK" 0; group_lag() { return 1; }; IDEM_MAX_S=0
+run_idempotency "$RD" > /dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && ok "run_idempotency: 랙 조회가 실패하면 0으로 보지 않고 2" || bad "idem 랙 조회 실패" "rc=$rc"
+IDEM_MAX_S=600
 
 rm -rf "$T"
 echo; echo "통과 $PASS, 실패 $FAIL"

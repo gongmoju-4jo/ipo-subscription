@@ -324,6 +324,7 @@ bash loadtest/g2_run.sh --batch g2-1k-0110 --session S-1 g2-A-1k g2-B-1k g2-B-1k
 4. 측정 전 기록 (테이블 행 수), docker stats 기록 시작
 5. 측정: M 종료 시각 UPDATE → 스케줄러가 실제 조건(유예 20초, 랙 0, 처리 중 0)으로 마감 → 환불 완료(REFUNDED = 확정 수)까지 대기
 6. 수집, 검증 (`verify.sql`을 M과 W 모두), 판정 → `manifest.csv`에 한 줄
+7. (`--idempotency`일 때) 중복 수신 멱등성 검사: account-service를 멈추고 `account-allocation-result` 그룹의 `allocation.result` 오프셋을 처음으로 되돌린 뒤 다시 띄워, 이번 회차의 배정 결과(W, M)를 전부 다시 받게 한다. 다 받으면(랙 0) 계좌 쪽 상태(예수금, 청약증거금 합, 원장 수와 마지막 시각, 증거금 상태별 수, 정산 금액 합, outbox, 처리 기록, 마지막 수정 시각)가 전과 같고 DLT가 늘지 않아야 통과. 측정 시간에는 넣지 않는다
 
 측정 정의
 
@@ -341,13 +342,14 @@ bash loadtest/g2_run.sh --batch g2-1k-0110 --session S-1 g2-A-1k g2-B-1k g2-B-1k
 | `status` | `VALID` | 아래 둘이 아님 |
 | | `INVALID` (시험이 잘못됨, 판정하지 않음) | 정산 수 또는 REFUNDED 수 ≠ 확정 수, DLT 증가, 측정 끝 outbox 미발행, 측정 중 W, M이 아닌 공모주 마감, 시작 점검 실패 |
 | | `UNMEASURABLE` (측정 불가) | 정산이 `STALL_S`초 동안 늘지 않음, `MAX_S`초 초과, 배정 FAILED, 컨테이너 재시작 또는 OOM, W 환불이 끝나지 않음 |
-| `integrity` | `PASS` / `FAIL` (시스템 결함) | `verify.sql` 2, 3, 5, 6, 8, 11 ~ 15번 위반(W는 5 ~ 15번), 0주 배정 수 ≠ `VOIDED` 수, `VOIDED` 수 ≠ `MARGIN_VOID` 원장 수, `POSTED` 수 ≠ `MARGIN_POST` 원장 수. 측정 불가면 `-` |
+| `integrity` | `PASS` / `FAIL` (시스템 결함) | `verify.sql` 2, 3, 5, 6, 8, 11 ~ 15번 위반(W는 5 ~ 15번), 0주 배정 수 ≠ `VOIDED` 수, `VOIDED` 수 ≠ `MARGIN_VOID` 원장 수, `POSTED` 수 ≠ `MARGIN_POST` 원장 수, 멱등성 FAIL. 측정 불가면 `-` |
+| `idempotency` | `PASS` / `FAIL` / `ERROR` / `-` | 위 7번. `ERROR`는 검사를 끝내지 못한 것(그룹이 비지 않음, 오프셋 되돌리기 실패, `IDEM_MAX_S`초 안에 랙이 0이 안 됨). `-`는 `--idempotency` 없음, 측정 불가 |
 
 결과: `loadtest/results/g2-<batch>/`
 
 | 파일 | 내용 |
 | --- | --- |
-| `manifest.csv` | 회차마다 한 줄: 세션, 순번, 스냅샷, 케이스, 확정 수, 시작, 끝, status, integrity, total_s, throughput, 이유. 같은 `--batch`로 다시 실행하면 순번을 이어 쓴다 |
+| `manifest.csv` | 회차마다 한 줄: 세션, 순번, 스냅샷, 케이스, 확정 수, 시작, 끝, status, integrity, total_s, throughput, idempotency, 이유. 같은 `--batch`로 다시 실행하면 순번을 이어 쓴다 |
 | `env.txt`, `batch.log` | git 커밋, 커밋 안 한 파일, 설정, 컨테이너 자원 상한, 컨테이너 jar sha256 / 전체 로그 |
 | `<순번>-<스냅샷>/result.txt` | W, M 측정값 한 줄씩 (key=value: 위 구간, `settled`, `refunded`, `posted`, `voided`, `zero`(0주 배정), 원장 수, `round`, `seed`(추첨 시드)) |
 | `<순번>-<스냅샷>/checks.txt` | 판정 근거 (확정 수, DLT 전후, 미발행, 다른 마감, verify 위반, 이유) |
@@ -355,10 +357,12 @@ bash loadtest/g2_run.sh --batch g2-1k-0110 --session S-1 g2-A-1k g2-B-1k g2-B-1k
 | `<순번>-<스냅샷>/bucket-publish.csv`, `bucket-settle.csv` | 1초마다 배정 결과 발행 수, 정산 수 |
 | `<순번>-<스냅샷>/docker-stats.raw` | M 마감부터 환불 완료까지 docker stats (`STATS_INTERVAL`초 간격, 4장과 같은 형식) |
 | `<순번>-<스냅샷>/tables-before.txt`, `processed.txt`, `log.txt` | 측정 직전 테이블 행 수, 처리 기록, 회차 로그 |
+| `<순번>-<스냅샷>/idempotency.txt` | (`--idempotency`) 결과, 다시 받은 메시지 수, 전후 계좌 쪽 상태, DLT 전후, 참고로 로그의 "중복 수신, 건너뜀" 수 |
 
 - 측정 전에 직접 합니다 (실행기가 하지 않음): `compose.perf.yml`로 띄우기(3-3절), 다른 무거운 프로그램 끄기, WSL 시계 점검
 - 순서는 인자 순서 그대로입니다. 같은 건수 안에서 A, B를 ABBA 꼴로 섞고, 세션마다 첫 케이스를 바꿉니다
-- 회차 시간: 1천 건 케이스 B 한 회차가 약 5분 30초였습니다 (복원과 기동 약 3분, W 약 45초, 쉼 30초, M 약 40초, 검증)
+- 회차 시간: 1천 건 케이스 B 한 회차가 약 5분 30초였습니다 (복원과 기동 약 3분, W 약 45초, 쉼 30초, M 약 40초, 검증). `--idempotency`는 약 1분 30초 더 (2,000건 다시 받기 73초)
+- 멱등성 검사는 정식 1천 건 A, B 회차 하나씩에 붙입니다 (예: `bash loadtest/g2_run.sh --batch g2-idem --idempotency g2-A-1k g2-B-1k`). 검사는 그 회차의 측정이 끝난 뒤에 하고, 다음 회차는 복원으로 시작하므로 측정값에 영향이 없습니다
 - 시작 전에 모든 스냅샷 폴더(덤프, meta의 `allow_subscriptions` 줄, `ipo-ids.txt`)를 검사하고, 하나라도 없으면 아무것도 하지 않습니다
 - 복원, 기동, 조회가 실패하면 배치를 멈춥니다 (종료 코드 4). 그 회차의 로그는 회차 폴더에 남습니다
 
@@ -499,6 +503,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `ALLOW_SUBSCRIPTIONS` | 없음 | `baseline.sh save` (`1`이면 확정 청약이 있는 DB도 저장. 3-4절) |
 | `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장), `g2_run.sh` (W 환불 완료 뒤 M 마감까지 대기 초) |
 | `STALL_S`, `MAX_S`, `W_MAX_S`, `SETTLE_S` | `600`, `7200`, `3600`, `20` | `g2_run.sh` (진행 정지로 볼 초, M 대기 상한 초, W 대기 상한 초, 복원 뒤 healthy에서 점검까지 대기 초) |
+| `IDEM_MAX_S` | `600` | `g2_run.sh --idempotency` (account-service 시작부터 다시 받기를 다 끝낼(랙 0) 때까지 기다리는 상한 초) |
 | `BASELINE_ROOT` | `loadtest/data` | `g2_run.sh` (스냅샷 이름을 찾는 폴더) |
 | `SCENARIOS` | `S0,S1` | `official.sh` (실행할 시나리오. S0 필수, S0, S1, S3, S4 중에서. 4장) |
 | `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
@@ -532,7 +537,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 `official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `k6/g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
-bash loadtest/tests/test_g2_run.sh        # 대량 환불 회차 실행기 (인자, ipo-ids.txt, 스냅샷 검사, 환불 대기의 정지·상한·실패, verify.sql 출력 읽기(실제 출력 고정 데이터 포함), 판정, manifest)
+bash loadtest/tests/test_g2_run.sh        # 대량 환불 회차 실행기 (인자, ipo-ids.txt, 스냅샷 검사, 환불 대기의 정지·상한·실패, verify.sql 출력 읽기(실제 출력 고정 데이터 포함), 판정, manifest, 멱등성 검사의 Kafka 출력 읽기와 실패 처리)
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
 bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, ALLOW_SUBSCRIPTIONS 저장 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
 bash loadtest/tests/test_seed_users_sql.sh   # SQL 회원 시드 (옵션 검사, loginId 규칙, BCrypt 비용 확인, 넣기 실패 시 CSV 없음)

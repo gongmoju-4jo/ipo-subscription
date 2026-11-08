@@ -127,7 +127,8 @@ def load_behavior(path, users):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--base-url", default=os.environ.get("BASE_URL", "http://localhost:8080"))
+    # localhost는 Windows에서 IPv6(::1)를 먼저 시도해, 127.0.0.1에만 열린 Gateway에 요청마다 약 2초가 더 걸린다 (urllib은 요청마다 새로 연결)
+    ap.add_argument("--base-url", default=os.environ.get("BASE_URL", "http://127.0.0.1:8080"))
     ap.add_argument("--run-id", required=True, help="회차 이름. 예수금 입금의 requestId에 쓰인다")
     ap.add_argument("--users", type=int, default=1000)
     ap.add_argument("--prefix", default="lt", help="loginId 접두사. 시나리오 묶음(cohort)마다 다르게 쓴다")

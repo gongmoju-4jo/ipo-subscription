@@ -24,13 +24,14 @@
 | `compose.perf.yml` | 컨테이너별 CPU, 메모리 상한과 JVM 힙 고정, 슬로우 쿼리 설정 |
 | `loadtest/official.sh` | 정식 측정 전체 실행 (빌드, 배포, 버전 기록, S0, S1, 후처리, 판정). 4장 |
 | `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정, S3, S4 정합성 판정과 S0 대비 (`판정.md`) |
-| `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). 3-4절 |
+| `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). `ALLOW_SUBSCRIPTIONS=1 save`는 확정 청약이 쌓인 DB 저장. 3-4절 |
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
 | `loadtest/verify/consumer_stats.py` | 정식 측정이 끝난 뒤 따로 실행. S1의 증거금 인출 Consumer 처리량, 랙 추이, 오류율, 병목 의심 단계 (`인출.md`, `인출.csv`, `인출-prometheus.json`). `python loadtest/verify/consumer_stats.py --batch <이름>` |
-| `loadtest/tests/` | `official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/tests/` | `official.sh`, `baseline.sh`, `seed_users_sql.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/synthetic/` | S3, S4 Synthetic Data: LLM 프롬프트와 응답 원문, 행동 CSV, 생성 코드, 검증(`validate.py`). 6장, `loadtest/synthetic/README.md` |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 (`--behavior`로 S3 두 번째 계좌, S4 입금액을 행동 CSV에서 읽음) |
+| `loadtest/seed/seed_users_sql.sh` | 회원, 계좌, 예수금 입금을 SQL 한 트랜잭션으로 넣기 (회원이 많을 때. 토큰은 `seed_users.py --refresh-tokens`). 3-2절 |
 | `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
@@ -104,6 +105,30 @@ docker run --rm --network ipo-subscription_default -v "$(pwd -W 2>/dev/null || p
 - 토큰은 1시간 만료입니다. 만료되면 `--refresh-tokens`로 토큰만 다시 발급합니다.
 - 네트워크 이름은 `{프로젝트 폴더명}_default`입니다 (`docker network ls`로 확인).
 
+#### SQL로 회원 넣기 (회원이 많을 때)
+
+API 가입은 회원마다 요청 4번(가입, 로그인, 계좌, 입금)이라 10만 명이면 몇 시간 걸립니다. `seed_users_sql.sh`는 회원, 계좌, 입금 원장을 SQL 한 트랜잭션으로 넣고, 토큰만 `seed_users.py --refresh-tokens`로 받습니다.
+
+```bash
+# 1. 회원, 계좌, 입금 (토큰 없는 CSV를 쓴다)
+bash loadtest/seed/seed_users_sql.sh --users 100000 --prefix lt --bcrypt-cost 4 --out loadtest/data/users.csv
+# 2. 토큰 발급 (CSV의 token 열을 채운다. 1시간 만료라 측정 직전에)
+python loadtest/seed/seed_users.py --run-id <id> --prefix lt --users 100000 --out loadtest/data/users.csv --refresh-tokens
+```
+
+| 옵션 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `--users`, `--start` | `1000`, `0` | 번호 `--start`부터 `--users`-1까지 넣는다 (기존 1,000명 뒤에 더하려면 `--start 1000 --users 10000`) |
+| `--prefix` | `lt` | loginId 접두사. loginId는 `seed_users.py`와 같은 `<접두사><번호 4자리>` (1만 이상은 자리수 그대로) |
+| `--deposits` | `30000000,70000000` | 계좌마다 넣는 입금액 (쉼표로 나눈 만큼 입금 원장이 생긴다) |
+| `--bcrypt-cost` | `10` | 비밀번호 BCrypt 비용 (4 ~ 12). 10은 API 가입과 같다 |
+| `--out` | `loadtest/data/users.csv` | 이 접두사의 회원 전체(DB 기준)를 CSV로 쓴다. token 열은 비어 있다 |
+
+- 회원이 많으면 `--bcrypt-cost 4`로 넣습니다. 로그인(토큰 발급)이 BCrypt 비교라 계좌 서비스 CPU를 씁니다. 1,000명 토큰 발급(16스레드, 자원 상한 적용)이 비용 10이면 약 63초, 비용 4면 약 3초라서, 비용 10으로는 10만 명 토큰 발급이 토큰 만료(1시간)보다 오래 걸립니다 (선형 추정 약 105분)
+- 비밀번호 해시는 하나를 만들어 모든 회원에 씁니다 (API 가입은 회원마다 솔트가 다릅니다. 로그인과 측정에는 차이가 없습니다). 해시는 관리용 DB(`postgres`)의 pgcrypto로 만들어 `ipo` DB에는 확장을 남기지 않습니다
+- 한 트랜잭션입니다. 같은 loginId가 이미 있으면 아무것도 넣지 않고 실패합니다 (종료 코드 4)
+- `created_by`는 API로 넣을 때와 같은 값입니다 (회원은 `SYSTEM:account-service`, 계좌와 원장은 회원 ID)
+
 ### 3-3. 자원 상한 적용
 
 ```bash
@@ -153,6 +178,24 @@ docker-compose stop kafka-ui
 
 - 확인: 기본 묶음 계좌 1,060개(두 번째 계좌 60개), 잔액 부족 묶음 회원 1,000명 중 예수금 150,000원 미만 97명, 청약 0
 - 계좌 개설은 같은 requestId면 기존 계좌를 돌려주므로 `users.csv`의 첫 계좌 ID는 위 스냅샷과 같습니다. 두 번째 계좌(`accountId2`)는 이 스냅샷에만 있습니다
+
+#### 확정 청약 스냅샷 (마감 직전 상태에서 시작하는 측정)
+
+대량 환불(마감 → 배정 → 정산 → 환불)처럼 확정 청약이 쌓인 상태에서 시작하는 측정은 그 상태를 스냅샷으로 저장해 두고 회차마다 복원합니다. 기본 `save`는 청약이 있으면 거부하므로 `ALLOW_SUBSCRIPTIONS=1`을 줍니다. 별도 폴더에 저장하고 위 스냅샷은 그대로 둡니다.
+
+```bash
+# 회원, 공모주, 청약을 넣고 모든 청약이 확정(또는 거절)된 뒤
+ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/<폴더> bash loadtest/baseline.sh save
+# 회차마다
+BASELINE_DIR=loadtest/data/<폴더> bash loadtest/baseline.sh restore
+```
+
+- 아래가 모두 0일 때만 저장합니다. 하나라도 있으면 종료 코드 2, 조회에 실패하면 종료 코드 4입니다
+  - 처리 중 청약 (`PENDING`, `COMPENSATING`, `CANCEL_REQUESTED`)
+  - 계좌, 청약, 배정 서비스 outbox의 미발행 메시지
+  - 종료 시각이 지난 `OPEN` 공모주 (복원 직후 저절로 마감되지 않게. 측정할 공모주와 개발용 공모주의 종료 시각을 먼 미래로 두고, 측정할 때 종료 시각을 바꿔 마감시킵니다)
+- meta에는 청약 수가 든 상태 줄과 `allow_subscriptions` 줄이 남습니다. `restore`, `check`는 옵션 없이 meta의 상태(청약 수 포함)와 비교합니다
+- `ALLOW_SUBSCRIPTIONS`는 `1`일 때만 켜집니다. 다른 값이면 기본 `save`처럼 청약 있는 DB를 거부합니다
 
 ## 4. 정식 측정 (official.sh)
 
@@ -366,6 +409,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `WARM_BUCKET`, `WARM_WINDOW`, `WARM_SLOPE_PCT`, `WARM_SLOPE_MS`, `WARM_CONSEC` | `15`, `8`, `5`, `1`, `2` | `official.sh` → `warmup.py` (구간 초, 추세 창 구간 수, 분당 기울기 허용 %, 분당 기울기 허용 ms(0이면 보지 않음), 연속 통과 수) |
 | `RESTORE`, `DB_DUMP` | `1`, `1` | `official.sh` (시작할 때 기준 스냅샷 복원, 끝난 뒤 DB 덤프. `RESTORE=0`은 `env.txt`에 남고 정식 결과로 쓰지 않음) |
 | `BASELINE_DIR` | `loadtest/data/baseline` | `baseline.sh`, `official.sh` (기준 스냅샷 위치) |
+| `ALLOW_SUBSCRIPTIONS` | 없음 | `baseline.sh save` (`1`이면 확정 청약이 있는 DB도 저장. 3-4절) |
 | `GAP` | `30` | `official.sh` (실행 사이 대기 초, 4장) |
 | `SCENARIOS` | `S0,S1` | `official.sh` (실행할 시나리오. S0 필수, S0, S1, S3, S4 중에서. 4장) |
 | `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
@@ -380,7 +424,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
 | `BEHAVIOR_CSV` | `../synthetic/<시나리오>-behavior.csv` | `s3.js`, `s4.js` (`-e BEHAVIOR_CSV=...`, 행동 CSV 경로. k6 스크립트 기준 상대 경로) |
 | `S4_PREFIX` | `lb` | `official.sh` → `s4.js`, `judge.py --s4-prefix` (잔액 부족 묶음의 loginId 접두사. 회원 CSV가 이 묶음이 아니면 시작 전에 멈춤) |
-| `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `verify.sh`, `precheck.sh`, `official.sh`(하위 스크립트와 `judge.py --container`에 같은 값을 넘긴다) |
+| `PG_CONTAINER` | `ipo-postgres` | `new_ipo.sh`, `seed_users_sql.sh`, `verify.sh`, `precheck.sh`, `official.sh`(하위 스크립트와 `judge.py --container`에 같은 값을 넘긴다) |
 | `KAFKA_CONTAINER` | `ipo-kafka` | `precheck.sh`, `baseline.sh` |
 | `EUREKA_URL` | `http://localhost:8761` | `precheck.sh` |
 | `K6_MODE` | `auto` | `run-k6.sh` (`auto`, `local`, `container`) |
@@ -389,17 +433,19 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `K6_CPUS`, `K6_MEMORY` | 없음 | `run-k6.sh` (컨테이너 실행, 예: `1.0`, `512m`. `official.sh`는 `2`, `1g`) |
 | `K6_LABEL` | 없음 | `run-k6.sh` (컨테이너 실행 시 `loadtest.batch` 라벨. `official.sh`가 중단될 때 자기가 띄운 k6만 멈추는 데 쓴다) |
 | `K6_NAME` | 없음 | `run-k6.sh` (컨테이너 실행 시 컨테이너 이름. `official.sh`는 `k6-<run_id>`로 줘서 docker stats에서 실행별 k6를 구분한다) |
-| `BASE_URL` | 로컬 `http://localhost:8080`, 컨테이너 `http://api-gateway:8080` | `run-k6.sh`, `seed_users.py` |
-| `LOADTEST_PASSWORD` | `loadtest1234` | `seed_users.py` (시드 회원의 비밀번호) |
+| `BASE_URL` | 로컬 `http://localhost:8080`(`seed_users.py`는 `http://127.0.0.1:8080`), 컨테이너 `http://api-gateway:8080` | `run-k6.sh`, `seed_users.py` (`seed_users.py`는 요청마다 새로 연결해서 `localhost`면 Windows에서 요청마다 약 2초가 더 걸린다. `PROMETHEUS_URL`과 같은 이유) |
+| `PG_DB` | `ipo` | `seed_users_sql.sh` (회원을 넣을 데이터베이스) |
+| `LOADTEST_PASSWORD` | `loadtest1234` | `seed_users.py`, `seed_users_sql.sh` (시드 회원의 비밀번호) |
 | `PROMETHEUS_URL` | `http://127.0.0.1:9090` | `report.py`, `official.sh`(워밍업 판정) (`--prometheus`로도 지정. Windows에서 `localhost`는 IPv6를 먼저 시도해 연결마다 약 2초가 더 걸려서 `127.0.0.1`을 쓴다) |
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `baseline.sh`, `seed_users_sql.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
-bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
+bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, ALLOW_SUBSCRIPTIONS 저장 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
+bash loadtest/tests/test_seed_users_sql.sh   # SQL 회원 시드 (옵션 검사, loginId 규칙, BCrypt 비용 확인, 넣기 실패 시 CSV 없음)
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)

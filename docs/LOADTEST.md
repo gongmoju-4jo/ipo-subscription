@@ -24,12 +24,13 @@
 | `compose.perf.yml` | 컨테이너별 CPU, 메모리 상한과 JVM 힙 고정, 슬로우 쿼리 설정 |
 | `loadtest/official.sh` | 정식 측정 전체 실행 (빌드, 배포, 버전 기록, S0, S1, 후처리, 판정). 4장 |
 | `loadtest/g2_run.sh` | 대량 환불(마감 → 배정 → 정산 → 환불) 회차 실행, 수집, 검증, 판정 (확정 청약 스냅샷을 순서대로). 4장 끝 |
+| `loadtest/verify/g2_estimate.py` | 대량 환불 1만, 10만 건 결과로 212만 건 소요 시간 추정과 속도 판정 (`추정.md`). 4장 끝 |
 | `loadtest/verify/judge.py` | 정식 측정의 G1, G2 판정, S3, S4 정합성 판정과 S0 대비 (`판정.md`) |
 | `loadtest/baseline.sh` | 기준 상태 스냅샷 저장(`save`), 복원(`restore`, DB와 Kafka), 확인(`check`), 덤프(`dump`). `ALLOW_SUBSCRIPTIONS=1 save`는 확정 청약이 쌓인 DB 저장. 3-4절 |
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
 | `loadtest/verify/consumer_stats.py` | 정식 측정이 끝난 뒤 따로 실행. S1의 증거금 인출 Consumer 처리량, 랙 추이, 오류율, 병목 의심 단계 (`인출.md`, `인출.csv`, `인출-prometheus.json`). `python loadtest/verify/consumer_stats.py --batch <이름>` |
-| `loadtest/tests/` | `official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/tests/` | `official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `g2-quantity.js`, `g2_estimate.py`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/synthetic/` | S3, S4 Synthetic Data: LLM 프롬프트와 응답 원문, 행동 CSV, 생성 코드, 검증(`validate.py`). 6장, `loadtest/synthetic/README.md` |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 (`--behavior`로 S3 두 번째 계좌, S4 입금액을 행동 CSV에서 읽음) |
 | `loadtest/seed/seed_users_sql.sh` | 회원, 계좌, 예수금 입금을 SQL 한 트랜잭션으로 넣기 (회원이 많을 때. 토큰은 `seed_users.py --refresh-tokens`). 3-2절 |
@@ -368,6 +369,23 @@ bash loadtest/g2_run.sh --batch g2-1k-0110 --session S-1 g2-A-1k g2-B-1k g2-B-1k
 
 종료 코드: 0 모든 회차 VALID, PASS / 1 사용법, 스냅샷 폴더 / 2 INVALID 또는 UNMEASURABLE 회차 있음 / 3 정합성 FAIL 회차 있음 / 4 복원, 기동, 조회 실패로 중단 / 12 잠금(다른 `g2_run.sh` 실행 중), 결과 폴더
 
+#### 212만 건 추정 (g2_estimate.py)
+
+```bash
+python loadtest/verify/g2_estimate.py loadtest/results/g2-<1천 배치> loadtest/results/g2-<1만 배치> loadtest/results/g2-<10만 배치> --out 추정.md
+```
+
+- 2,122,367건(LG에너지솔루션 공모 때 KB증권 청약 건수, DART)의 소요 시간을 케이스별로 추정하고 속도를 판정합니다. 모든 값은 추정입니다
+- 대표값: 같은 케이스, 건수에서 VALID이고 정합성 PASS인 회차의 구간별 중앙값. 3회 미만이면 참고값으로 표시합니다
+- 구간은 겹치지 않게 나눕니다: 배정 대기 / 배정 계산, 저장 / 배정 끝 → 첫 정산 / 정산. 합 = T1 - T0. 배정 결과 발행은 정산과 겹쳐서 따로 더하지 않고, 환불 완료 표시(T1 → T2)는 참고로 따로 보입니다
+- 규칙 (측정 전에 고정): 1천 건은 참고값으로만. 구간마다 r = 처리량(10만) / 처리량(1만)
+  - 0.9 ≤ r ≤ 1.1: 1만, 10만 두 점을 지나는 직선으로 외삽
+  - r < 0.9: 범위. 낙관 = 10만 처리량 유지, 비관 = 처리량(10만) x r^k (k = log10(212만 / 10만) ≈ 1.33)
+  - r > 1.1: 오르는 추세는 잇지 않고 10만 처리량 유지
+  - 10만 건이 측정 불가면 그 케이스는 외삽하지 않습니다 ("측정 불가 + 병목")
+- 판정: 합격선 3시간, 목표 1.5시간 (임의 기준, T1 기준). 범위면 비관(긴 쪽)이 선 안 → 합격(목표는 달성) / 낙관(짧은 쪽)만 안 → 조건부 / 둘 다 밖 → 불합격(목표는 미달). 대표 판정은 케이스 A입니다
+- 구간 시간이 0(밀리초 반올림)이면 처리량을 정할 수 없어 그 케이스는 "계산 불가"로 나옵니다
+
 ## 5. 회차를 하나씩 실행
 
 정식 측정이 아닌 개별 확인용입니다. 회차마다 새 공모주를 씁니다. 같은 공모주를 다시 쓰면 회원 전원이 이중청약으로 거절됩니다.
@@ -534,7 +552,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `k6/g2-quantity.js`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `k6/g2-quantity.js`, `g2_estimate.py`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_g2_run.sh        # 대량 환불 회차 실행기 (인자, ipo-ids.txt, 스냅샷 검사, 환불 대기의 정지·상한·실패, verify.sql 출력 읽기(실제 출력 고정 데이터 포함), 판정, manifest, 멱등성 검사의 Kafka 출력 읽기와 실패 처리)
@@ -544,6 +562,7 @@ bash loadtest/tests/test_seed_users_sql.sh   # SQL 회원 시드 (옵션 검사,
 bash loadtest/tests/test_g2_ipo.sh        # 대량 환불 공모주 (일반청약 물량 계산과 짝수, 옵션 검사, W와 M 물량, 실패 시 종료 코드, new_ipo.sh --far)
 node loadtest/tests/test_g2_quantity.mjs  # 대량 환불 청약 수량 (케이스 A 172주, 케이스 B 분포와 평균, 잘못된 입력). Node가 필요하다
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
+python loadtest/tests/test_g2_estimate.py   # 212만 건 추정 (규칙 경계 r = 0.9, 1.1, 결정 문서 계산 예시, 중앙값, 제외 회차, 측정 불가, 입력 부족, 판정 경계)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)

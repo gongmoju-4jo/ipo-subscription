@@ -3,12 +3,14 @@
 
 사용: python s2_judge.py --requests results/<run_id>/requests.log --summary results/<run_id>/summary.json
                          --sql-result results/<run_id>/sql_result.txt --ipo <대상 공모주 ID> --end-ms <마감 시각 epoch ms>
-                         [--container ipo-postgres]
+                         --expect-requests <계획한 전체 요청 수> [--container ipo-postgres]
 
 - 회차 유효성 (k6 로그와 요약을 본다): 밀린 요청이 없고, k6 응답 검사 실패가 없고, 401이 없고, 대상은 202, 422, 409만, 배경은 202만 있고,
   대상 요청에 202(마감 전 도착)와 422(마감 후 도착)가 모두 있고, 대상 공모주가 마감(ipo.closed)됐어야 한다
 - 측정값: verify.sql 20~22번 결과 행 수(sql_result.txt), 202를 받았는데 청약 행이 없는 요청 수(k6 로그와 DB 대조)
-- 종료 코드: 0 유효, 3 무효(이유를 출력), 1 입력을 읽지 못함(sql_result.txt에 20~22번이 없거나 건너뜀 등)
+- 입력 확인: k6가 보낸 요청 수(http_reqs.count)와 읽은 로그 행 수가 모두 계획한 전체 요청 수와 같고, 모든 행의 stage가 target, bg여야 판정한다
+  (읽지 못한 행이나 일찍 끝난 실행을 0건으로 넘기지 않는다)
+- 종료 코드: 0 유효, 3 무효(이유를 출력), 1 입력을 읽지 못함(요청 수 불일치, sql_result.txt에 20~22번이 없거나 건너뜀 등)
 """
 import argparse
 import collections
@@ -47,9 +49,21 @@ def sql_counts(path):
     return res
 
 
-def judge(requests_log, summary_path, sql_result, ipo, end_ms):
+def judge(requests_log, summary_path, sql_result, ipo, end_ms, expect_requests):
     """판정 결과 문자열 목록과 무효 이유 목록을 돌려준다. 입력을 읽지 못하면 ValueError"""
     rows = load_rows(requests_log)
+    with open(summary_path, encoding="utf-8") as f:
+        metrics = json.load(f)["metrics"]
+    # 로그에서 읽지 못한 행(예: 202를 받은 대상 요청)은 아래 대조에서 빠져 0건처럼 보인다. k6가 계획보다 일찍 끝나도 밀린 요청으로 잡히지 않는다
+    # 그래서 k6 요청 수와 읽은 로그 행 수가 모두 계획한 전체 요청 수와 같을 때만 판정한다
+    if "count" not in metrics.get("http_reqs", {}):
+        raise ValueError("summary.json에 http_reqs.count가 없음 (k6가 보낸 요청 수)")
+    sent = int(metrics["http_reqs"]["count"])
+    if sent != expect_requests or len(rows) != expect_requests:
+        raise ValueError(f"요청 수가 계획과 다름: 계획 {expect_requests}건, k6 요청 {sent}건, 읽은 로그 행 {len(rows)}건")
+    unknown = sum(1 for r in rows if r.get("stage") not in ("target", "bg"))
+    if unknown:
+        raise ValueError(f"stage가 target, bg가 아닌 로그 행 {unknown}건 (판정에서 빠지는 요청)")
     tgt = [r for r in rows if r.get("stage") == "target"]
     bg = [r for r in rows if r.get("stage") == "bg"]
     ts = collections.Counter(r["status"] for r in tgt)
@@ -73,8 +87,6 @@ def judge(requests_log, summary_path, sql_result, ipo, end_ms):
 
     reasons = []
     # 요청 순번으로 대상 구간을 정하므로(k6 iterationInTest는 보낸 요청만 센다), 밀린 요청이 있으면 대상 구간이 그만큼 뒤로 밀린다
-    with open(summary_path, encoding="utf-8") as f:
-        metrics = json.load(f)["metrics"]
     # s2.js가 dropped_iterations에 임계값을 걸어 요약에 늘 남는다. 없으면 0으로 넘기지 않고 입력 오류
     if "count" not in metrics.get("dropped_iterations", {}):
         raise ValueError("summary.json에 dropped_iterations.count가 없음 (s2.js의 밀린 요청 수)")
@@ -128,11 +140,12 @@ def main(argv=None):
     ap.add_argument("--sql-result", required=True)
     ap.add_argument("--ipo", required=True)
     ap.add_argument("--end-ms", type=int, required=True)
+    ap.add_argument("--expect-requests", type=int, required=True)
     ap.add_argument("--container", default=CONTAINER)
     a = ap.parse_args(argv)
     CONTAINER = a.container
     try:
-        out, reasons = judge(a.requests, a.summary, a.sql_result, a.ipo, a.end_ms)
+        out, reasons = judge(a.requests, a.summary, a.sql_result, a.ipo, a.end_ms, a.expect_requests)
     except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as e:
         print(f"판정 입력을 읽지 못함: {e}", file=sys.stderr)
         return 1

@@ -106,6 +106,11 @@ expect_out "new_ipos: 요청한 개수와 다르면 실패" 1 "" new_ipos run 4
 new_ipo_cmd() { echo "psql: error" >&2; return 1; }
 expect_out "new_ipos: 생성 실패" 1 "" new_ipos run 1
 
+# ---------- main: 판정에 계획한 전체 요청 수를 넘김 (main은 Docker가 필요해 호출 줄만 본다) ----------
+S2_SRC="${1:-$HERE/../s2.sh}"
+grep -q 'verify/s2_judge.py.*' "$S2_SRC" && grep -A2 'verify/s2_judge.py' "$S2_SRC" | grep -q -- '--expect-requests "$total"' \
+  && ok "main: 판정에 --expect-requests \"\$total\"을 넘김" || bad "main: 판정 인자" "s2_judge.py 호출에 --expect-requests \"\$total\"이 없음"
+
 rm -f "$CG_LAG"
 echo "통과 $PASS, 실패 $FAIL"
 [ "$FAIL" = 0 ]

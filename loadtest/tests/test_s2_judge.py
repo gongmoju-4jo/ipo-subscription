@@ -50,6 +50,9 @@ class Case:
         self.no_checks = False
         self.checks = None   # 주면 checks 칸을 그대로 쓴다
         self.no_dropped = False
+        self.expect = None       # 계획한 전체 요청 수 (없으면 로그 행 수)
+        self.http_reqs = None    # k6 요청 수 (없으면 로그 행 수)
+        self.no_http_reqs = False
         self.sql = SQL_OK
         self.closed = [["1794215376.497", "2"]]   # ipo.closed Outbox: 생성 시각, confirmedCount
         self.subs = ["t1", "t2"]                  # 대상 공모주 청약 행의 request_id
@@ -72,6 +75,8 @@ class Case:
         summ = os.path.join(self.tmp, "summary.json")
         with open(summ, "w", encoding="utf-8") as f:
             m = {} if self.no_dropped else {"dropped_iterations": {"count": self.dropped, "rate": 0}}
+            if not self.no_http_reqs:
+                m["http_reqs"] = {"count": len(self.rows) if self.http_reqs is None else self.http_reqs, "rate": 0}
             if self.checks is not None:
                 m["checks"] = self.checks
             elif not self.no_checks:
@@ -91,7 +96,8 @@ class Case:
         s2.query = fake_query
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            rc = s2.main(["--requests", log, "--summary", summ, "--sql-result", sqlf, "--ipo", IPO, "--end-ms", str(END_MS)])
+            rc = s2.main(["--requests", log, "--summary", summ, "--sql-result", sqlf, "--ipo", IPO, "--end-ms", str(END_MS),
+                         "--expect-requests", str(len(self.rows) if self.expect is None else self.expect)])
         return rc, out.getvalue(), err.getvalue()
 
 
@@ -139,6 +145,34 @@ class S2JudgeTest(unittest.TestCase):
         rc, out, err = c.run()
         self.assertEqual(rc, 1)
         self.assertIn("dropped_iterations.count가 없음", err)
+        self.assertEqual(out, "")
+
+    def test_request_count_mismatch_is_an_input_error(self):
+        # 읽지 못한 로그 행(예: 202를 받은 대상 요청)이나 일찍 끝난 실행을 0건으로 넘기지 않는다
+        for name, expect, http in (("로그 행이 k6 요청 수보다 적음", 6, 6), ("k6가 계획보다 적게 보냄", 6, 5),
+                                   ("로그 행은 계획과 같은데 k6 요청 수가 다름", 5, 6)):
+            with self.subTest(name):
+                c = Case().normal()
+                c.expect, c.http_reqs = expect, http
+                rc, out, err = c.run()
+                self.assertEqual(rc, 1)
+                self.assertIn(f"요청 수가 계획과 다름: 계획 {expect}건, k6 요청 {http}건, 읽은 로그 행 5건", err)
+                self.assertEqual(out, "")
+
+    def test_missing_http_reqs_count_is_an_input_error(self):
+        c = Case().normal()
+        c.no_http_reqs = True
+        rc, out, err = c.run()
+        self.assertEqual(rc, 1)
+        self.assertIn("http_reqs.count가 없음", err)
+        self.assertEqual(out, "")
+
+    def test_row_without_stage_is_an_input_error(self):
+        c = Case().normal()
+        c.rows.append({"s": "S2", "run": "x", "idx": 5, "requestId": "t9", "status": 202, "subscriptionId": "", "code": ""})
+        rc, out, err = c.run()
+        self.assertEqual(rc, 1)
+        self.assertIn("stage가 target, bg가 아닌 로그 행 1건", err)
         self.assertEqual(out, "")
 
     def test_no_422_means_close_time_outside_target_window(self):

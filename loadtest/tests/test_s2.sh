@@ -52,7 +52,9 @@ pg() {
   esac
 }
 docker() { cat "$CG_LAG" | sed 's/ 15 / 10 /; s/ 3  / 0  /'; }   # 랙 0으로 바꾼 출력
-expect_out "drain: 진행 중 0, 미발행 0, 랙 0이면 성공" 0 0 drain "a,b" 1
+# 걸린 초를 출력한다. 실행 중 초가 바뀌면 0이 아니라 1일 수 있어 값은 숫자인지만 본다
+out="$(drain "a,b" 1 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && [[ "$out" =~ ^[0-9]+$ ]] && ok "drain: 진행 중 0, 미발행 0, 랙 0이면 성공 (걸린 초 출력)" || bad "drain: 성공" "rc=$rc out='$out'"
 PG_P=2; expect_out "drain: 진행 중 청약이 남으면 제한 시간 뒤 실패" 1 "" drain "a" 0
 PG_P=0; PG_O=1; expect_out "drain: 미발행 Outbox가 남으면 실패" 1 "" drain "a" 0
 PG_O=0; PG_FAIL=1; expect_out "drain: DB 조회 실패를 0으로 보지 않음" 1 "" drain "a" 0

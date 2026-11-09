@@ -136,7 +136,7 @@ export function IpoDetailPage() {
             <div className="stack">
               <div className="field">
                 <label>계좌</label>
-                <select className="input" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                <select className="input" value={accountId} disabled={busy || pending !== null} onChange={(e) => setAccountId(e.target.value)}>
                   {accounts.data?.items.map((a) => (
                     <option key={a.accountId} value={a.accountId}>
                       {a.accountNumber} (예수금 {formatWon(a.cashBalance)})
@@ -149,6 +149,7 @@ export function IpoDetailPage() {
                 <input
                   className="input num"
                   type="number"
+                  disabled={busy || pending !== null}
                   min={d.minQuantity}
                   max={d.maxQuantity}
                   value={qty || ''}
@@ -167,8 +168,11 @@ export function IpoDetailPage() {
                 {short && <div className="error-text" style={{ marginTop: 8 }}>예수금이 {formatWon(expected - (account?.cashBalance ?? 0))} 부족해요. 신청하면 거절돼요</div>}
               </div>
               {error !== null && <ErrorBox error={error} title="청약을 접수하지 못했어요" />}
+              {pending && !busy && (
+                <div className="notice gray">이전 청약 결과를 확인하지 못했어요. 같은 계좌, 수량으로 다시 확인할 때까지 입력을 바꿀 수 없어요</div>
+              )}
               <button className="btn btn-primary btn-block" disabled={busy || !!qtyError || !accountId} onClick={submit}>
-                {busy ? '접수 중…' : `${qty.toLocaleString()}주 청약하기`}
+                {busy ? '접수 중…' : pending ? `${pending.qty.toLocaleString()}주 청약 결과 확인하기` : `${qty.toLocaleString()}주 청약하기`}
               </button>
               <div className="hint">신청하면 먼저 "접수"되고, 증거금 인출이 끝나면 "확정"돼요.</div>
               <DesignNote title="몰려도 밀리지 않는 접수">

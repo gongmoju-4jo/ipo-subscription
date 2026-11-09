@@ -25,6 +25,10 @@ export function AccountPage() {
     if (!selected && items[0]) setSelected(items[0].accountId);
   }, [items, selected]);
   const account = items.find((a) => a.accountId === selected);
+  // 같은 requestId는 같은 내용으로만 다시 보낸다. 계좌나 금액을 바꾸면 새 입금이라 새 ID
+  useEffect(() => {
+    setDepositRequestId(newRequestId());
+  }, [selected, amount]);
   const ledger = useLedger(account?.accountId);
 
   const refresh = () => {

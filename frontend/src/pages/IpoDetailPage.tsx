@@ -30,6 +30,11 @@ export function IpoDetailPage() {
     const first = accounts.data?.items[0];
     if (first && !accountId) setAccountId(first.accountId);
   }, [accounts.data, accountId]);
+  // 같은 requestId는 같은 내용으로만 다시 보낸다. 계좌나 수량을 바꾸면 새 요청이라 새 ID
+  // (앞 요청이 이미 저장됐어도 사람 기준 이중청약 제약으로 두 번째는 거절돼서 증거금이 두 번 빠지지 않는다)
+  useEffect(() => {
+    setRequestId(newRequestId());
+  }, [qty, accountId]);
 
   const account = accounts.data?.items.find((a) => a.accountId === accountId);
   const expected = useMemo(() => (ipo.data ? Math.round(qty * ipo.data.offerPrice * Number(ipo.data.marginRate)) : 0), [qty, ipo.data]);

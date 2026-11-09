@@ -56,7 +56,7 @@ class AccountLedgerApiTest {
         insertLedger(accountId, "DEPOSIT", 1_000_000, 1_000_000, 0, null, "2026-11-06T00:10:00+09:00");
         insertLedger(accountId, "MARGIN_PENDING", 150_000, 850_000, 150_000, subscriptionId, "2026-11-06T00:11:00+09:00");
 
-        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger").header(USER_HEADER, userA))
+        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger-entries").header(USER_HEADER, userA))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.totalElements").value(2))
                 .andExpect(jsonPath("$.data.items[0].type").value("MARGIN_PENDING"))
@@ -76,7 +76,7 @@ class AccountLedgerApiTest {
         insertLedger(mine, "DEPOSIT", 100, 100, 0, null, "2026-11-06T00:10:00+09:00");
         insertLedger(mySecond, "DEPOSIT", 222, 222, 0, null, "2026-11-06T00:12:00+09:00");
 
-        mockMvc.perform(get(ACCOUNTS + mine + "/ledger").header(USER_HEADER, userA))
+        mockMvc.perform(get(ACCOUNTS + mine + "/ledger-entries").header(USER_HEADER, userA))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.totalElements").value(1))
                 .andExpect(jsonPath("$.data.items[0].amount").value(100));
@@ -87,11 +87,11 @@ class AccountLedgerApiTest {
         UUID others = insertAccount(userA, "100000000001");
         insertLedger(others, "DEPOSIT", 1_000_000, 1_000_000, 0, null, "2026-11-06T00:10:00+09:00");
 
-        String forbiddenLooking = mockMvc.perform(get(ACCOUNTS + others + "/ledger").header(USER_HEADER, userB))
+        String forbiddenLooking = mockMvc.perform(get(ACCOUNTS + others + "/ledger-entries").header(USER_HEADER, userB))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"))
                 .andReturn().getResponse().getContentAsString();
-        String missing = mockMvc.perform(get(ACCOUNTS + UUID.randomUUID() + "/ledger").header(USER_HEADER, userB))
+        String missing = mockMvc.perform(get(ACCOUNTS + UUID.randomUUID() + "/ledger-entries").header(USER_HEADER, userB))
                 .andExpect(status().isNotFound())
                 .andReturn().getResponse().getContentAsString();
 
@@ -103,19 +103,41 @@ class AccountLedgerApiTest {
     void 정렬할_수_없는_필드와_범위_밖_페이지는_400이다() throws Exception {
         UUID accountId = insertAccount(userA, "100000000001");
 
-        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger").param("sort", "amount,desc").header(USER_HEADER, userA))
+        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger-entries").param("sort", "amount,desc").header(USER_HEADER, userA))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details[0].field").value("sort"));
-        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger").param("size", "0").header(USER_HEADER, userA))
+        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger-entries").param("size", "0").header(USER_HEADER, userA))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details[0].field").value("size"));
+    }
+
+    @Test
+    void type을_주면_그_거래_종류만_준다() throws Exception {
+        UUID accountId = insertAccount(userA, "100000000001");
+        insertLedger(accountId, "DEPOSIT", 1_000_000, 1_000_000, 0, null, "2026-11-06T00:10:00+09:00");
+        insertLedger(accountId, "MARGIN_PENDING", 150_000, 850_000, 150_000, UUID.randomUUID(), "2026-11-06T00:11:00+09:00");
+
+        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger-entries").param("type", "DEPOSIT").header(USER_HEADER, userA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("거래내역을 조회했습니다."))
+                .andExpect(jsonPath("$.data.totalElements").value(1))
+                .andExpect(jsonPath("$.data.items[0].type").value("DEPOSIT"));
+    }
+
+    @Test
+    void 없는_type_값은_400이다() throws Exception {
+        UUID accountId = insertAccount(userA, "100000000001");
+
+        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger-entries").param("type", "WITHDRAW").header(USER_HEADER, userA))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
     }
 
     @Test
     void X_User_Id_헤더가_없으면_401이다() throws Exception {
         UUID accountId = insertAccount(userA, "100000000001");
 
-        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger"))
+        mockMvc.perform(get(ACCOUNTS + accountId + "/ledger-entries"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
     }

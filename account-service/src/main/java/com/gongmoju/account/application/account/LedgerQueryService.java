@@ -1,7 +1,9 @@
 package com.gongmoju.account.application.account;
 
 import com.gongmoju.account.domain.account.AccountRepository;
+import com.gongmoju.account.domain.ledger.LedgerEntry;
 import com.gongmoju.account.domain.ledger.LedgerEntryRepository;
+import com.gongmoju.account.domain.ledger.LedgerEntryType;
 import com.gongmoju.common.exception.BusinessException;
 import com.gongmoju.common.exception.CommonErrorCode;
 import com.gongmoju.common.util.PageableUtils;
@@ -26,11 +28,15 @@ public class LedgerQueryService {
     private final LedgerEntryRepository ledgerEntryRepository;
 
     @Transactional(readOnly = true)
-    public Page<LedgerEntryResult> list(UUID userId, UUID accountId, Pageable pageable) {
+    public Page<LedgerEntryResult> list(UUID userId, UUID accountId, LedgerEntryType type, Pageable pageable) {
         // 남의 계좌와 없는 계좌는 같은 404 (계좌 상세 조회와 같은 규칙)
         accountRepository.findByIdAndUserId(accountId, userId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "존재하지 않는 계좌입니다.", "accountId"));
-        return ledgerEntryRepository.findByAccount_Id(accountId, PageableUtils.toStablePageable(pageable, SORTABLE_FIELDS))
-                .map(LedgerEntryResult::from);
+        Pageable stable = PageableUtils.toStablePageable(pageable, SORTABLE_FIELDS);
+        // type이 없으면 전체, 있으면 그 거래 종류만
+        Page<LedgerEntry> entries = type == null
+                ? ledgerEntryRepository.findByAccount_Id(accountId, stable)
+                : ledgerEntryRepository.findByAccount_IdAndType(accountId, type, stable);
+        return entries.map(LedgerEntryResult::from);
     }
 }

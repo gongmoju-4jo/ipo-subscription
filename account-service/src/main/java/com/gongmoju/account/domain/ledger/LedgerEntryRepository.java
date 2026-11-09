@@ -18,4 +18,7 @@ public interface LedgerEntryRepository {
 
     // 계좌 거래 내역 조회용. 계좌 소유자 확인은 응용 계층이 먼저 한다
     Page<LedgerEntry> findByAccount_Id(UUID accountId, Pageable pageable);
+
+    // 계좌 거래 내역을 거래 종류로 걸러 조회
+    Page<LedgerEntry> findByAccount_IdAndType(UUID accountId, LedgerEntryType type, Pageable pageable);
 }

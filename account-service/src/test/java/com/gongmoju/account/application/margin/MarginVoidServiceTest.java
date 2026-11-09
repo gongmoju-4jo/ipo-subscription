@@ -117,19 +117,18 @@ class MarginVoidServiceTest {
         assertThat(count("margin")).isZero();
     }
 
+    // E-20 (11/6 변경): 계좌가 없으면 margin이 없어도 0원으로 답하지 않고 예외로 롤백해 DLT로 보낸다
     @Test
-    void 계좌가_없으면_amount_0으로_응답하고_반환_기록은_남기지_않는다() {
+    void 계좌가_없으면_margin이_없어도_예외로_롤백하고_응답하지_않는다() {
         UUID subscriptionId = UUID.randomUUID();
         UUID unknownAccountId = UUID.randomUUID();
 
-        marginVoidService.voidMargin(command(subscriptionId, unknownAccountId));
+        assertThatThrownBy(() -> marginVoidService.voidMargin(command(subscriptionId, unknownAccountId)))
+                .isInstanceOf(InvalidEventException.class);
 
-        List<Map<String, Object>> voided = voidedOutbox();
-        assertThat(voided).hasSize(1);
-        assertThat(voided.get(0).get("message_key")).isEqualTo(unknownAccountId.toString());
-        assertThat(voided.get(0).get("amount")).isEqualTo(0L);
+        assertThat(voidedOutbox()).isEmpty();
         assertThat(count("margin_void_intent")).isZero();
-        assertThat(count("processed_event")).isEqualTo(1L);
+        assertThat(count("processed_event")).isZero();
     }
 
     @Test

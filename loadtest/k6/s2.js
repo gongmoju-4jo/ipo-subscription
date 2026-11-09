@@ -46,8 +46,33 @@ export const options = {
   setupTimeout: '120s',
 };
 
+// 요청 순번 전체를 route()로 배분해 보고, 대상과 배경이 계획대로 나뉘는지 요청을 보내기 전에 확인한다 (틀리면 예외)
+//   대상: 요청 수 = 회원 수, 회원이 겹치지 않음 / 배경: 번호가 0부터 빈틈없이 이어짐(공모주와 회원 조합이 겹치지 않음), 공모주 수가 충분함
+export function checkRouting() {
+  const seen = new Set();
+  let targets = 0;
+  let nextB = 0;
+  for (let idx = 0; idx < TOTAL; idx++) {
+    const r = route(idx);
+    if (r.target) {
+      if (r.user < 0 || r.user >= U || seen.has(r.user)) throw new Error(`대상 회원 배분 오류: 요청 ${idx}번, 회원 ${r.user}`);
+      seen.add(r.user);
+      targets++;
+    } else {
+      if (r.b !== nextB) throw new Error(`배경 요청 번호가 이어지지 않음: 요청 ${idx}번, 번호 ${r.b} (기대 ${nextB})`);
+      nextB++;
+    }
+  }
+  if (targets !== U) throw new Error(`대상 요청 수 ${targets}건이 회원 수 ${U}명과 다름`);
+  const bgIpos = Math.ceil(nextB / U);
+  if (bgIpos > BG.length) throw new Error(`배경 공모주가 모자람: 필요 ${bgIpos}개, 받은 ${BG.length}개`);
+  return { targets, background: nextB, bgIpos };
+}
+
 // 대상 공모주의 마감 시각은 s2.sh가 START_AT 기준으로 정해 둔다. 그 시각에 맞춰 부하를 시작한다
 export function setup() {
+  const plan = checkRouting();
+  console.log(`요청 배분 확인: 대상 ${plan.targets}건, 배경 ${plan.background}건 (배경 공모주 ${plan.bgIpos}개)`);
   const wait = START_AT - Date.now();
   if (wait > 0) sleep(wait / 1000);
   return { lateMs: Math.max(0, -wait) };

@@ -84,6 +84,25 @@ springdoc:
       - name: allocation-service
         url: /allocation-service/v3/api-docs
 
+# 접속 대기열 (QueueProperties)
+queue:
+  # 1초마다 입장 처리
+  admit-interval: PT1S
+  # 초당 입장 인원, 전체 공모주 합. 서비스가 계속 받아도 밀리지 않는 처리량(S1 정식 측정 433건/초)
+  # 부하 측정에서 서비스 한계를 잴 때만 QUEUE_ADMIT_RATE로 크게 준다 (대기열을 끄는 설정은 없다)
+  admit-rate: ${QUEUE_ADMIT_RATE:433}
+  # 입장 허가 유효 시간 (허가 후 입력 화면에서 청약 신청까지). 부하 측정 때는 QUEUE_ADMISSION_TTL로 측정 시간보다 길게
+  admission-ttl: ${QUEUE_ADMISSION_TTL:PT5M}
+  # 받은 조회 간격의 3배 동안 조회가 없으면 이탈 (창을 닫은 사람에게 허가를 주지 않게)
+  dropout-factor: 3
+  # 초당 순서 조회 예산. 조회 간격 = max(1초, 대기 인원 ÷ 이 값). 대기열 효과 측정 전 임시값
+  poll-budget: 500
+  # 입장 처리 한 번에 정리할 이탈자 상한
+  dropout-batch-size: 1000
+  scheduler:
+    # 테스트에서 스케줄러를 끄기 위한 값 (대기열을 끄는 설정 아님)
+    enabled: true
+
 jwt:
   # 서명 키. .env의 JWT_SECRET (account-service와 같은 값). 비어 있거나 짧으면 기동할 때 실패한다
   secret: ${JWT_SECRET:}

@@ -145,6 +145,9 @@ services:
       # account-service와 같은 값이어야 한다. 비어 있거나 짧으면 기동할 때 실패한다
       JWT_SECRET: ${JWT_SECRET:-}
       REDIS_HOST: redis
+      # 대기열 입장 속도, 허가 유효 시간. 부하 측정 때만 .env에서 바꾼다. 기본값은 application.yml과 같게 둔다 (빈 값을 넘기면 기동에 실패한다)
+      QUEUE_ADMIT_RATE: ${QUEUE_ADMIT_RATE:-433}
+      QUEUE_ADMISSION_TTL: ${QUEUE_ADMISSION_TTL:-PT5M}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

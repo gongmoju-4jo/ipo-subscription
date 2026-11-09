@@ -1,6 +1,6 @@
 package com.gongmoju.subscription.application.ipo;
 
-import com.gongmoju.subscription.domain.event.ProcessedEventRepository;
+import com.gongmoju.common.event.ProcessedEventRepository;
 import com.gongmoju.subscription.domain.ipo.AllocationFinished;
 import com.gongmoju.subscription.domain.ipo.Ipo;
 import com.gongmoju.subscription.domain.ipo.IpoRepository;

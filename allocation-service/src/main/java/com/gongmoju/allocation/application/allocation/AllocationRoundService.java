@@ -4,7 +4,7 @@ import com.gongmoju.allocation.domain.allocation.AllocationRound;
 import com.gongmoju.allocation.domain.allocation.AllocationRoundRepository;
 import com.gongmoju.allocation.domain.allocation.ConfirmedSubscription;
 import com.gongmoju.allocation.domain.allocation.IpoClosed;
-import com.gongmoju.allocation.domain.event.ProcessedEventRepository;
+import com.gongmoju.common.event.ProcessedEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

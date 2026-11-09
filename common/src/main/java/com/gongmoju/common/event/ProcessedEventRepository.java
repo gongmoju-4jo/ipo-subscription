@@ -1,9 +1,9 @@
-package com.gongmoju.subscription.domain.event;
+package com.gongmoju.common.event;
 
 import java.util.UUID;
 
 /**
- * 처리한 이벤트 기록 저장소 (중복 수신 방지, 이벤트 명세 3-2, 3-3). 구현은 infrastructure/messaging.
+ * 처리한 이벤트 기록 저장소 (중복 수신 방지, 이벤트 명세 3-2, 3-3). 구현은 {@link ProcessedEventRepositoryAdapter}, 표는 서비스마다 자기 스키마의 {@code processed_event}.
  */
 public interface ProcessedEventRepository {
 

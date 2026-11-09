@@ -2,3 +2,5 @@ com.gongmoju.common.config.CommonWebAutoConfiguration
 com.gongmoju.common.config.CommonFeignAutoConfiguration
 com.gongmoju.common.config.CommonJpaAuditingAutoConfiguration
 com.gongmoju.common.config.CommonSwaggerAutoConfiguration
+com.gongmoju.common.outbox.CommonOutboxAutoConfiguration
+com.gongmoju.common.event.CommonProcessedEventAutoConfiguration

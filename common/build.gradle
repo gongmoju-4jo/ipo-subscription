@@ -15,6 +15,8 @@ dependencies {
     compileOnly 'org.springframework.boot:spring-boot-starter-web'
     compileOnly 'org.springframework.boot:spring-boot-starter-data-jpa'
     compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    // Outbox 발행기 (CommonOutboxAutoConfiguration). 서비스가 직접 implementation으로 가지고 있어야 함
+    compileOnly 'org.springframework.kafka:spring-kafka'
     compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'
     // CommonSwaggerAutoConfiguration (OpenAPI 모델). 버전은 서비스의 springdoc과 맞춤
     compileOnly 'org.springdoc:springdoc-openapi-starter-common:2.8.17'
@@ -28,4 +30,14 @@ dependencies {
     testImplementation 'org.springframework.data:spring-data-commons'
     // CommonSwaggerAutoConfiguration 테스트용
     testImplementation 'org.springdoc:springdoc-openapi-starter-common:2.8.17'
+
+    // Outbox 발행기 테스트용 (KafkaTemplate, JPA Repository 타입)
+    testImplementation 'org.springframework.kafka:spring-kafka'
+    testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // 자동 설정 DB 테스트용 (테스트 전용 앱 + PostgreSQL)
+    testRuntimeOnly 'org.postgresql:postgresql'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }

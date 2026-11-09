@@ -1,4 +1,4 @@
-package com.gongmoju.allocation.infrastructure.messaging;
+package com.gongmoju.common.outbox;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;

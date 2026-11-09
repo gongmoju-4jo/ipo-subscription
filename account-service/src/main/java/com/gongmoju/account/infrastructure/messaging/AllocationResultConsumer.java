@@ -1,6 +1,5 @@
 package com.gongmoju.account.infrastructure.messaging;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gongmoju.account.application.margin.MarginSettleService;
@@ -55,20 +54,8 @@ class AllocationResultConsumer {
     }
 
     private AllocationResultMessage parse(String payload) {
-        if (payload == null || payload.isBlank()) {
-            throw new InvalidEventException("메시지 본문이 비어 있습니다.");
-        }
-        try {
-            // 금액에 소수가 오면 버림으로 바뀌지 않게 거절한다 (45000.5 → 45000 방지)
-            AllocationResultMessage message = objectMapper.readerFor(AllocationResultMessage.class)
-                    .without(DeserializationFeature.ACCEPT_FLOAT_AS_INT)
-                    .readValue(payload);
-            if (message == null) {
-                throw new InvalidEventException("메시지 본문이 JSON 객체가 아닙니다.");
-            }
-            return message;
-        } catch (JsonProcessingException e) {
-            throw new InvalidEventException("메시지 JSON을 읽을 수 없습니다: " + e.getOriginalMessage());
-        }
+        // 금액에 소수가 오면 버림으로 바뀌지 않게 거절한다 (45000.5 → 45000 방지)
+        return KafkaMessageParser.parse(payload, objectMapper.readerFor(AllocationResultMessage.class)
+                .without(DeserializationFeature.ACCEPT_FLOAT_AS_INT));
     }
 }

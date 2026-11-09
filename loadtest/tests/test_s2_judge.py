@@ -139,6 +139,7 @@ class S2JudgeTest(unittest.TestCase):
         rc, out, err = c.run()
         self.assertEqual(rc, 1)
         self.assertIn("dropped_iterations.count가 없음", err)
+        self.assertEqual(out, "")
 
     def test_no_422_means_close_time_outside_target_window(self):
         c = Case().req("t1", 202).req("t2", 202)

@@ -28,6 +28,10 @@ spring:
     # 서비스별 전용 계정 (init.sh가 만든다). 자기 스키마만 쓸 수 있다
     username: subscription_app
     password: ${SUBSCRIPTION_DB_PASSWORD}
+    hikari:
+      # 기본값 10은 HTTP 요청, 리스너 스레드(concurrency), 스케줄러가 함께 써서 부하 중 커넥션 대기가 생긴다
+      # 리스너 concurrency를 바꾸면 같이 본다. minimum-idle을 정하지 않아 늘 이만큼 연결을 잡으므로 서비스 합계가 PostgreSQL max_connections(100)를 넘지 않게 한다
+      maximum-pool-size: 30
   sql:
     init:
       # schema.sql(제약, 부분 인덱스), data.sql(공모주 시드)을 기동할 때마다 실행한다. 두 파일 모두 여러 번 실행해도 된다

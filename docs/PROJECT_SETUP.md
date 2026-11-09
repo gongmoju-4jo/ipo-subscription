@@ -435,13 +435,13 @@ subscription-service/.../com/gongmoju/subscription/
 | `response/PageResponse` | 공통 목록 응답 |
 | `swagger/` | 오류 응답 예시 자동 생성 (`@ErrorCodeExamples`, `ErrorCodeOperationCustomizer`) |
 | `feign/` | 헤더 전달, 에러 디코더, 재시도, Feign 예외 처리 (Feign 있는 서비스만) |
-| `outbox/` | Outbox 엔티티(`Outbox`), 저장소(`OutboxJpaRepository`), 발행기(`OutboxPublisher`), 메시지 팩토리, 설정(`outbox.publisher.*`), 자동 설정 (Kafka, JPA 있는 서비스만). |
-| `event/` | 처리한 이벤트 기록(중복 수신 방지): 엔티티(`ProcessedEvent`), 포트(`ProcessedEventRepository`), 구현, 자동 설정 (JPA 있는 서비스만). |
-| `config/` | 위 기능 + Swagger 공통 설정 자동 등록 (AutoConfiguration). `outbox/`, `event/`의 자동 설정은 같은 폴더의 package-private 클래스를 쓰려고 각 폴더에 둔다 |
+| `outbox/` | Outbox 엔티티, 저장소, 발행기, 설정(`outbox.publisher.*`), 자동 설정 (Kafka, JPA 있는 서비스만) |
+| `event/` | 처리한 이벤트 기록(중복 수신 방지): 엔티티, 포트(`ProcessedEventRepository`), 구현, 자동 설정 (JPA 있는 서비스만) |
+| `config/` | 위 기능 + Swagger 공통 설정 자동 등록 (AutoConfiguration). `outbox/`, `event/`의 자동 설정은 각 폴더에 있음 |
 
 > 💡 서비스는 자기 패키지(`com.gongmoju.{서비스}`)만 스캔하므로 common 설정은 `AutoConfiguration.imports`로 자동 등록됩니다. 서비스에 `JpaAuditingConfig`, `SwaggerConfig`를 따로 만들지 않습니다.
 >
-> 💡 `Outbox`, `ProcessedEvent` 엔티티와 저장소도 자동 설정(`@AutoConfigurationPackage`)이 서비스의 JPA 스캔 대상에 더합니다. 서비스에 `@EnableJpaRepositories`, `@EntityScan`을 직접 붙이면 기본 스캔이 꺼져 common 쪽 등록이 빠질 수 있으니 붙이지 않습니다.
+> 💡 `Outbox`, `ProcessedEvent` 엔티티와 저장소도 자동 설정이 서비스의 JPA 스캔 대상에 더합니다. 서비스에 `@EnableJpaRepositories`, `@EntityScan`을 직접 붙이면 기본 스캔이 꺼져 등록이 빠질 수 있으니 붙이지 않습니다.
 
 ### common에 넣는 기준
 
@@ -450,8 +450,8 @@ subscription-service/.../com/gongmoju/subscription/
 | 응답 형식, 공통 에러 코드, 전역 예외 처리 | 엔티티, Repository, 비즈니스 로직                |
 | Feign 공통 설정 (헤더 전달, 에러 디코더, 재시도) | `@FeignClient` 인터페이스, Feign DTO         |
 | `BaseEntity`, JPA Auditing, Swagger 공통 설정 | 도메인 에러 enum (`{서비스}ErrorCode`)          |
-| Outbox, 처리 기록 (엔티티, 저장소, 발행기. 도메인 값은 모르고 이벤트를 저장, 발행만 함) | Kafka 이벤트 DTO (서비스마다 따로, 계약은 이벤트 명세 문서) |
-| | 이벤트별 Outbox 기록 클래스 (`OutboxMarginEventPublisher` 등. 어떤 이벤트를 어떤 payload로 기록할지 아는 코드) |
+| Outbox, 처리 기록 (이벤트를 저장, 발행만 하고 도메인 값은 모름) | Kafka 이벤트 DTO (서비스마다 따로, 계약은 이벤트 명세 문서) |
+| | 이벤트별 Outbox 기록 클래스 (`OutboxMarginEventPublisher` 등) |
 
 > ⚠️ common을 바꾸면 전 서비스가 영향을 받습니다. **도메인을 모르는 공통 약속**인지 확인하고 팀에 먼저 공유합니다.
 
@@ -504,7 +504,7 @@ compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
 > 💡 `compileOnly`: common은 빌드할 때만 라이브러리를 참고하고, 서비스에 넘겨주지 않습니다.
 > - 라이브러리는 **서비스가 직접** `build.gradle`에 추가해야 동작합니다.
 > - 예) openfeign이 없는 서비스는 common Feign 설정도 붙지 않습니다. 필요하면 `openfeign` 의존성 + `@EnableFeignClients`만 추가합니다.
-> - 예) `spring-kafka`나 JPA가 없는 앱에는 Outbox, 처리 기록 설정이 붙지 않습니다 (`@ConditionalOnClass`). Outbox는 서비스가 `spring-kafka`를 `implementation`으로 직접 가지고 있어야 동작합니다.
+> - 예) Outbox는 `spring-kafka`와 JPA가 모두 있어야, 처리 기록은 JPA만 있으면 붙습니다. Kafka 없이 JPA만 쓰는 서비스에도 `processed_event` 표가 만들어질 수 있습니다.
 
 - common에 라이브러리 추가 → common엔 `compileOnly` + 서비스엔 `implementation`
   - 서비스쪽 누락 시 `ClassNotFoundException` → 서비스 `build.gradle`에 의존성 추가
@@ -697,7 +697,7 @@ Kafka 데이터까지 모두 지우려면 `docker-compose down -v` (토픽은 `k
   - `application.yml`에 `spring.sql.init.mode: always` + `spring.jpa.defer-datasource-initialization: true`
   - `IF NOT EXISTS` 필수
   - 조회 성능용 부분 인덱스도 `schema.sql` (예: outbox 미발행 조회)
-- `outbox`, `processed_event` 엔티티는 `common`에 있어도 서비스의 `hibernate.default_schema`에 따라 각 서비스 스키마에 생성된다. 체크 제약과 부분 인덱스는 서비스의 `schema.sql`에 둔다
+- `outbox`, `processed_event` 엔티티는 `common`에 있어도 각 서비스 스키마(`hibernate.default_schema`)에 생성된다
 
 > ⚠️ `update`는 컬럼 **추가만** 반영합니다 (삭제, 이름 변경 X). 테이블이 꼬이면 위의 PostgreSQL 볼륨 초기화 절차로 초기화합니다.
 

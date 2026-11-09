@@ -8,8 +8,9 @@
 #   측정값: verify.sql 20~22번(마감 처리 뒤 생긴 청약, 마감 시각 이후 도착인데 접수된 청약, 마감 때 확정 수 차이)과 202를 받았는데 행이 없는 요청(k6 로그 대조)
 # 환경변수: RATE(274), PRE(60), POST(40), TARGET_SEC(0: 회원 수 ÷ RATE초 동안 전부 대상), PRICE(1000), QUANTITY(10),
 #          LEAD(25, 시작까지 여유 초), WARM(1, 0이면 워밍업 생략), WARM_*(official.sh와 같은 기본값),
-#          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g)
-# 종료 코드: 0 유효 회차, 3 회차 무효(판정 파일 참고), 그 밖은 준비, 실행 실패
+#          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g),
+#          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다)
+# 종료 코드: 0 유효 회차, 3 회차 무효(판정 파일 참고), 5 커밋하지 않은 변경, 그 밖은 준비, 실행 실패
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -33,6 +34,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$RUN_ID" ] || { echo "사용: $0 --run-id <run_id> [--grace PT1S]" >&2; exit 1; }
+# 커밋하지 않은 변경이 있으면 결과가 어느 코드로 잰 것인지 알 수 없어서 시작하지 않는다 (official.sh와 같은 규칙. 시험 실행만 ALLOW_DIRTY=1)
+DIRTY="$(cd "$REPO" && git status --porcelain)" || { echo "git 상태를 확인하지 못했습니다" >&2; exit 5; }
+DIRTY_N="$(printf '%s' "$DIRTY" | grep -c .)"
+if [ "$DIRTY_N" != 0 ] && [ "${ALLOW_DIRTY:-0}" != 1 ]; then
+  printf '%s\n' "$DIRTY" >&2
+  echo "커밋하지 않은 변경 ${DIRTY_N}건. 커밋한 뒤 실행한다 (결과의 버전 추적). 시험 실행만 ALLOW_DIRTY=1" >&2
+  exit 5
+fi
 OUT="$DIR/results/$RUN_ID"; WRUN="$RUN_ID-W"
 [ -e "$OUT" ] && { echo "이미 있는 run_id입니다: $OUT" >&2; exit 1; }
 mkdir -p "$OUT" "$DIR/results/$WRUN"
@@ -155,7 +164,7 @@ START_AT=$(( NOW_MS + LEAD * 1000 ))
 END_MS=$(( START_AT + PRE * 1000 + WIN_MS / 2 ))
 pg "update subscription.ipo set subscription_end_at = to_timestamp($END_MS / 1000.0) where ipo_id = '$T'" > /dev/null || die 1 "대상 공모주 마감 시각 설정 실패"
 {
-  echo "run_id=$RUN_ID git=$(cd "$REPO" && git rev-parse --short HEAD) branch=$(cd "$REPO" && git rev-parse --abbrev-ref HEAD) dirty=$(cd "$REPO" && git status --porcelain | grep -c .)"
+  echo "run_id=$RUN_ID git=$(cd "$REPO" && git rev-parse --short HEAD) branch=$(cd "$REPO" && git rev-parse --abbrev-ref HEAD) dirty=$DIRTY_N allow_dirty=${ALLOW_DIRTY:-0}"
   echo "grace=$GRACE_ACTUAL rate=$RATE pre=$PRE post=$POST target_sec=$TARGET_SEC target_window_ms=$WIN_MS total=$TOTAL users=$U bg_ipos=$BG_N price=$PRICE quantity=$QUANTITY"
   echo "target_ipo=$T start_at_ms=$START_AT end_at_ms=$END_MS"
   echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY"

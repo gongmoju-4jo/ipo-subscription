@@ -98,5 +98,45 @@ docker() { [ "$1 $2" = "exec ipo-postgres" ] && { echo partial; return 1; }; cat
 [ "$rc" = 4 ] && [ ! -e "$T/out/db.dump" ] && [ ! -e "$T/out/db.dump.tmp" ] && ok "dump: pg_dump 실패 → 종료 코드 4, 파일을 남기지 않음" || bad "dump 실패" "rc=$rc $(ls "$T/out" 2>&1)"
 [ "$(rc_of cmd_dump "")" = 1 ] && ok "dump: 파일 인자가 없으면 종료 코드 1" || bad "dump 인자" "$(rc_of cmd_dump "")"
 
+# ---- ALLOW_SUBSCRIPTIONS=1 save: 확정 청약이 있는 DB (G2 대량 환불용) ----
+BASELINE_DIR="$T/g2"; DUMP="$BASELINE_DIR/ipo-baseline.dump"; META="$BASELINE_DIR/ipo-baseline.meta"
+STATE_SUB="users=1000 accounts=1000 cash_sum=90 margin_sum=10 ledger=3000 ipos=22 subscriptions=2000 margins=2000"
+HELD_OK="unfinished=0 unpublished=0 open_due=0"
+docker() {
+  case "$1 $2" in
+    "exec ipo-postgres") echo "PGDMP-fake-dump" ;;
+    "exec -i") cat > /dev/null; echo "; archive" ;;
+    *) return 1 ;;
+  esac
+}
+state_line() { echo "$STATE_SUB"; }
+held_line() { echo "$HELD_OK"; }
+[ "$(rc_of cmd_save)" = 2 ] && [ ! -e "$DUMP" ] && ok "save: 옵션이 없으면 확정 청약이 있어도 지금처럼 거부" || bad "save 옵션 없음" "rc=$(rc_of cmd_save)"
+ALLOW_SUBSCRIPTIONS=yes; [ "$(rc_of cmd_save)" = 2 ] && [ ! -e "$DUMP" ] && ok "save: ALLOW_SUBSCRIPTIONS가 1이 아니면 꺼진 것으로 본다" || bad "save 옵션 값" "rc=$(rc_of cmd_save)"
+ALLOW_SUBSCRIPTIONS=1
+( cmd_save ) > /dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q "^state $STATE_SUB$" "$META" && grep -q "^allow_subscriptions $HELD_OK$" "$META" && grep -q "^sha256 $(sha256_of "$DUMP")$" "$META" \
+  && ok "save(ALLOW): 조건이 모두 0이면 저장, meta에 청약 수가 든 상태와 allow 줄" || bad "save ALLOW 성공" "rc=$rc $(cat "$META" 2>/dev/null)"
+rm -rf "$BASELINE_DIR"
+for h in "unfinished=3 unpublished=0 open_due=0" "unfinished=0 unpublished=1 open_due=0" "unfinished=0 unpublished=0 open_due=1" ""; do
+  held_line() { echo "$h"; }
+  [ "$(rc_of cmd_save)" = 2 ] && [ ! -e "$DUMP" ] && ok "save(ALLOW): '${h:-빈 값}'이면 종료 코드 2, 저장하지 않음" || bad "save ALLOW 거부 $h" "rc=$(rc_of cmd_save)"
+done
+held_line() { return 1; }
+[ "$(rc_of cmd_save)" = 4 ] && [ ! -e "$DUMP" ] && ok "save(ALLOW): 조건 조회 실패 → 종료 코드 4 (0으로 넘기지 않음)" || bad "save ALLOW 조회 실패" "rc=$(rc_of cmd_save)"
+unset ALLOW_SUBSCRIPTIONS
+# 옵션 없이 저장한 meta에는 allow 줄이 없다 (기존 스냅샷 meta 모양 그대로)
+grep -q '^allow_subscriptions' "$T/bl/ipo-baseline.meta" && bad "기본 save meta" "allow 줄이 생김" || ok "save: 옵션 없이 저장한 meta는 예전 모양 그대로 (allow 줄 없음)"
+
+# restore, check: 옵션 없이 meta의 청약 수와 비교한다
+held_line() { echo "$HELD_OK"; }; state_line() { echo "$STATE_SUB"; }
+ALLOW_SUBSCRIPTIONS=1; ( cmd_save ) > /dev/null 2>&1; unset ALLOW_SUBSCRIPTIONS
+compose() { return 0; }; psql_q() { return 0; }; wait_kafka() { return 0; }; kafka_volume() { echo "vol-x"; }
+docker() { [ "$1" = exec ] && cat > /dev/null; return 0; }
+[ "$(rc_of cmd_restore)" = 0 ] && ok "restore: 확정 청약 스냅샷도 같은 절차로 복원, 청약 수가 같으면 통과" || bad "restore G2" "$(rc_of cmd_restore)"
+state_line() { echo "${STATE_SUB/subscriptions=2000/subscriptions=1999}"; }
+[ "$(rc_of cmd_restore)" = 5 ] && ok "restore: 복원 뒤 청약 수가 meta와 다르면 종료 코드 5" || bad "restore G2 청약 수" "$(rc_of cmd_restore)"
+[ "$(rc_of cmd_check)" = 5 ] && ok "check: 청약 수가 meta와 다르면 종료 코드 5" || bad "check G2" "$(rc_of cmd_check)"
+
 echo; echo "통과 $PASS, 실패 $FAIL"
 [ "$FAIL" -eq 0 ]

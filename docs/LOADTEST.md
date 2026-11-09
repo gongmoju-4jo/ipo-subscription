@@ -34,9 +34,10 @@
 | `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--count N`은 N개를 SQL 한 번으로) |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
+| `loadtest/s2.sh` | S2 마감 경계 한 회차 실행 (워밍업, 공모주 준비, 대상 공모주 마감 시각 설정, 실행, 판정). 6장 |
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js` |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
-| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 19종 실행 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족 검사. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
+| `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 22종 실행 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족 검사, 20~22는 마감된 공모주 검사로 마감 전이면 20, 22번 건너뜀. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
 | `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
 | `loadtest/stage_table.py` | S1 단계별 표 생성 (목표 속도, 실제 처리량, 지연, 실패율) |
 | `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
@@ -240,7 +241,7 @@ S3, S4 (Synthetic Data) 판정 기준. 회차마다 유효성, 정합성, 성능
 
 ```bash
 RUN=S0-r1-1102                               # run_id: 시나리오-회차-날짜
-IPO=$(loadtest/seed/new_ipo.sh)              # 새 공모주 ID (S2는 --closed)
+IPO=$(loadtest/seed/new_ipo.sh)              # 새 공모주 ID (S2는 loadtest/s2.sh로 실행, 6장)
 
 loadtest/precheck.sh --run-id $RUN           # 1. 사전 점검 (실패하면 해결한 뒤 진행)
 docker exec -i ipo-postgres psql -U postgres -d ipo -v reset=1 -f - < loadtest/sql/slow-queries.sql   # 2. 슬로우 쿼리 통계 초기화
@@ -270,12 +271,33 @@ python loadtest/report.py --run-id $RUN                                         
 | --- | --- | --- | --- | --- |
 | S0 | 회원 1,000명이 각 1건 (100명 × 10회, 1초에 걸쳐 시작) | 새 공모주 | `users.csv` | 전부 202 |
 | S1 | 도착률 고정 단계 부하 (`STAGES` 기본 100,200,300,433,600,800건/초, 단계마다 전환 `RAMP` 10초 + 유지 `HOLD` 90초, 앞에 `WARMUP` 60초). 정식 측정은 한 속도 고정(`RATE`, `DURATION`)을 단계마다 따로 실행 | 새 공모주 (`IPO_IDS`면 여러 개) | `users.csv` | 전부 202 |
-| S2 | S0과 같은 구성으로 마감된 공모주에 요청 | `new_ipo.sh --closed` | `users.csv` | 전부 422 `SUBSCRIPTION_CLOSED` |
+| S2 | 마감 경계: 대상 공모주에 회원 1,000명이 1건씩, 마감 시각 앞뒤에 걸쳐 요청하고 배경 공모주로 전체 274건/초 유지 (아래 S2 절) | 대상 1개(측정 중 마감) + 배경 여러 개(`IPO_IDS`) | `users.csv` | 대상: 마감 전 도착 202, 마감 후 422 `SUBSCRIPTION_CLOSED`, 마감 처리 뒤 409 `INVALID_STATUS_TRANSITION`. 배경: 전부 202 |
 | S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약 거절은 Consumer |
 | S4 | Synthetic Data `s4-behavior.csv`: 투자자 1,000명 x 1건, 97명 예수금 부족 (S0과 같은 100명 x 10회) | 새 공모주 | `users-s4.csv` (S4 행동 CSV의 입금액으로 시드) | 전부 202 (잔액 부족 판정은 Consumer) |
 
-- **S1과 S2의 조건(요청 속도, 유지 시간, 요청 구성)은 임시 값입니다.** 첫 측정 전에 확정하고, 측정을 시작한 뒤에는 바꾸지 않습니다.
-- S0~S2는 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`). S3, S4는 요청 수가 행동 CSV 행 수(1,000)와 같아야 해서 줄이면 시작 전에 멈춥니다.
+- **S1의 조건(요청 속도, 유지 시간, 요청 구성)은 임시 값입니다.** 첫 측정 전에 확정하고, 측정을 시작한 뒤에는 바꾸지 않습니다.
+- S0은 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`). S2는 `RATE`, `PRE`, `POST`로 조정합니다 (아래 S2 절). S3, S4는 요청 수가 행동 CSV 행 수(1,000)와 같아야 해서 줄이면 시작 전에 멈춥니다.
+
+### S2 마감 경계 (`s2.sh`)
+
+마감 직전 몰림 속에서 마감 시각 전에 도착한 요청은 모두 접수되고, 이후 요청은 모두 거절되며, 마감 처리 뒤에 생기는 청약(마감 때 집계에서 빠지는 청약)이 없는지 봅니다 (SA 기획서 S2, D-16, D-29). 한 회차는 `loadtest/s2.sh`가 처음부터 판정까지 실행합니다.
+
+```bash
+bash loadtest/s2.sh --run-id S2-n-r1                                   # ① 평소 부하
+POST=0 bash loadtest/s2.sh --run-id S2-g1-r1 --grace PT1S              # ② 장애 상황 (마감 유예 1초)
+```
+
+- 요청 배치: 회원은 공모주 하나에 한 번씩만 청약할 수 있어서, 마감을 볼 **대상 공모주**(회원 1,000명이 1건씩)와 부하만 만드는 **배경 공모주**(마감 시각이 12시간 뒤)를 나눕니다. 시간 순서는 배경 `PRE`초 → 대상 구간(274건/초면 약 3.6초, 가운데가 마감 시각) → 배경 `POST`초이고, 전체 속도는 처음부터 끝까지 `RATE`입니다. 배경 공모주 수는 요청 수로 계산합니다.
+- 기본값: `RATE` 274(SA 기획서 규모 산정 ⑤, 마감 직전 10분 피크), `PRE` 60초(SA "마감 몇 분 전 몰림"을 로컬에 맞춰 줄임), `POST` 40초(마감 유예 20초 + 마감 확인 주기 5초 + 여유). `TARGET_SEC`를 주면 대상 구간을 그 길이로 늘려 배경과 섞습니다.
+- 시작 시각과 대상 공모주의 마감 시각은 컨테이너 시계(PostgreSQL)로 정하고, k6는 `setup()`에서 시작 시각까지 기다립니다. 판정은 DB의 `received_at`(게이트웨이 도착 시각)과 마감 시각으로 합니다.
+- 회차마다 토큰을 다시 받고, 정식 측정과 같은 워밍업(`warmup.py`, 응답 시간 추세가 평평해질 때까지)을 합니다 (`WARM=0`이면 생략).
+- `--grace`: 청약 서비스의 마감 유예(`ipo.close.grace-period`, 기본 `PT20S`)만 바꿔 다시 띄우고, 끝나면(오류로 멈춰도) 덮어쓰기 없이 다시 띄워 되돌립니다. 덮어쓰기 파일은 `loadtest/data/`(커밋하지 않음)에 둡니다.
+- ②에서 `POST=0`인 이유: 접수 토픽 랙을 마감 조건으로 보는 구조에서는 다른 공모주 요청이 이어지면 랙이 0이 되지 않아 마감이 미뤄지고(① 평소 부하에서 마감 시각 약 46초 뒤), 그 사이 늦은 발행이 끝나 누락이 가려집니다. 마감 뒤 요청이 없어 랙이 바로 0이 되는 조건에서 "발행 지연 > 유예"를 봅니다.
+- 판정 (`results/<run_id>/s2-judge.txt`)
+  - 회차 무효 (종료 코드 3, 다시 실행): 밀린 요청(`dropped_iterations`)이 있음(요청 순번으로 대상 구간을 정해서 밀리면 구간이 늦어짐), 401(토큰 만료), 대상 요청에 202와 422가 모두 있지 않음(마감 시각이 대상 구간 밖)
+  - 측정값 (기대 0): `verify.sql` 20번(마감 처리 뒤 생긴 청약), 21번(마감 시각 이후 도착인데 접수된 청약), 22번(마감 때 확정 수와 지금 유효 청약 수 차이), 202를 받았는데 청약 행이 없는 요청(k6 로그 대조)
+- 결과 파일: `results/<run_id>/`에 `s2-judge.txt`, `sql_result.txt`, `env.txt`(커밋, 유예, 설정값, 대상 공모주, 시작과 마감 시각), `warmup.csv`, `진행.log`와 k6 원본. 워밍업 k6 원본은 `results/<run_id>-W/`
+- 한계: 대상 공모주에 요청이 몰리는 시간은 약 3.6초입니다 (회원 1,000명). 한 공모주 행에 잠금이 몰리는 부담은 실제보다 작고, 로컬 PC 안의 전후 비교로만 씁니다.
 
 ### S3, S4 Synthetic Data
 

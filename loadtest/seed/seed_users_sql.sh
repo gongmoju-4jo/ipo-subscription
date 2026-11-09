@@ -34,8 +34,9 @@ parse_args() {
       *) die 1 "알 수 없는 옵션: $1" ;;
     esac
   done
-  case "$USERS" in ''|*[!0-9]*) die 1 "--users는 숫자: $USERS" ;; esac
-  case "$START" in ''|*[!0-9]*) die 1 "--start는 숫자: $START" ;; esac
+  # 앞자리 0은 거부한다 (bash 산술이 8진수로 읽어 010은 8, 08은 오류. g2_ipo.sh와 같은 규칙). --start 0은 허용
+  case "$USERS" in ''|*[!0-9]*|0?*) die 1 "--users는 숫자 (앞자리 0 없이): $USERS" ;; esac
+  case "$START" in ''|*[!0-9]*|0?*) die 1 "--start는 숫자 (앞자리 0 없이): $START" ;; esac
   [ "$START" -lt "$USERS" ] || die 1 "--start($START)는 --users($USERS)보다 작아야 한다"
   case "$PREFIX" in ''|*[!a-z0-9]*) die 1 "--prefix는 영문 소문자, 숫자: $PREFIX" ;; esac
   # loginId 규칙 4~20자 (가장 긴 번호 기준)

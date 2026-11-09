@@ -18,11 +18,12 @@ T="$(mktemp -d)"
   && ok "login_id: 4자리 0 채움, 1만 이상은 그대로" || bad "login_id" "$(login_id lt 0) $(login_id lt 12345)"
 
 # ---- parse_args: 잘못된 입력은 종료 코드 1 ----
-for a in "--users x" "--users 10 --start 10" "--start -1" "--prefix LT" "--prefix" "--deposits 0" "--deposits 1,,2" "--deposits ,1" "--deposits 1," "--deposits 1.5" "--bogus 1" "--prefix aaaaaaaaaaaaaaaaa --users 10" "--bcrypt-cost 3" "--bcrypt-cost 13" "--bcrypt-cost x" "--bcrypt-cost 04"; do
+for a in "--users x" "--users 10 --start 10" "--start -1" "--prefix LT" "--prefix" "--deposits 0" "--deposits 1,,2" "--deposits ,1" "--deposits 1," "--deposits 1.5" "--bogus 1" "--prefix aaaaaaaaaaaaaaaaa --users 10" "--bcrypt-cost 3" "--bcrypt-cost 13" "--bcrypt-cost x" "--bcrypt-cost 04" "--users 010" "--users 08" "--start 08 --users 100" "--start 00 --users 100"; do
   # shellcheck disable=SC2086
   [ "$(rc_of parse_args $a)" = 1 ] && ok "parse_args: '$a' → 1" || bad "parse_args $a" "$(rc_of parse_args $a)"
 done
 ( parse_args --users 10000 --start 1000 --prefix lt --deposits 30000000,70000000 --out "$T/u.csv" ) && ok "parse_args: 정상 입력 통과" || bad "parse_args 정상" "rc=$?"
+( parse_args --users 10 --start 0 --out "$T/u.csv" ) && ok "parse_args: --start 0은 앞자리 0 거부에 걸리지 않음" || bad "parse_args start 0" "rc=$?"
 
 # ---- build_sql: 들어가야 할 것 ----
 sql="$(build_sql)"

@@ -1,4 +1,4 @@
-package com.gongmoju.account.infrastructure.messaging;
+package com.gongmoju.common.outbox;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -104,7 +104,7 @@ class OutboxPublisherTest {
     @DisplayName("정상 발행하면 토픽, 키, 메시지로 보내고 publishedAt을 기록한다")
     void publishPending_marksPublishedAfterSuccessfulSend() throws Exception {
         // given
-        Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{\"accountId\":\"a-1\"}");
+        Outbox outbox = pendingOutbox("margin.reserve-requested", "key-1", "{\"accountId\":\"a-1\"}");
         givenPending(List.of(outbox));
         givenSendSucceeds();
 
@@ -113,7 +113,7 @@ class OutboxPublisherTest {
 
         // then
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
-        verify(kafkaTemplate).send(eq("margin.reserved"), eq("key-1"), message.capture());
+        verify(kafkaTemplate).send(eq("margin.reserve-requested"), eq("key-1"), message.capture());
         JsonNode body = objectMapper.readTree(message.getValue());
         assertThat(body.get("eventId").asText()).isEqualTo(outbox.getId().toString());
         assertThat(body.get("accountId").asText()).isEqualTo("a-1");
@@ -125,9 +125,9 @@ class OutboxPublisherTest {
     @DisplayName("키가 다른 행들은 응답을 기다리지 않고 모두 보낸 뒤, 한 번의 UPDATE로 발행 완료를 표시한다")
     void publishPending_sendsAllKeysBeforeMarkingPublishedInOneUpdate() {
         // given
-        Outbox first = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox second = pendingOutbox("margin.reserved", "key-2", "{}");
-        Outbox third = pendingOutbox("margin.reserved", "key-3", "{}");
+        Outbox first = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox second = pendingOutbox("margin.reserve-requested", "key-2", "{}");
+        Outbox third = pendingOutbox("margin.reserve-requested", "key-3", "{}");
         givenPending(List.of(first, second, third));
         givenSendSucceeds();
 
@@ -146,9 +146,9 @@ class OutboxPublisherTest {
     @DisplayName("한 번의 반복에서는 같은 키의 가장 오래된 행 하나만 보내고, 다음 행은 바로 다음 반복에서 보낸다")
     void publishPending_sendsOnlyOldestRowPerKeyInEachBatch() {
         // given
-        Outbox firstOfKey1 = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox secondOfKey1 = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox onlyOfKey2 = pendingOutbox("margin.reserved", "key-2", "{}");
+        Outbox firstOfKey1 = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox secondOfKey1 = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox onlyOfKey2 = pendingOutbox("margin.reserve-requested", "key-2", "{}");
         givenPending(List.of(firstOfKey1, secondOfKey1, onlyOfKey2));
         givenSendSucceeds();
 
@@ -166,8 +166,8 @@ class OutboxPublisherTest {
     @DisplayName("같은 키의 행은 만든 순서대로 이어서 발행한다")
     void publishPending_publishesRowsOfSameKeyInOrderWhenSuccessful() {
         // given
-        Outbox first = pendingOutbox("margin.reserved", "key-1", "{\"seq\":1}");
-        Outbox second = pendingOutbox("margin.reserved", "key-1", "{\"seq\":2}");
+        Outbox first = pendingOutbox("margin.reserve-requested", "key-1", "{\"seq\":1}");
+        Outbox second = pendingOutbox("margin.reserve-requested", "key-1", "{\"seq\":2}");
         givenPending(List.of(first, second));
         givenSendSucceeds();
 
@@ -176,7 +176,7 @@ class OutboxPublisherTest {
 
         // then
         ArgumentCaptor<String> messages = ArgumentCaptor.forClass(String.class);
-        verify(kafkaTemplate, times(2)).send(eq("margin.reserved"), eq("key-1"), messages.capture());
+        verify(kafkaTemplate, times(2)).send(eq("margin.reserve-requested"), eq("key-1"), messages.capture());
         assertThat(messages.getAllValues().get(0)).contains("\"seq\":1");
         assertThat(messages.getAllValues().get(1)).contains("\"seq\":2");
         assertThat(first.getPublishedAt()).isNotNull();
@@ -187,8 +187,8 @@ class OutboxPublisherTest {
     @DisplayName("성공이 있으면 쉬지 않고 다음 반복을 하고, 더 보낼 행이 없으면 끝낸다")
     void publishPending_keepsGoingWhileRowsArePublished() {
         // given
-        Outbox first = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox second = pendingOutbox("margin.reserved", "key-1", "{}");
+        Outbox first = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox second = pendingOutbox("margin.reserve-requested", "key-1", "{}");
         givenPending(List.of(first, second));
         givenSendSucceeds();
 
@@ -203,8 +203,8 @@ class OutboxPublisherTest {
     @DisplayName("일부만 성공하면 성공한 행만 발행 완료로 표시하고, 실패한 행은 retryCount를 올린다")
     void publishPending_marksOnlyConfirmedRowsWhenSomeFail() {
         // given
-        Outbox failing = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox succeeding = pendingOutbox("margin.reserved", "key-2", "{}");
+        Outbox failing = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox succeeding = pendingOutbox("margin.reserve-requested", "key-2", "{}");
         givenPending(List.of(failing, succeeding));
         givenFound(failing, succeeding);
         when(kafkaTemplate.send(anyString(), eq("key-1"), anyString())).thenReturn(failedFuture());
@@ -224,7 +224,7 @@ class OutboxPublisherTest {
     @DisplayName("Kafka 발행이 실패하면 retryCount를 올리고 publishedAt은 비워 둔다")
     void publishPending_increasesRetryCountWhenSendFails() {
         // given
-        Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{}");
+        Outbox outbox = pendingOutbox("margin.reserve-requested", "key-1", "{}");
         givenPending(List.of(outbox));
         givenFound(outbox);
         givenSendFails();
@@ -241,7 +241,7 @@ class OutboxPublisherTest {
     @DisplayName("실패한 행만 있으면 그 키를 뺀 조회로 한 번 더 조회하고, 보낼 행이 없으면 실행을 끝낸다")
     void publishPending_queriesAgainWithoutFailedKeysAndEndsWhenNothingLeft() {
         // given
-        Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{}");
+        Outbox outbox = pendingOutbox("margin.reserve-requested", "key-1", "{}");
         givenPending(List.of(outbox));
         givenFound(outbox);
         givenSendFails();
@@ -262,9 +262,9 @@ class OutboxPublisherTest {
         // given
         List<Outbox> all = new ArrayList<>();
         for (int i = 0; i < BATCH_SIZE; i++) {
-            all.add(pendingOutbox("margin.reserved", "bad-" + i, "{}"));
+            all.add(pendingOutbox("margin.reserve-requested", "bad-" + i, "{}"));
         }
-        Outbox healthy = pendingOutbox("margin.reserved", "good-1", "{}");
+        Outbox healthy = pendingOutbox("margin.reserve-requested", "good-1", "{}");
         all.add(healthy);
         givenPending(all);
         when(kafkaTemplate.send(anyString(), startsWith("bad-"), anyString())).thenReturn(failedFuture());
@@ -285,9 +285,9 @@ class OutboxPublisherTest {
         publisher = newPublisher(Duration.ofMillis(50));
         List<Outbox> all = new ArrayList<>();
         for (int i = 0; i < BATCH_SIZE; i++) {
-            all.add(pendingOutbox("margin.reserved", "key-" + i, "{}"));
+            all.add(pendingOutbox("margin.reserve-requested", "key-" + i, "{}"));
         }
-        Outbox beyondPage = pendingOutbox("margin.reserved", "key-beyond", "{}");
+        Outbox beyondPage = pendingOutbox("margin.reserve-requested", "key-beyond", "{}");
         all.add(beyondPage);
         givenPending(all);
         when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenReturn(new CompletableFuture<>());
@@ -307,11 +307,11 @@ class OutboxPublisherTest {
     void publishPending_continuesWithOtherRowsWhenSendThrowsOnce() {
         // given
         Outbox badTopic = pendingOutbox("no-such-topic", "key-1", "{}");
-        Outbox healthy = pendingOutbox("margin.reserved", "key-2", "{}");
+        Outbox healthy = pendingOutbox("margin.reserve-requested", "key-2", "{}");
         givenPending(List.of(badTopic, healthy));
         givenFound(badTopic, healthy);
         when(kafkaTemplate.send(eq("no-such-topic"), anyString(), anyString())).thenThrow(new IllegalStateException("topic not present"));
-        when(kafkaTemplate.send(eq("margin.reserved"), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
+        when(kafkaTemplate.send(eq("margin.reserve-requested"), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
 
         // when
         publisher.publishPending();
@@ -329,9 +329,9 @@ class OutboxPublisherTest {
         int failures = OutboxPublisher.MAX_CONSECUTIVE_SEND_FAILURES;
         List<Outbox> throwing = new ArrayList<>();
         for (int i = 0; i < failures; i++) {
-            throwing.add(pendingOutbox("margin.reserved", "key-" + i, "{}"));
+            throwing.add(pendingOutbox("margin.reserve-requested", "key-" + i, "{}"));
         }
-        Outbox remaining = pendingOutbox("margin.reserved", "key-remaining", "{}");
+        Outbox remaining = pendingOutbox("margin.reserve-requested", "key-remaining", "{}");
         List<Outbox> all = new ArrayList<>(throwing);
         all.add(remaining);
         givenPending(all);
@@ -358,17 +358,17 @@ class OutboxPublisherTest {
         for (int i = 0; i < failuresBelowLimit; i++) {
             all.add(pendingOutbox("bad-topic", "bad-a-" + i, "{}"));
         }
-        Outbox healthy = pendingOutbox("margin.reserved", "key-healthy", "{}");
+        Outbox healthy = pendingOutbox("margin.reserve-requested", "key-healthy", "{}");
         all.add(healthy);
         for (int i = 0; i < failuresBelowLimit; i++) {
             all.add(pendingOutbox("bad-topic", "bad-b-" + i, "{}"));
         }
-        Outbox last = pendingOutbox("margin.reserved", "key-last", "{}");
+        Outbox last = pendingOutbox("margin.reserve-requested", "key-last", "{}");
         all.add(last);
         givenPending(all);
         givenFound(all.toArray(new Outbox[0]));
         when(kafkaTemplate.send(eq("bad-topic"), anyString(), anyString())).thenThrow(new IllegalStateException("topic not present"));
-        when(kafkaTemplate.send(eq("margin.reserved"), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
+        when(kafkaTemplate.send(eq("margin.reserve-requested"), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
 
         // when
         publisher.publishPending();
@@ -382,8 +382,8 @@ class OutboxPublisherTest {
     @DisplayName("이미 보낸 행이 있으면 send가 예외를 던져도 앞서 성공한 행은 발행 완료로 표시한다")
     void publishPending_marksRowsSentBeforeSendThrew() {
         // given
-        Outbox sent = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox failing = pendingOutbox("margin.reserved", "key-2", "{}");
+        Outbox sent = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox failing = pendingOutbox("margin.reserve-requested", "key-2", "{}");
         givenPending(List.of(sent, failing));
         givenFound(failing);
         when(kafkaTemplate.send(anyString(), eq("key-1"), anyString())).thenReturn(CompletableFuture.completedFuture(null));
@@ -403,7 +403,7 @@ class OutboxPublisherTest {
     void publishPending_treatsSendTimeoutAsFailure() {
         // given
         publisher = newPublisher(Duration.ofMillis(50));
-        Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{}");
+        Outbox outbox = pendingOutbox("margin.reserve-requested", "key-1", "{}");
         givenPending(List.of(outbox));
         givenFound(outbox);
         when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenReturn(new CompletableFuture<>());
@@ -421,7 +421,7 @@ class OutboxPublisherTest {
     @SuppressWarnings("unchecked")
     void publishPending_restoresInterruptFlagWithoutCountingFailure() throws Exception {
         // given
-        Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{}");
+        Outbox outbox = pendingOutbox("margin.reserve-requested", "key-1", "{}");
         givenPending(List.of(outbox));
         givenFound(outbox);
         CompletableFuture<SendResult<String, String>> future = mock(CompletableFuture.class);
@@ -446,8 +446,8 @@ class OutboxPublisherTest {
     @SuppressWarnings("unchecked")
     void publishPending_doesNotCountUnconfirmedRowsWhenInterrupted() throws Exception {
         // given
-        Outbox interrupted = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox unconfirmed = pendingOutbox("margin.reserved", "key-2", "{}");
+        Outbox interrupted = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox unconfirmed = pendingOutbox("margin.reserve-requested", "key-2", "{}");
         givenPending(List.of(interrupted, unconfirmed));
         givenFound(interrupted, unconfirmed);
         CompletableFuture<SendResult<String, String>> future = mock(CompletableFuture.class);
@@ -473,7 +473,7 @@ class OutboxPublisherTest {
     @DisplayName("이미 인터럽트된 상태면 조회도 전송도 하지 않는다")
     void publishPending_doesNothingWhenAlreadyInterrupted() {
         // given
-        givenPending(List.of(pendingOutbox("margin.reserved", "key-1", "{}")));
+        givenPending(List.of(pendingOutbox("margin.reserve-requested", "key-1", "{}")));
         Thread.currentThread().interrupt();
 
         try {
@@ -492,8 +492,8 @@ class OutboxPublisherTest {
     @DisplayName("payload를 읽을 수 없는 행은 Kafka로 보내지 않고 retryCount를 올리며, 다른 키는 계속 보낸다")
     void publishPending_recordsFailureWhenMessageCannotBeCreated() {
         // given
-        Outbox broken = pendingOutbox("margin.reserved", "key-1", "{not-json");
-        Outbox healthy = pendingOutbox("margin.reserved", "key-2", "{}");
+        Outbox broken = pendingOutbox("margin.reserve-requested", "key-1", "{not-json");
+        Outbox healthy = pendingOutbox("margin.reserve-requested", "key-2", "{}");
         givenPending(List.of(broken, healthy));
         givenFound(broken, healthy);
         givenSendSucceeds();
@@ -513,9 +513,9 @@ class OutboxPublisherTest {
     @DisplayName("같은 키의 행이 실패하면 같은 실행에서는 같은 키의 뒤 행을 보내지 않고, 다른 키는 보낸다")
     void publishPending_blocksLaterRowsOfSameKeyAfterFailure() {
         // given
-        Outbox first = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox sameKey = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox otherKey = pendingOutbox("margin.reserved", "key-2", "{}");
+        Outbox first = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox sameKey = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox otherKey = pendingOutbox("margin.reserve-requested", "key-2", "{}");
         givenPending(List.of(first, sameKey, otherKey));
         givenFound(first, sameKey, otherKey);
         when(kafkaTemplate.send(anyString(), eq("key-1"), anyString())).thenReturn(failedFuture());
@@ -537,9 +537,9 @@ class OutboxPublisherTest {
     @DisplayName("실패한 키는 같은 실행의 이후 반복에서도 다시 보내지 않아 retryCount가 연달아 오르지 않는다")
     void publishPending_doesNotRetryFailedKeyInLaterBatchesOfSameRun() {
         // given
-        Outbox failing = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox first = pendingOutbox("margin.reserved", "key-2", "{}");
-        Outbox second = pendingOutbox("margin.reserved", "key-2", "{}");
+        Outbox failing = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox first = pendingOutbox("margin.reserve-requested", "key-2", "{}");
+        Outbox second = pendingOutbox("margin.reserve-requested", "key-2", "{}");
         givenPending(List.of(failing, first, second));
         givenFound(failing, first, second);
         when(kafkaTemplate.send(anyString(), eq("key-1"), anyString())).thenReturn(failedFuture());
@@ -558,8 +558,8 @@ class OutboxPublisherTest {
     @DisplayName("발행 후 완료 표시에 실패해도 예외를 밖으로 던지지 않고, 같은 키의 뒤 행은 보내지 않는다")
     void publishPending_swallowsMarkPublishedFailureAndBlocksKey() {
         // given
-        Outbox first = pendingOutbox("margin.reserved", "key-1", "{}");
-        Outbox sameKey = pendingOutbox("margin.reserved", "key-1", "{}");
+        Outbox first = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        Outbox sameKey = pendingOutbox("margin.reserve-requested", "key-1", "{}");
         givenPending(List.of(first, sameKey));
         when(outboxRepository.markPublished(any(), anyCollection())).thenThrow(new IllegalStateException("db down"));
         givenSendSucceeds();
@@ -576,7 +576,7 @@ class OutboxPublisherTest {
     @DisplayName("완료 표시에 실패한 행은 다음 실행에서 같은 eventId, occurredAt으로 다시 발행된다")
     void publishPending_republishesWithSameEventIdAndOccurredAt() throws Exception {
         // given
-        Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{\"accountId\":\"a-1\"}");
+        Outbox outbox = pendingOutbox("margin.reserve-requested", "key-1", "{\"accountId\":\"a-1\"}");
         List<Outbox> rows = List.of(outbox);
         givenPending(rows);
         when(outboxRepository.markPublished(any(), anyCollection()))
@@ -590,7 +590,7 @@ class OutboxPublisherTest {
 
         // then
         ArgumentCaptor<String> messages = ArgumentCaptor.forClass(String.class);
-        verify(kafkaTemplate, times(2)).send(eq("margin.reserved"), eq("key-1"), messages.capture());
+        verify(kafkaTemplate, times(2)).send(eq("margin.reserve-requested"), eq("key-1"), messages.capture());
         JsonNode firstSend = objectMapper.readTree(messages.getAllValues().get(0));
         JsonNode secondSend = objectMapper.readTree(messages.getAllValues().get(1));
         assertThat(secondSend.get("eventId")).isEqualTo(firstSend.get("eventId"));
@@ -602,7 +602,7 @@ class OutboxPublisherTest {
     @DisplayName("실패 횟수가 알림 기준 미만이면 WARN 로그만 남긴다")
     void publishPending_logsWarnBelowAlertThreshold(CapturedOutput output) {
         // given
-        Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{}");
+        Outbox outbox = pendingOutbox("margin.reserve-requested", "key-1", "{}");
         givenPending(List.of(outbox));
         givenFound(outbox);
         givenSendFails();
@@ -619,7 +619,7 @@ class OutboxPublisherTest {
     @DisplayName("실패 횟수가 알림 기준 이상이면 연속 실패 ERROR 로그를 남기고 발행은 계속 시도한다")
     void publishPending_logsAlertAtThreshold(CapturedOutput output) {
         // given
-        Outbox outbox = pendingOutbox("margin.reserved", "key-1", "{}");
+        Outbox outbox = pendingOutbox("margin.reserve-requested", "key-1", "{}");
         for (int i = 0; i < ALERT_THRESHOLD - 1; i++) {
             outbox.increaseRetryCount();
         }
@@ -698,7 +698,7 @@ class OutboxPublisherTest {
     }
 
     private Outbox pendingOutbox(String topic, String messageKey, String payload) {
-        Outbox outbox = Outbox.of("MARGIN", UUID.randomUUID(), topic, messageKey, payload);
+        Outbox outbox = Outbox.of("SUBSCRIPTION", UUID.randomUUID(), topic, messageKey, payload);
         ReflectionTestUtils.setField(outbox, "id", UUID.randomUUID());
         ReflectionTestUtils.setField(outbox, "createdAt", Instant.parse("2026-10-27T06:59:58.123Z"));
         return outbox;

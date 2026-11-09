@@ -4,7 +4,7 @@ import com.gongmoju.allocation.domain.allocation.AllocationEventPublisher;
 import com.gongmoju.allocation.domain.allocation.ConfirmedSubscription;
 import com.gongmoju.allocation.domain.allocation.ConfirmedSubscriptionReader;
 import com.gongmoju.allocation.domain.allocation.IpoClosed;
-import com.gongmoju.allocation.domain.event.ProcessedEventRepository;
+import com.gongmoju.common.event.ProcessedEventRepository;
 import com.gongmoju.common.feign.FeignServerException;
 import feign.Request;
 import feign.RetryableException;

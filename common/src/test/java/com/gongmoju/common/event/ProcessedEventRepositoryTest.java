@@ -1,6 +1,6 @@
-package com.gongmoju.subscription.infrastructure.messaging;
+package com.gongmoju.common.event;
 
-import com.gongmoju.subscription.domain.event.ProcessedEventRepository;
+import com.gongmoju.common.testapp.CommonTestApplication;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,18 +28,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code ON CONFLICT (event_id, consumer_name)} 동작과 트랜잭션 롤백을 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
  */
 @Testcontainers
-@SpringBootTest(properties = "eureka.client.enabled=false")
-@DisplayName("처리한 이벤트 저장소 (PostgreSQL)")
+@SpringBootTest(classes = CommonTestApplication.class)
+@DisplayName("처리한 이벤트 저장소 (PostgreSQL, common 자동 설정으로 등록)")
 class ProcessedEventRepositoryTest {
 
-    private static final String CONSUMER = "subscription-margin-reserved";
-    private static final String OTHER_CONSUMER = "subscription-margin-reserve-failed";
+    private static final String CONSUMER = "test-margin-reserved";
+    private static final String OTHER_CONSUMER = "test-margin-reserve-failed";
     private static final String TOPIC = "margin.reserved";
 
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16")
-            .withUrlParam("currentSchema", "subscription");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16");
 
     @Autowired
     private ProcessedEventRepository processedEventRepository;

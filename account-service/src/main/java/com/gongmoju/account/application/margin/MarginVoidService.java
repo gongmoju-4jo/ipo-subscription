@@ -2,7 +2,7 @@ package com.gongmoju.account.application.margin;
 
 import com.gongmoju.account.domain.account.Account;
 import com.gongmoju.account.domain.account.AccountRepository;
-import com.gongmoju.account.domain.event.ProcessedEventRecorder;
+import com.gongmoju.common.event.ProcessedEventRepository;
 import com.gongmoju.account.domain.ledger.LedgerEntry;
 import com.gongmoju.account.domain.ledger.LedgerEntryRepository;
 import com.gongmoju.account.domain.ledger.LedgerEntryType;
@@ -38,13 +38,13 @@ public class MarginVoidService {
     private final MarginVoidIntentRepository marginVoidIntentRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final MarginEventPublisher marginEventPublisher;
-    private final ProcessedEventRecorder processedEventRecorder;
+    private final ProcessedEventRepository processedEventRepository;
 
     @Transactional
     public void voidMargin(VoidMarginCommand command) {
 
         // 1. processed_event: 같은 eventId 재수신이면 끝낸다 (인출과 같은 방식)
-        if (!processedEventRecorder.insertIfAbsent(command.eventId(), CONSUMER_NAME, TOPIC)) {
+        if (!processedEventRepository.insertIfAbsent(command.eventId(), CONSUMER_NAME, TOPIC)) {
             log.info("[증거금 반환] 중복 수신, 건너뜀. eventId={}, subscriptionId={}",
                     command.eventId(), command.subscriptionId());
             return;

@@ -1,4 +1,4 @@
-package com.gongmoju.account.infrastructure.messaging;
+package com.gongmoju.common.event;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -9,22 +9,20 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 이벤트 처리 기록을 저장하는 JPA Repository.
- * (event_id, consumer_name) UNIQUE 제약조건으로 중복 기록을 방지한다.
+ * 처리한 이벤트({@link ProcessedEvent}) 저장소.
+ * {@link ProcessedEventRepositoryAdapter}만 쓴다 (서비스는 포트 {@link ProcessedEventRepository}로 접근한다).
  */
 interface ProcessedEventJpaRepository extends JpaRepository<ProcessedEvent, UUID> {
 
     /**
-     * 이벤트 처리 기록을 중복 없이 저장한다.
-     * ON CONFLICT DO NOTHING으로 중복 시 예외 없이 삽입을 생략한다.
-     * 네이티브 쿼리는 JPA Auditing을 거치지 않아 처리 시각을 직접 전달한다.
+     * 같은 {@code (event_id, consumer_name)}이 없을 때만 저장한다. 트랜잭션 안에서 호출해야 한다.
+     * <ul>
+     *   <li>{@code ON CONFLICT (event_id, consumer_name) DO NOTHING}이라 중복이어도 예외 없이 0행을 반환한다.
+     *       PostgreSQL은 UNIQUE 위반이 나면 같은 트랜잭션을 더 쓸 수 없어서, 예외 대신 0행으로 알려 주는 방식을 쓴다.</li>
+     *   <li>네이티브 쿼리는 JPA Auditing을 거치지 않으므로 {@code processed_at}을 직접 채운다.</li>
+     * </ul>
      *
-     * @param id           이벤트 처리 기록의 PK
-     * @param eventId      중복 여부를 판단할 이벤트 ID
-     * @param consumerName 이벤트를 처리하는 Consumer 식별자
-     * @param topic        원본 kafka 토픽명
-     * @param processedAt  이벤트 처리 기록 시각
-     * @return 삽입된 행 수 (신규 1, 중복 0)
+     * @return 새로 저장했으면 1, 이미 있어서 건너뛰었으면 0
      */
     @Modifying
     @Query(value = """

@@ -18,7 +18,7 @@ import java.time.Instant;
  * *_at은 {@link Instant}로 저장한다 (DB {@code TIMESTAMPTZ}). 서버, DB 시간대 설정과 관계없이 같은 시각을 가리키고, 응답에서 KST로 바꿔 내보낸다.
  * *_by는 요청자 회원 ID, 요청이 없으면(Consumer, 스케줄러) SYSTEM:{서비스 이름} ({@link com.gongmoju.common.audit.RequestAuditorAware}).
  * 소프트 삭제(deleted_*)는 두지 않는다. 취소, 거절은 상태로 남긴다.
- * ledger_entry는 수정이 없어 이 클래스를 상속하지 않는다.
+ * ledger_entry는 수정이 없고, outbox와 processed_event는 이벤트 인프라 기록이라 이 클래스를 상속하지 않는다.
  */
 @Getter
 @MappedSuperclass

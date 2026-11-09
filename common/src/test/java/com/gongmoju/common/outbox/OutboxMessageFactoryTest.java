@@ -1,4 +1,4 @@
-package com.gongmoju.subscription.infrastructure.messaging;
+package com.gongmoju.common.outbox;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

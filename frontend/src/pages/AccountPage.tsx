@@ -121,7 +121,7 @@ export function AccountPage() {
                 {done && <div className="notice success">{done}</div>}
                 {error !== null && <ErrorBox error={error} title="처리하지 못했어요" />}
                 <button className="btn btn-primary btn-block" onClick={deposit} disabled={busy || amount <= 0}>{busy ? '처리 중…' : pending ? `${formatWon(pending.amount)} 입금 결과 확인하기` : `${formatWon(amount)} 입금하기`}</button>
-                <div className="hint">입금 결과를 확인하지 못하면 같은 계좌·금액으로 재시도해요. 결과 확인 후 새 입금을 할 수 있어요</div>
+                <div className="hint">입금 결과를 확인하지 못하면 같은 계좌, 금액으로 재시도해요. 결과 확인 후 새 입금을 할 수 있어요</div>
                 <DesignNote title="잔고와 원장이 어긋나지 않는 이유">
                   <ul className="dots">
                     <li>잔고를 바꾸는 곳은 계좌 서비스의 정해진 메서드 하나뿐이에요.</li>

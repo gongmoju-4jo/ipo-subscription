@@ -1,5 +1,5 @@
-# 인프라(PostgreSQL, Kafka), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
-# 개발할 때: 인프라만 띄우고 서비스는 IntelliJ로 실행한다 (docker-compose up -d postgres kafka kafka-init kafka-ui)
+# 인프라(PostgreSQL, Kafka, Redis), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
+# 개발할 때: 인프라만 띄우고 서비스는 IntelliJ로 실행한다 (docker-compose up -d postgres kafka kafka-init kafka-ui redis)
 # 전체 확인할 때: jar를 먼저 빌드하고 전부 띄운다 (./gradlew build -x test && docker-compose up -d --build)
 # 같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다 (포트 충돌, Eureka 중복 등록)
 services:
@@ -95,6 +95,21 @@ services:
       kafka:
         condition: service_healthy
 
+  # 접속 대기열 상태 저장소 (api-gateway만 쓴다). 호스트(IntelliJ로 띄운 게이트웨이)는 localhost:6379(REDIS_PORT로 변경 가능), 컨테이너는 redis:6379로 접속한다
+  # 메모리가 차도 키를 지우지 않는다(noeviction). 지우면 줄 선 사람이 조용히 사라지고, 차면 쓰기가 오류로 드러난다
+  # 디스크에 저장하지 않는다(RDB, AOF 끔). 대기열은 화면용 임시 상태라 재시작하면 비고, 투자자는 다시 진입한다 (청약, 돈 데이터와 무관)
+  redis:
+    image: redis:7
+    container_name: ipo-redis
+    command: ["redis-server", "--maxmemory-policy", "noeviction", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ===== 서비스 컨테이너 =====
   # 실행 전에 jar를 빌드해야 한다: ./gradlew build -x test (Dockerfile이 {모듈}/build/libs/*.jar를 복사한다)
   # 서비스 컨테이너 중 호스트에 여는 포트는 api-gateway(8080)와 eureka-server 대시보드(8761)만이다. 둘 다 127.0.0.1에만 바인딩한다
@@ -129,10 +144,13 @@ services:
       EUREKA_URL: http://eureka-server:8761/eureka/
       # account-service와 같은 값이어야 한다. 비어 있거나 짧으면 기동할 때 실패한다
       JWT_SECRET: ${JWT_SECRET:-}
+      REDIS_HOST: redis
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
       eureka-server:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:18090/actuator/health"]

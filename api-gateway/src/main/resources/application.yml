@@ -9,6 +9,11 @@ management:
     web:
       exposure:
         include: health,prometheus
+  health:
+    redis:
+      # Redis 상태를 게이트웨이 헬스체크에 넣지 않는다. 넣으면 Redis가 잠깐 끊겨도 게이트웨이 컨테이너가 unhealthy가 된다
+      # Redis 자체는 redis 컨테이너 헬스체크가 보고, 장애 중 대기열 API와 청약 신청의 503은 5xx 비율 알림(HttpServerErrorRateHigh)에 잡힌다
+      enabled: false
   metrics:
     distribution:
       # Gateway와 서비스의 응답 시간 p95, p99를 Prometheus에서 따로 볼 수 있도록 구간(histogram)을 함께 내보낸다
@@ -21,6 +26,11 @@ spring:
   config:
     # 레포 루트의 .env를 읽는다 (docker-compose, account-service와 같은 파일). 실행 위치가 루트면 ./.env, 모듈이면 ../.env. 없으면 건너뛴다
     import: optional:file:./.env[.properties],optional:file:../.env[.properties]
+  data:
+    redis:
+      # 접속 대기열 저장소. IntelliJ는 localhost(.env의 REDIS_PORT, 기본 6379), Docker는 compose가 REDIS_HOST=redis를 넣는다
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
   cloud:
     gateway:
       server:

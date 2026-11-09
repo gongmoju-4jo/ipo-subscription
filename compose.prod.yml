@@ -12,6 +12,9 @@ services:
   kafka:
     restart: unless-stopped
 
+  redis:
+    restart: unless-stopped
+
   eureka-server:
     build: !reset null
     image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/eureka-server:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}

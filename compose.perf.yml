@@ -14,6 +14,10 @@
 # | postgres | 2.0 | 1g | - |
 # | kafka | 1.0 | 1g | 512m |
 # | prometheus, grafana | 0.5 | 512m | - |
+# | redis | 0.5 | 256m | - (`--maxmemory 200mb`) |
+#
+# redis는 컨테이너 상한보다 작은 --maxmemory를 둔다. 상한에 먼저 닿으면 컨테이너가 강제 종료되어 대기열이 통째로 사라지고,
+# --maxmemory에 먼저 닿으면 noeviction이라 쓰기만 오류가 나서 드러난다. 대기자 10만 명이어도 수십 MB로 추정한다 (측정 전)
 #
 # JVM은 CPU 상한을 보고 가용 프로세서 수(스레드 풀, GC 스레드)를 정한다. 상한을 바꾸면 그 영향도 같이 바뀐다.
 # PostgreSQL은 pg_stat_statements와 슬로우 쿼리 로그(100ms 이상)를 켠다 (loadtest/sql/slow-queries.sql).
@@ -78,3 +82,9 @@ services:
   grafana:
     cpus: 0.5
     mem_limit: 512m
+
+  redis:
+    cpus: 0.5
+    mem_limit: 256m
+    # docker-compose.yml의 command를 통째로 바꾸므로 noeviction, 영속화 끔도 다시 적는다
+    command: ["redis-server", "--maxmemory", "200mb", "--maxmemory-policy", "noeviction", "--save", "", "--appendonly", "no"]

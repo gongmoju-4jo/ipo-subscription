@@ -168,10 +168,12 @@ say "대상 $T 마감 시각 = 시작 + $((PRE * 1000 + WIN_MS / 2))ms. 부하 $
 say "k6 종료 코드 $krc (0 통과, 99 임계값 위반)"
 case "$krc" in 0|99) ;; *) die 1 "k6 실행 실패 (k6-console.out)" ;; esac
 
-# 대상 공모주 마감(OPEN이 아님)과 전체 소진을 기다린다
-start="$(date +%s)"
-until [ "$(pg "select status from subscription.ipo where ipo_id = '$T'")" != OPEN ]; do
-  [ $(( $(date +%s) - start )) -gt "$CLOSE_TIMEOUT" ] && die 1 "대상 공모주가 ${CLOSE_TIMEOUT}초 안에 마감되지 않음"
+# 대상 공모주 마감(CLOSED 또는 ALLOCATED)과 전체 소진을 기다린다. 조회가 실패해 빈 값이 나오면 마감으로 보지 않고 다시 확인한다
+start="$(date +%s)"; st=""
+while :; do
+  st="$(pg "select status from subscription.ipo where ipo_id = '$T'")" || st=""
+  case "$st" in CLOSED|ALLOCATED) break ;; esac
+  [ $(( $(date +%s) - start )) -gt "$CLOSE_TIMEOUT" ] && die 1 "대상 공모주가 ${CLOSE_TIMEOUT}초 안에 마감되지 않음 (마지막 조회: '${st:-조회 실패}')"
   sleep 2
 done
 d="$(drain "$T,$BG" "$DRAIN_TIMEOUT")" || die 1 "소진 대기 시간 초과"

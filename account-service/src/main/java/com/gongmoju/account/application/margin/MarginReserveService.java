@@ -3,9 +3,7 @@ package com.gongmoju.account.application.margin;
 import com.gongmoju.account.domain.account.Account;
 import com.gongmoju.account.domain.account.AccountRepository;
 import com.gongmoju.common.event.ProcessedEventRepository;
-import com.gongmoju.account.domain.ledger.LedgerEntry;
 import com.gongmoju.account.domain.ledger.LedgerEntryRepository;
-import com.gongmoju.account.domain.ledger.LedgerEntryType;
 import com.gongmoju.account.domain.margin.Margin;
 import com.gongmoju.account.domain.margin.MarginEventPublisher;
 import com.gongmoju.account.domain.margin.MarginRepository;
@@ -25,7 +23,7 @@ import java.util.Optional;
 /**
  * 증거금 인출 처리한다. (margin.reserve-requested)
  * <p>
- * 이벤트 처리 기록 → 계좌 락 → 소유권 → 기존 margin → void intent 기록 → 잔액 → 인출 → margin → 원장 → 응답 Outbox를 한 트랜잭션에서 처리한다
+ * 이벤트 처리 기록 → 계좌 락 → 소유권 → 기존 margin → void intent 기록 → 잔액 → margin → 인출 → 원장 → 응답 Outbox를 한 트랜잭션에서 처리한다
  */
 @Slf4j
 @Service
@@ -116,29 +114,24 @@ public class MarginReserveService {
             return;
         }
 
-        // 7. 인출
-        account.reserveMargin(command.amount());
-        log.debug("[증거금 인출] 잔고 이동. accountId={}, cashBalance={}, marginBalance={}",
-                account.getId(), account.getCashBalance(), account.getMarginBalance());
-
         // todo: save() 호출시 createdat이 정해진다고 단정 불가.
         //  - jpa 영속화 시점에 따라 save 직후 createdat이 null일 수도 있다.-> marginreserved.from(margin)에서 확인해야 한다.
 
-        // 8. 증거금 상태를 관리하는 margin 저장
+        // 7. 증거금 상태를 관리하는 margin 저장
         //   - 원장이 margin_id를 참조하므로 margin을 먼저 저장한다.
         //   - 저장할 때 margin_id와 created_at(reservedAt)이 정해진다.
+        //   - 인출(잔고 이동)시 원장도 함께 생성되며, 원장이 margin을 참조하므로 잔고 이동 전에 margin을 저장한다.
         Margin margin = marginRepository.save(
                 Margin.withdraw(
                         account, command.subscriptionId(), command.ipoId(), command.amount()
                 ));
         log.debug("[증거금 인출] margin 저장. marginId={}, status={}, createdAt={}", margin.getId(), margin.getStatus(), margin.getCreatedAt());
 
-        // 9. 원장 생성, 저장: 인출 후 변경된 계좌 잔액 기록.
-        //   - 원장 생성 시 거래 후 잔고를 계좌에서 읽기 때문
-        ledgerEntryRepository.save(
-                LedgerEntry.ofMargin(
-                        account, LedgerEntryType.MARGIN_PENDING, command.amount(), margin
-                ));
+        // 8. 인출, 9. 원장 생성, 저장: 인출 후 변경된 계좌 잔액 기록.
+        //   - 원장 생성 시 거래 후 잔고를 계좌에서 읽기 때문 (계좌가 잔고를 옮긴 뒤 원장을 만들어 돌려준다)
+        ledgerEntryRepository.save(account.reserveMargin(command.amount(), margin));
+        log.debug("[증거금 인출] 잔고 이동. accountId={}, cashBalance={}, marginBalance={}",
+                account.getId(), account.getCashBalance(), account.getMarginBalance());
 
         // 10. outbox 저장: 증거금 인출 성공 결과 객체를 생성하고 outbox 저장을 요청한다.
         marginEventPublisher.publishReserved(MarginReserved.from(margin));

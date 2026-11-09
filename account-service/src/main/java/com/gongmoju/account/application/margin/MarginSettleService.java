@@ -3,9 +3,7 @@ package com.gongmoju.account.application.margin;
 import com.gongmoju.account.domain.account.Account;
 import com.gongmoju.account.domain.account.AccountRepository;
 import com.gongmoju.common.event.ProcessedEventRepository;
-import com.gongmoju.account.domain.ledger.LedgerEntry;
 import com.gongmoju.account.domain.ledger.LedgerEntryRepository;
-import com.gongmoju.account.domain.ledger.LedgerEntryType;
 import com.gongmoju.account.domain.margin.Margin;
 import com.gongmoju.account.domain.margin.MarginEventPublisher;
 import com.gongmoju.account.domain.margin.MarginRepository;
@@ -112,11 +110,8 @@ public class MarginSettleService {
 
     // 4-1. 0주: 정산이 아니라 반환 (VOIDED, MARGIN_VOID). 응답은 margin.settled(0, 전액)
     private void voidZero(SettleMarginCommand command, Account account, Margin margin) {
-        account.voidMargin(margin.getAmount());
+        ledgerEntryRepository.save(account.voidMargin(margin.getAmount(), margin));
         margin.voidPending();
-
-        ledgerEntryRepository.save(
-                LedgerEntry.ofMargin(account, LedgerEntryType.MARGIN_VOID, margin.getAmount(), margin));
 
         marginEventPublisher.publishSettled(settled(margin, 0));
 
@@ -129,16 +124,12 @@ public class MarginSettleService {
         long postedAmount = command.allocatedAmount();
         long refundAmount = margin.getAmount() - postedAmount;
 
-        // 원장은 거래 후 잔액을 계좌에서 읽으므로 잔고 이동마다 바로 만든다
-        account.postMargin(postedAmount);
+        // 원장은 거래 후 잔액을 계좌에서 읽으므로 잔고 이동마다 바로 만든다 (계좌가 잔고를 옮긴 뒤 원장을 만들어 돌려준다)
+        ledgerEntryRepository.save(account.postMargin(postedAmount, margin));
         margin.postPending(postedAmount);
-        ledgerEntryRepository.save(
-                LedgerEntry.ofMargin(account, LedgerEntryType.MARGIN_POST, postedAmount, margin));
 
         if (refundAmount > 0) {
-            account.refundMargin(refundAmount);
-            ledgerEntryRepository.save(
-                    LedgerEntry.ofMargin(account, LedgerEntryType.REFUND, refundAmount, margin));
+            ledgerEntryRepository.save(account.refundMargin(refundAmount, margin));
         }
 
         marginEventPublisher.publishSettled(settled(margin, postedAmount));

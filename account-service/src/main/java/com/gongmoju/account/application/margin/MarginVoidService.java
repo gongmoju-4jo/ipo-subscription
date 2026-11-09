@@ -3,9 +3,7 @@ package com.gongmoju.account.application.margin;
 import com.gongmoju.account.domain.account.Account;
 import com.gongmoju.account.domain.account.AccountRepository;
 import com.gongmoju.common.event.ProcessedEventRepository;
-import com.gongmoju.account.domain.ledger.LedgerEntry;
 import com.gongmoju.account.domain.ledger.LedgerEntryRepository;
-import com.gongmoju.account.domain.ledger.LedgerEntryType;
 import com.gongmoju.account.domain.margin.Margin;
 import com.gongmoju.account.domain.margin.MarginEventPublisher;
 import com.gongmoju.account.domain.margin.MarginRepository;
@@ -133,12 +131,9 @@ public class MarginVoidService {
 
     // 5-2. PENDING: 청약증거금 → 예수금, margin VOIDED, 원장, 응답 Outbox
     private void voidPending(VoidMarginCommand command, Account account, Margin margin) {
-        account.voidMargin(margin.getAmount());
+        // 원장은 거래 후 잔액를 계좌에서 읽으므로 잔고 이동 뒤에 만든다 (계좌가 잔고를 옮긴 뒤 원장을 만들어 돌려준다)
+        ledgerEntryRepository.save(account.voidMargin(margin.getAmount(), margin));
         margin.voidPending();
-
-        // 원장은 거래 후 잔액를 계좌에서 읽으므로 잔고 이동 뒤에 만든다
-        ledgerEntryRepository.save(
-                LedgerEntry.ofMargin(account, LedgerEntryType.MARGIN_VOID, margin.getAmount(), margin));
 
         marginEventPublisher.publishVoided(voided(margin));
 

@@ -67,8 +67,9 @@ public class DepositService {
         //   - 입금 후 예수금이 long 범위(약 922경 원)를 넘으면 500이 아니라 400으로 거절한다
         //   - 실제 돈이라면 닿을 수 없는 값이지만, 가상 입금은 사용자가 금액을 직접 정하므로 서버 오류로 새지 않게 막는다
         //   - (1회 상한이 정해지지 않아 @Max를 두지 않았고, 잔고를 알아야 알 수 있어서 요청 검증 다음 단계인 여기서 막는다)
+        LedgerEntry depositEntry;
         try {
-            account.deposit(amount);
+            depositEntry = account.deposit(amount, requestId);
         } catch (ArithmeticException e) {
             log.info("[입금] 거절, 예수금 허용 범위 초과. accountId={}, amount={}, requestId={}", accountId, amount, requestId);
             throw new BusinessException(
@@ -76,8 +77,8 @@ public class DepositService {
             );
         }
 
-        // 변경된 잔고 기준으로 입금 원장 생성 후 저장
-        LedgerEntry entry = ledgerEntryRepository.save(LedgerEntry.deposit(account, amount, requestId));
+        // 변경된 잔고 기준으로 계좌가 만든 입금 원장을 저장
+        LedgerEntry entry = ledgerEntryRepository.save(depositEntry);
 
         // 트랜잭션 커밋 전 로그. 커밋이 실패하면 예외 응답과 에러 로그가 따로 남는다
         log.info("[입금] 원장 저장 (커밋 전). accountId={}, amount={}, cashBalanceAfter={}, requestId={}",

@@ -69,13 +69,7 @@ public class MarginVoidService {
             }
             log.warn("[증거금 반환] 계좌 없음, amount 0으로 응답. eventId={}, subscriptionId={}, accountId={}",
                     command.eventId(), command.subscriptionId(), command.accountId());
-            marginEventPublisher.publishVoided(
-                    new MarginVoided(
-                            command.subscriptionId(),
-                            null,
-                            command.accountId(), 0
-                    )
-            );
+            marginEventPublisher.publishVoided(zeroVoided(command));
             return;
         }
 
@@ -106,8 +100,7 @@ public class MarginVoidService {
             // 5-1. margin 없음: 아직 인출 전이라 돌려줄 돈이 없다
             log.info("[증거금 반환] margin 없음, amount 0으로 응답. eventId={}, subscriptionId={}, accountId={}",
                     command.eventId(), command.subscriptionId(), command.accountId());
-            marginEventPublisher.publishVoided(
-                    new MarginVoided(command.subscriptionId(), null, command.accountId(), 0));
+            marginEventPublisher.publishVoided(zeroVoided(command));
             return;
         }
 
@@ -156,5 +149,10 @@ public class MarginVoidService {
     // margin이 있을 때 응답: 처음 인출한 금액 전액
     private MarginVoided voided(Margin margin) {
         return new MarginVoided(margin.getSubscriptionId(), margin.getId(), margin.getAccount().getId(), margin.getAmount());
+    }
+
+    // margin이 없을 때 응답: 옮긴 돈이 없어 0원. marginId는 없고 요청 계좌로 보낸다 (계좌 없음, 인출 전 두 경우가 같이 쓴다)
+    private MarginVoided zeroVoided(VoidMarginCommand command) {
+        return new MarginVoided(command.subscriptionId(), null, command.accountId(), 0);
     }
 }

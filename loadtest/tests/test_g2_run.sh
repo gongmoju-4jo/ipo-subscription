@@ -61,7 +61,7 @@ seq_progress "0 0 -" "0 0 RUNNING" "500 0 DONE" "1000 400 DONE" "1000 1000 DONE"
 echo 1000 > "$T/now"; seq_progress "0 0 -"
 [ "$(rc_of wait_refunded "$U3" 1000 10 7200)" = 1 ] && ok "wait_refunded: 진행이 정지 초 동안 없으면 1 (배정 대기 중 0건도 정지로 셈)" || bad "wait 정지" "$(rc_of wait_refunded "$U3" 1000 10 7200)"
 # 계속 조금씩 늘지만 상한을 넘음: 매번 settled가 1씩 는다
-echo 1000 > "$T/now"; seq_progress $(for i in $(seq 1 200); do echo "$i 0 DONE"; done | tr ' ' '_'); sed -i 's/_/ /g' "$T/pseq"
+echo 1000 > "$T/now"; seq_progress; for i in $(seq 1 200); do echo "$i 0 DONE"; done > "$T/pseq"
 [ "$(rc_of wait_refunded "$U3" 1000 10 100)" = 2 ] && ok "wait_refunded: 계속 늘어도 상한 초를 넘으면 2" || bad "wait 상한" "$(rc_of wait_refunded "$U3" 1000 10 100)"
 echo 1000 > "$T/now"; seq_progress "0 0 FAILED"
 [ "$(rc_of wait_refunded "$U3" 1000 600 7200)" = 4 ] && ok "wait_refunded: 배정 라운드 FAILED면 4" || bad "wait FAILED" "$(rc_of wait_refunded "$U3" 1000 600 7200)"

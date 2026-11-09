@@ -12,7 +12,7 @@ LINE=$(docker exec ipo-kafka $BIN/kafka-console-consumer.sh --bootstrap-server k
   --from-beginning --timeout-ms 5000 --formatter-property print.key=true --formatter-property print.timestamp=true \
   --formatter-property key.separator='|' 2>/dev/null | grep '^CreateTime:' \
   | { if [ -n "$SUB" ]; then grep -F "$SUB"; else cat; fi; } \
-  | sed 's/^CreateTime://' | sort -t'|' -k1,1n | tail -1)
+  | sed 's/^CreateTime://' | sort -t'|' -k1,1n | tail -1) || true   # 못 찾으면 grep이 1로 끝나도 아래 안내로 간다
 [ -n "$LINE" ] || { echo "다시 보낼 메시지를 찾지 못했어요" >&2; exit 1; }
 
 MSG=${LINE#*|}   # 타임스탬프 떼고 key|value

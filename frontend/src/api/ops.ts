@@ -79,12 +79,18 @@ export interface PromSample {
   value: number;
 }
 
+// Prometheus instant query 응답 (필요한 부분만)
+interface PromResponse {
+  status: string;
+  data: { result: { metric: Record<string, string>; value: [number, string] }[] };
+}
+
 export async function promQuery(query: string): Promise<PromSample[]> {
   const res = await fetch(`/prom/api/v1/query?query=${encodeURIComponent(query)}`);
   if (!res.ok) throw new Error(`Prometheus 조회 실패 (HTTP ${res.status})`);
-  const body = await res.json();
+  const body = (await res.json()) as PromResponse;
   if (body.status !== 'success') throw new Error('Prometheus 조회 실패');
-  return (body.data.result as { metric: Record<string, string>; value: [number, string] }[]).map((r) => ({
+  return body.data.result.map((r) => ({
     labels: r.metric,
     value: Number(r.value[1]),
   }));

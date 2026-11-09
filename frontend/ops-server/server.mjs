@@ -38,6 +38,8 @@ const pool = new pg.Pool({
   max: 4,
   options: '-c default_transaction_read_only=on',
 });
+// 쉬고 있는 연결이 끊기면(DB 재시작 등) 이 이벤트가 없을 때 서버 프로세스가 죽는다. 기록만 하고 다음 조회 때 새 연결을 쓴다
+pool.on('error', (e) => console.error(`[ops] DB 유휴 연결 오류: ${e.message}`));
 
 // Kafka가 꺼져 있을 때 기본 재시도(5회)로 화면이 오래 멈추지 않게 짧게 둔다
 const kafka = new Kafka({

@@ -28,7 +28,12 @@ function TraceBody({ subscriptionId, live }: { subscriptionId: string; live: boo
   if (trace.isLoading) return <div className="hint">불러오는 중…</div>;
   if (trace.error) {
     const e = trace.error;
-    const why = e instanceof ApiError && e.status === 403 ? '본인 청약만 볼 수 있어요' : '운영 조회 서버(frontend/ops-server)가 실행 중이 아니에요. `npm run ops`로 실행하면 보여요';
+    const status = e instanceof ApiError ? e.status : 0;
+    const why =
+      status === 403 ? '본인 청약만 볼 수 있어요'
+      : status === 404 ? '청약이 아직 저장되지 않았거나 없어요'
+      : status === 401 ? '운영 조회 서버가 토큰을 거부했어요. 서버의 JWT_SECRET이 Gateway와 같은지 확인해 주세요'
+      : '운영 조회 서버(frontend/ops-server)가 실행 중이 아니에요. `npm run ops`로 실행하면 보여요';
     return <NotConnected what="처리 기록" why={why} />;
   }
   const t = trace.data!;

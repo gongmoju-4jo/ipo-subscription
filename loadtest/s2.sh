@@ -5,7 +5,7 @@
 # 결과: results/<run_id>/ (k6 원본, s2-judge.txt, sql_result.txt), results/<run_id>-W/ (워밍업)
 # 판정 (s2-judge.txt):
 #   회차 유효성: 대상 요청에 202(마감 전 도착)와 422(마감 후 도착)가 모두 있어야 한다 (마감 시각이 대상 구간 안), 401이 없어야 한다
-#   측정값: 마감 뒤에 생긴 대상 청약 행, 202를 받았는데 행이 없거나 마감 뒤에 생긴 요청(조용한 누락), 마감 시각 이후 도착인데 접수된 행
+#   측정값: verify.sql 20~22번(마감 처리 뒤 생긴 청약, 마감 시각 이후 도착인데 접수된 청약, 마감 때 확정 수 차이)과 202를 받았는데 행이 없는 요청(k6 로그 대조)
 # 환경변수: RATE(274), PRE(60), POST(40), TARGET_SEC(0: 회원 수 ÷ RATE초 동안 전부 대상), PRICE(1000), QUANTITY(10),
 #          LEAD(25, 시작까지 여유 초), WARM(1, 0이면 워밍업 생략), WARM_*(official.sh와 같은 기본값),
 #          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g)
@@ -177,14 +177,29 @@ done
 d="$(drain "$T,$BG" "$DRAIN_TIMEOUT")" || die 1 "소진 대기 시간 초과"
 say "마감 확인, 소진 ${d}초"
 
-(cd "$DIR" && bash verify.sh --ipo "$T" --run-id "$RUN_ID") >> "$LOG" 2>&1 || say "!! verify.sh 실패 (sql_result.txt 확인)"
+# 정합성 SQL (마감된 공모주 검사 20~22번 포함). 판정이 결과를 읽으므로 실패하면 멈춘다
+(cd "$DIR" && bash verify.sh --ipo "$T" --run-id "$RUN_ID") >> "$LOG" 2>&1 || die 1 "verify.sh 실패 (sql_result.txt 확인)"
 
-# 판정
-py - "$(pypath "$OUT/requests.log")" "$(pypath "$DIR/verify")" "$T" "$END_MS" "$PG_CONTAINER" "$(pypath "$OUT/summary.json")" > "$OUT/s2-judge.txt" <<'PYEOF'
-import collections, json, subprocess, sys
-log, verify_dir, ipo, end_ms, pg, summary = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5], sys.argv[6]
+# 판정: k6 로그가 필요한 것(회차 유효성, 202인데 행 없음)만 직접 계산하고, DB만 보는 검사는 verify.sql 20~22번 결과를 읽는다
+py - "$(pypath "$OUT/requests.log")" "$(pypath "$DIR/verify")" "$T" "$END_MS" "$PG_CONTAINER" "$(pypath "$OUT/summary.json")" "$(pypath "$OUT/sql_result.txt")" > "$OUT/s2-judge.txt" <<'PYEOF'
+import collections, json, re, subprocess, sys
+log, verify_dir, ipo, end_ms, pg, summary, sql_result = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5], sys.argv[6], sys.argv[7]
 sys.path.insert(0, verify_dir)
 from check_requests import load_rows
+
+# sql_result.txt에서 검사 번호마다 결과 행 수를 읽는다 (건너뛴 검사는 "skip")
+def sql_counts(path):
+    res, cur = {}, None
+    for line in open(path, encoding="utf-8", errors="replace"):
+        m = re.match(r"== (\d+)\.", line)
+        if m:
+            cur = int(m.group(1))
+            res[cur] = "skip" if "건너뜀" in line else None
+            continue
+        m = re.match(r"\((\d+) rows?\)", line.strip())
+        if m and cur is not None and res.get(cur) is None:
+            res[cur] = int(m.group(1))
+    return res
 
 def q(sql):
     out = subprocess.run(["docker", "exec", "-i", pg, "psql", "-U", "postgres", "-d", "ipo", "-v", "ON_ERROR_STOP=1",
@@ -204,14 +219,12 @@ closed = q(f"select extract(epoch from created_at), payload::json->>'confirmedCo
            f"where topic = 'ipo.closed' and aggregate_id = '{ipo}' order by created_at limit 1")
 close_epoch = float(closed[0][0]) if closed else None
 confirmed_at_close = int(closed[0][1]) if closed else None
-subs = q(f"select request_id, status, extract(epoch from received_at), extract(epoch from created_at) "
-         f"from subscription.subscription where ipo_id = '{ipo}'")
-by_req = {s[0]: s for s in subs}
-late_rows = [s for s in subs if close_epoch is not None and float(s[3]) > close_epoch]
-after_deadline = [s for s in subs if float(s[2]) >= end_epoch]
-missing = [r for r in ok202 if r not in by_req]
-late_202 = [r for r in ok202 if r in by_req and close_epoch is not None and float(by_req[r][3]) > close_epoch]
-valid_now = sum(1 for s in subs if s[1] not in ("REJECTED", "CANCELLED"))
+subs = {s[0] for s in q(f"select request_id from subscription.subscription where ipo_id = '{ipo}'")}
+missing = [r for r in ok202 if r not in subs]
+sc = sql_counts(sql_result)
+for n in (20, 21, 22):
+    if not isinstance(sc.get(n), int):
+        sys.exit(f"sql_result.txt {n}번 결과를 읽지 못함: {sc.get(n)} (마감된 대상 공모주라 건너뛰면 안 된다)")
 
 reasons = []
 # 요청 순번으로 대상 구간을 정하므로(k6 iterationInTest는 보낸 요청만 센다), 밀린 요청이 있으면 대상 구간이 그만큼 뒤로 밀린다
@@ -236,14 +249,13 @@ print(f"배경 요청: {dict(sorted(bs.items()))}")
 print(f"마감 시각(대상 공모주 subscription_end_at): {end_epoch:.3f}")
 if close_epoch is not None:
     print(f"마감 처리(ipo.closed Outbox 생성): {close_epoch:.3f} (마감 시각 + {close_epoch - end_epoch:.3f}초), 마감 때 확정 수 {confirmed_at_close}")
-print(f"대상 청약 행: {len(subs)}건 (유효 상태 {valid_now}건)")
+print(f"대상 청약 행: {len(subs)}건")
 print()
 print("## 측정값 (기대: 모두 0)")
-print(f"마감 처리 뒤에 생긴 대상 청약 행: {len(late_rows)}")
-print(f"조용한 누락: 202를 받았는데 행이 마감 처리 뒤에 생김 {len(late_202)}, 행이 없음 {len(missing)}")
-print(f"마감 시각 이후 도착(received_at >= 마감 시각)인데 접수된 행: {len(after_deadline)}")
-if confirmed_at_close is not None:
-    print(f"마감 때 확정 수와 지금 유효 청약 수의 차이: {valid_now - confirmed_at_close}")
+print(f"마감 처리 뒤에 생긴 대상 청약 행 (verify.sql 20번, 202를 받고 마감 집계에서 빠진 청약): {sc[20]}")
+print(f"마감 시각 이후 도착인데 접수된 행 (21번): {sc[21]}")
+print(f"마감 때 확정 수와 지금 유효 청약 수가 다름 (22번, 다르면 1): {sc[22]}")
+print(f"202를 받았는데 청약 행이 없음 (k6 로그 대조): {len(missing)}")
 sys.exit(0 if not reasons else 3)
 PYEOF
 jrc=$?

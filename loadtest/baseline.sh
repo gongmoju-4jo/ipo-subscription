@@ -7,12 +7,17 @@
 #   bash loadtest/baseline.sh restore         기준 스냅샷으로 DB를 되돌리고 Kafka를 비운다 (서비스를 멈췄다가 다시 띄운다)
 #   bash loadtest/baseline.sh dump <파일>     지금 DB를 덤프한다 (측정 결과 백업용)
 #   bash loadtest/baseline.sh check           지금 DB가 기준 스냅샷과 같은 상태인지 확인 (회원, 계좌, 예수금 합계, 청약 0)
+#   ALLOW_SUBSCRIPTIONS=1 bash loadtest/baseline.sh save
+#                                             확정 청약이 쌓인 DB를 저장한다 (G2 대량 환불처럼 마감 직전 상태에서 시작하는 측정용).
+#                                             처리 중 청약(PENDING, COMPENSATING, CANCEL_REQUESTED) 0, 세 서비스 outbox 미발행 0,
+#                                             종료 시각이 지난 OPEN 공모주 0일 때만 저장한다 (복원 직후 저절로 마감, 발행되지 않게).
+#                                             restore, check는 옵션 없이 meta의 상태(청약 수 포함)와 비교한다
 #
 # 기준 스냅샷: loadtest/data/baseline/ipo-baseline.dump 와 ipo-baseline.meta (BASELINE_DIR로 바꿀 수 있다. loadtest/data/는 커밋하지 않는다)
 #   만드는 법: PostgreSQL, Kafka 볼륨을 비우고 띄운 뒤 seed/seed_users.py로 회원을 만들고(가입, 계좌, 입금 모두 API) save
 # restore는 데이터베이스 ipo를 지우고 스냅샷으로 다시 만든다. 지금 DB의 데이터는 사라지므로 필요하면 먼저 dump로 백업한다.
-# 환경변수: PG_CONTAINER(ipo-postgres), KAFKA_CONTAINER(ipo-kafka), BASELINE_DIR
-# 종료 코드: 0 정상 / 1 사용법, 도구 / 2 save 조건 불만족(청약이 있음) / 3 스냅샷 없음, 손상 / 4 복원, 덤프 실패 / 5 복원 뒤 상태가 기준과 다름 / 6 Kafka 초기화 실패
+# 환경변수: PG_CONTAINER(ipo-postgres), KAFKA_CONTAINER(ipo-kafka), BASELINE_DIR, ALLOW_SUBSCRIPTIONS(1일 때만 켜짐, save만)
+# 종료 코드: 0 정상 / 1 사용법, 도구 / 2 save 조건 불만족(청약이 있음, ALLOW_SUBSCRIPTIONS=1이면 처리 중 청약, 미발행, 지난 OPEN 공모주가 있음) / 3 스냅샷 없음, 손상 / 4 복원, 덤프 실패 / 5 복원 뒤 상태가 기준과 다름 / 6 Kafka 초기화 실패
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
 
@@ -49,6 +54,15 @@ state_line() {
                || ' margins=' || (select count(*) from account.margin)" | tr -d '\r'
 }
 
+# ALLOW_SUBSCRIPTIONS=1 save의 조건. 모두 0이어야 한다 (meta 상태 줄에는 넣지 않는다. 기존 스냅샷의 meta와 비교가 깨지지 않게)
+held_line() {
+  psql_q "select 'unfinished=' || (select count(*) from subscription.subscription where status in ('PENDING', 'COMPENSATING', 'CANCEL_REQUESTED'))
+               || ' unpublished=' || ((select count(*) from account.outbox where published_at is null)
+                                    + (select count(*) from subscription.outbox where published_at is null)
+                                    + (select count(*) from allocation.outbox where published_at is null))
+               || ' open_due=' || (select count(*) from subscription.ipo where status = 'OPEN' and subscription_end_at <= now())" | tr -d '\r'
+}
+
 # compose의 kafka-data 볼륨 이름. 컨테이너에는 이미지가 만든 익명 볼륨도 붙어 있어서 마운트가 아니라 compose 라벨로 찾는다.
 # 프로젝트 이름은 PostgreSQL 컨테이너의 compose 라벨에서 읽는다 (폴더 이름에 따라 바뀐다). 정확히 하나가 아니면 실패
 kafka_volume() {
@@ -74,10 +88,16 @@ wait_kafka() { # Kafka healthy, 토픽 생성(kafka-init) 종료 코드 0까지
 }
 
 cmd_save() {
-  local st n
+  local st n held=""
   st="$(state_line)" || die 4 "DB 조회 실패"
   n="$(printf '%s' "$st" | sed -n 's/.*subscriptions=\([0-9]*\).*/\1/p')"
-  case "$st" in *" subscriptions=0 margins=0"*) ;; *) die 2 "청약 또는 증거금이 있는 DB는 기준으로 저장하지 않는다 ($st)" ;; esac
+  if [ "${ALLOW_SUBSCRIPTIONS:-}" = 1 ]; then
+    held="$(held_line)" || die 4 "DB 조회 실패 (처리 중 청약, 미발행, 지난 OPEN 공모주)"
+    [ "$held" = "unfinished=0 unpublished=0 open_due=0" ] \
+      || die 2 "처리 중 청약, outbox 미발행, 종료 시각이 지난 OPEN 공모주가 모두 0일 때만 저장한다 ($held)"
+  else
+    case "$st" in *" subscriptions=0 margins=0"*) ;; *) die 2 "청약 또는 증거금이 있는 DB는 기준으로 저장하지 않는다 ($st). 확정 청약을 담으려면 ALLOW_SUBSCRIPTIONS=1" ;; esac
+  fi
   [ -n "$n" ] || die 4 "상태 값 읽기 실패 ($st)"
   mkdir -p "$BASELINE_DIR"
   docker exec "$PG_CONTAINER" pg_dump -U postgres -d ipo -Fc --create > "$DUMP.tmp" || { rm -f "$DUMP.tmp"; die 4 "pg_dump 실패"; }
@@ -88,6 +108,7 @@ cmd_save() {
     echo "sha256 $(sha256_of "$DUMP")"
     echo "created_at $(date '+%F %T')"
     echo "git $(cd "$REPO" && git rev-parse HEAD 2>/dev/null)"
+    [ -z "$held" ] || echo "allow_subscriptions $held"
   } > "$META"
   say "기준 스냅샷 저장: $DUMP ($st)"
 }

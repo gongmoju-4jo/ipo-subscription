@@ -1,6 +1,6 @@
 package com.gongmoju.subscription.application.subscription;
 
-import com.gongmoju.subscription.domain.event.ProcessedEventRepository;
+import com.gongmoju.common.event.ProcessedEventRepository;
 import com.gongmoju.subscription.domain.subscription.CancelReason;
 import com.gongmoju.subscription.domain.subscription.MarginVoided;
 import com.gongmoju.subscription.domain.subscription.Subscription;

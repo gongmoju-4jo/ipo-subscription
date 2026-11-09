@@ -3,6 +3,8 @@ package com.gongmoju.account.presentation.account;
 import com.gongmoju.account.application.account.AccountService;
 import com.gongmoju.account.application.account.DepositResult;
 import com.gongmoju.account.application.account.DepositService;
+import com.gongmoju.account.application.account.LedgerQueryService;
+import com.gongmoju.account.domain.ledger.LedgerEntryType;
 import com.gongmoju.account.application.account.OpenAccountResult;
 import com.gongmoju.account.global.swagger.ApiErrorCodes;
 import com.gongmoju.account.presentation.support.RequestUser;
@@ -40,6 +42,7 @@ public class AccountController {
 
     private final AccountService accountService;
     private final DepositService depositService;
+    private final LedgerQueryService ledgerQueryService;
 
     @Operation(summary = "계좌 개설", description = "같은 requestId로 다시 요청하면 계좌를 새로 만들지 않고 처음 계좌를 200으로 반환한다.")
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.DUPLICATE_RESOURCE})
@@ -78,6 +81,25 @@ public class AccountController {
             @PathVariable UUID accountId) {
         UUID userId = RequestUser.userId(userIdHeader);
         return ApiResponse.success(AccountResponse.from(accountService.get(userId, accountId)), "계좌를 조회했습니다.");
+    }
+
+    @Operation(summary = "계좌 거래 내역(원장) 조회",
+            description = "본인 계좌의 원장을 조회한다. 입금, 증거금 인출, 정산, 반환, 환불이 거래 후 잔고와 함께 나오고 type으로 거를 수 있다. "
+                    + "정렬은 createdAt만 가능하고 기본은 최신순이다. 없는 계좌와 남의 계좌는 모두 404이다.")
+    @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.RESOURCE_NOT_FOUND})
+    @GetMapping("/{accountId}/ledger-entries")
+    public ApiResponse<PageResponse<LedgerEntryResponse>> ledger(
+            @Parameter(hidden = true) @RequestHeader(value = RequestUser.HEADER, required = false) String userIdHeader,
+            @PathVariable UUID accountId,
+            @Parameter(description = "거래 종류로 거르기 (선택)") @RequestParam(required = false) LedgerEntryType type,
+            @ParameterObject Pageable pageable,
+            @Parameter(hidden = true) @RequestParam(required = false) Integer page,
+            @Parameter(hidden = true) @RequestParam(required = false) Integer size) {
+        UUID userId = RequestUser.userId(userIdHeader);
+        validatePaging(page, size);
+        return ApiResponse.success(
+                PageResponse.from(ledgerQueryService.list(userId, accountId, type, pageable), LedgerEntryResponse::from),
+                "거래내역을 조회했습니다.");
     }
 
     @Operation(summary = "가상 입금",

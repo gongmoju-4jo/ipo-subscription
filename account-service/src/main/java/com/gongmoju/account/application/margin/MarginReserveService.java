@@ -2,7 +2,7 @@ package com.gongmoju.account.application.margin;
 
 import com.gongmoju.account.domain.account.Account;
 import com.gongmoju.account.domain.account.AccountRepository;
-import com.gongmoju.account.domain.event.ProcessedEventRecorder;
+import com.gongmoju.common.event.ProcessedEventRepository;
 import com.gongmoju.account.domain.ledger.LedgerEntry;
 import com.gongmoju.account.domain.ledger.LedgerEntryRepository;
 import com.gongmoju.account.domain.ledger.LedgerEntryType;
@@ -40,7 +40,7 @@ public class MarginReserveService {
     private final MarginVoidIntentRepository marginVoidIntentRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final MarginEventPublisher marginEventPublisher;
-    private final ProcessedEventRecorder processedEventRecorder;
+    private final ProcessedEventRepository processedEventRepository;
 
     /**
      * 증거금 인출을 처리한다.
@@ -52,7 +52,7 @@ public class MarginReserveService {
         // 1. processed_event로 같은 eventId 재수신이면 아무것도 하지 않고 끝낸다.
         //   - 조회 후 저장이 아니라 삽입 한 번으로 판단해서 같은 eventId가 동시에 와도 하나만 통과한다.
         //   - 뒤의 단계가 예외로 롤백되면 이 기록도 같이 롤백되어 재시도 때 다시 처리된다.
-        if (!processedEventRecorder.insertIfAbsent(command.eventId(), CONSUMER_NAME, TOPIC)) {
+        if (!processedEventRepository.insertIfAbsent(command.eventId(), CONSUMER_NAME, TOPIC)) {
 
             log.info("[증거금 인출] 중복 수신, 건너뜀. eventId={}, subscriptionId={}",
                     command.eventId(), command.subscriptionId());

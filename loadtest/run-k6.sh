@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 시나리오(s0~s4)를 실행하고 원본을 results/<run_id>/에 저장한다 (summary.json, requests.log).
+# 시나리오(s0~s4, g2)를 실행하고 원본을 results/<run_id>/에 저장한다 (summary.json, requests.log).
 # 실행 위치(K6_MODE): auto(기본)는 k6가 설치돼 있으면 설치형, 없으면 grafana/k6 컨테이너. local은 설치형만, container는 컨테이너만 쓴다.
 # 실행 위치는 측정 환경 기록에 적는다 (서비스와 같은 머신이면 k6도 CPU를 쓴다).
 # 종료 코드 99는 임계값 위반이다. summary.json의 thresholds는 true가 위반(crossed), false가 통과다.
@@ -13,7 +13,7 @@ set -euo pipefail
 export MSYS_NO_PATHCONV=1
 DIR="$(cd "$(dirname "$0")" && pwd)"
 SCEN="${1:-}"; shift || true
-[ -n "$SCEN" ] && [ -f "$DIR/k6/$SCEN.js" ] || { echo "사용: $0 <s0|s1|s2|s3|s4> --ipo <ID> --run-id <run_id>" >&2; exit 1; }
+[ -n "$SCEN" ] && [ -f "$DIR/k6/$SCEN.js" ] || { echo "사용: $0 <s0|s1|s2|s3|s4|g2> --ipo <ID> --run-id <run_id>" >&2; exit 1; }
 IPO=""; RUN_ID=""; USERS="data/users.csv"; EXTRA=()
 while [ $# -gt 0 ]; do
   case "$1" in

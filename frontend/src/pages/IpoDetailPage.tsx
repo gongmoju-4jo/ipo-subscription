@@ -18,8 +18,11 @@ export function IpoDetailPage() {
 
   const [qty, setQty] = useState<number>(0);
   const [accountId, setAccountId] = useState('');
-  // 같은 신청을 여러 번 눌러도 한 건이 되도록 requestId를 화면이 열린 동안 유지한다 (멱등키)
-  const [requestId, setRequestId] = useState(newRequestId);
+  // 같은 신청을 여러 번 눌러도 한 건이 되도록 requestId를 멱등키로 쓴다
+  // 아직 보낸 적 없는 다음 신청용 ID. 한 번 보내면 결과와 관계없이 새로 만든다
+  const [freshRequestId, setFreshRequestId] = useState(newRequestId);
+  // 결과를 모르는 신청(응답이 끊김, 5xx). 같은 계좌, 수량으로 다시 보내면 이 ID를 그대로 쓴다
+  const [pending, setPending] = useState<{ accountId: string; qty: number; requestId: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -30,11 +33,9 @@ export function IpoDetailPage() {
     const first = accounts.data?.items[0];
     if (first && !accountId) setAccountId(first.accountId);
   }, [accounts.data, accountId]);
-  // 같은 requestId는 같은 내용으로만 다시 보낸다. 계좌나 수량을 바꾸면 새 요청이라 새 ID
-  // (앞 요청이 이미 저장됐어도 사람 기준 이중청약 제약으로 두 번째는 거절돼서 증거금이 두 번 빠지지 않는다)
-  useEffect(() => {
-    setRequestId(newRequestId());
-  }, [qty, accountId]);
+  // 같은 requestId는 같은 내용으로만 보낸다. 결과 모르는 신청과 계좌, 수량이 같으면 그 ID, 다르면 새 ID
+  // (내용을 바꿔 새 ID로 보내도 사람 기준 이중청약 제약으로 두 번째는 거절돼서 증거금이 두 번 빠지지 않는다)
+  const requestId = pending && pending.accountId === accountId && pending.qty === qty ? pending.requestId : freshRequestId;
 
   const account = accounts.data?.items.find((a) => a.accountId === accountId);
   const expected = useMemo(() => (ipo.data ? Math.round(qty * ipo.data.offerPrice * Number(ipo.data.marginRate)) : 0), [qty, ipo.data]);
@@ -50,16 +51,18 @@ export function IpoDetailPage() {
   async function submit() {
     setBusy(true);
     setError(null);
+    const sent = { accountId, qty, requestId };
+    setFreshRequestId(newRequestId());
     try {
-      const res = await subscriptionApi.create({ requestId, ipoId, accountId, requestedQuantity: qty });
+      const res = await subscriptionApi.create({ requestId: sent.requestId, ipoId, accountId: sent.accountId, requestedQuantity: sent.qty });
       queryClient.invalidateQueries({ queryKey: keys.subscriptions });
       queryClient.invalidateQueries({ queryKey: keys.accounts });
       navigate(`/subscriptions/${res.subscriptionId}?from=new`);
     } catch (e) {
       setError(e);
-      // 업무 오류(마감 등, 4xx)는 같은 요청을 다시 보내도 결과가 같아서 새 요청 ID로 바꾼다
-      // 네트워크 오류(0)는 서버에 도착했을 수 있어 같은 ID로 다시 보내야 청약이 1건으로 남는다
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) setRequestId(newRequestId());
+      // 업무 오류(마감 등, 4xx)는 결과를 안다. 네트워크 오류(0), 5xx는 서버에 도착했을 수 있어 같은 ID로 다시 보내게 보존한다
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) setPending((p) => (p?.requestId === sent.requestId ? null : p));
+      else setPending(sent);
     } finally {
       setBusy(false);
     }

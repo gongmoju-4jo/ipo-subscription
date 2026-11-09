@@ -418,13 +418,14 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`, `s2_judge.py`를 고치면 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`, `s2.sh`, `s2_judge.py`를 고치면 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
 bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
+bash loadtest/tests/test_s2.sh            # S2 셸 함수 (Kafka lag, 소진 대기, 마감 대기, 커밋 안 된 변경 거부, 마감 유예 확인, 공모주 생성). 조회 실패를 0이나 마감으로 넘기지 않는지 확인
 python loadtest/tests/test_s2_judge.py    # S2 판정 (회차 무효 조건, 마감되지 않은 공모주, sql_result.txt 20~22번 읽기와 입력 오류, 202인데 행 없음)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)

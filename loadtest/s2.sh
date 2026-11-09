@@ -11,9 +11,10 @@
 #          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g),
 #          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다)
 # 종료 코드: 0 유효 회차, 3 회차 무효(판정 파일 참고), 5 커밋하지 않은 변경, 그 밖은 준비, 실행 실패
+# source로 불러오면(tests/test_s2.sh) 함수만 정의하고 실행하지 않는다
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
-DIR="$(cd "$(dirname "$0")" && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/.." && pwd)"
 COMPOSE_FILES=(-f docker-compose.yml -f compose.perf.yml)
 PG_CONTAINER="${PG_CONTAINER:-ipo-postgres}"; KAFKA_CONTAINER="${KAFKA_CONTAINER:-ipo-kafka}"; SUB_CONTAINER=ipo-subscription-service
@@ -21,54 +22,56 @@ RATE="${RATE:-274}"; PRE="${PRE:-60}"; POST="${POST:-40}"; TARGET_SEC="${TARGET_
 PRICE="${PRICE:-1000}"; QUANTITY="${QUANTITY:-10}"; LEAD="${LEAD:-25}"
 WARM="${WARM:-1}"; WARM_RATE="${WARM_RATE:-200}"; WARM_BUCKET="${WARM_BUCKET:-15}"; WARM_WINDOW="${WARM_WINDOW:-8}"
 WARM_SLOPE_PCT="${WARM_SLOPE_PCT:-5}"; WARM_SLOPE_MS="${WARM_SLOPE_MS:-1}"; WARM_CONSEC="${WARM_CONSEC:-2}"; WARM_MIN="${WARM_MIN:-180}"; WARM_MAX="${WARM_MAX:-900}"
-CLOSE_TIMEOUT="${CLOSE_TIMEOUT:-300}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"
+CLOSE_TIMEOUT="${CLOSE_TIMEOUT:-300}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"; POLL="${POLL:-2}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:1.3.0}"; K6_CPUS="${K6_CPUS:-2}"; K6_MEMORY="${K6_MEMORY:-1g}"
 GRACE_FILE="loadtest/data/compose.s2-grace.yml"
+LOG="${LOG:-/dev/null}"; PY=""; COMPOSE=(); RUN_ID=""; WRUN=""; GRACE=""; DIRTY_N=0
 
-RUN_ID=""; GRACE=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --run-id) RUN_ID="$2"; shift 2 ;;
-    --grace) GRACE="$2"; shift 2 ;;
-    *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
-  esac
-done
-[ -n "$RUN_ID" ] || { echo "사용: $0 --run-id <run_id> [--grace PT1S]" >&2; exit 1; }
-# 커밋하지 않은 변경이 있으면 결과가 어느 코드로 잰 것인지 알 수 없어서 시작하지 않는다 (official.sh와 같은 규칙. 시험 실행만 ALLOW_DIRTY=1)
-DIRTY="$(cd "$REPO" && git status --porcelain)" || { echo "git 상태를 확인하지 못했습니다" >&2; exit 5; }
-DIRTY_N="$(printf '%s' "$DIRTY" | grep -c .)"
-if [ "$DIRTY_N" != 0 ] && [ "${ALLOW_DIRTY:-0}" != 1 ]; then
-  printf '%s\n' "$DIRTY" >&2
-  echo "커밋하지 않은 변경 ${DIRTY_N}건. 커밋한 뒤 실행한다 (결과의 버전 추적). 시험 실행만 ALLOW_DIRTY=1" >&2
-  exit 5
-fi
-OUT="$DIR/results/$RUN_ID"; WRUN="$RUN_ID-W"
-[ -e "$OUT" ] && { echo "이미 있는 run_id입니다: $OUT" >&2; exit 1; }
-mkdir -p "$OUT" "$DIR/results/$WRUN"
-LOG="$OUT/진행.log"
-
+# ---------- 공통 ----------
 say() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
 die() { local code="$1"; shift; say "!! $*"; exit "$code"; }
-PY=""
-for c in python3 python; do
-  if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then PY="$c"; break; fi
-done
-[ -n "$PY" ] || die 1 "Python 3.8 이상이 필요합니다"
+pick_python() {
+  local c
+  for c in python3 python; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then PY="$c"; return 0; fi
+  done
+  return 1
+}
 pypath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 py() { "$PY" -X utf8 "$@"; }
-if docker compose version >/dev/null 2>&1; then COMPOSE=(docker compose); else COMPOSE=(docker-compose); fi
+pick_compose() { if docker compose version >/dev/null 2>&1; then COMPOSE=(docker compose); else COMPOSE=(docker-compose); fi; }
 compose() { (cd "$REPO" && "${COMPOSE[@]}" "$@"); }
+git_repo() { (cd "$REPO" && git "$@"); }
 pg() { docker exec -i "$PG_CONTAINER" psql -U postgres -d ipo -v ON_ERROR_STOP=1 -qtA -F ' ' -c "$1"; }
+new_ipo_cmd() { (cd "$DIR" && bash seed/new_ipo.sh "$@"); }
+
+# 커밋하지 않은 변경이 있으면 결과가 어느 코드로 잰 것인지 알 수 없어서 시작하지 않는다 (official.sh와 같은 규칙. 시험 실행만 ALLOW_DIRTY=1)
+# DIRTY_N에 변경 수를 남긴다. 0 통과, 5 변경 있음 또는 git 확인 실패
+check_dirty() {
+  local st
+  st="$(git_repo status --porcelain)" || { echo "git 상태를 확인하지 못했습니다" >&2; return 5; }
+  DIRTY_N="$(printf '%s' "$st" | grep -c .)"
+  if [ "$DIRTY_N" != 0 ] && [ "${ALLOW_DIRTY:-0}" != 1 ]; then
+    printf '%s\n' "$st" >&2
+    echo "커밋하지 않은 변경 ${DIRTY_N}건. 커밋한 뒤 실행한다 (결과의 버전 추적). 시험 실행만 ALLOW_DIRTY=1" >&2
+    return 5
+  fi
+  return 0
+}
 
 # 모든 Consumer 그룹의 랙 합. 커밋 오프셋이 '-'인데 메시지가 있으면 끝 오프셋 전체를 대기로 센다 (official.sh와 같은 방식)
+# 조회가 실패하거나 읽을 행이 없으면 0이 아니라 실패를 돌려준다
 kafka_lag() {
-  docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:29092 --describe --all-groups 2>/dev/null \
+  local out
+  out="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:29092 --describe --all-groups 2>/dev/null)" || return 1
+  printf '%s\n' "$out" | tr -d '\r' \
     | awk '$3 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ { lag += ($4 ~ /^[0-9]+$/) ? $5 - $4 : $5; n++ } END { if (n == 0) exit 1; print lag + 0 }'
 }
 outbox_unpublished() {
   pg "select (select count(*) from subscription.outbox where published_at is null) + (select count(*) from account.outbox where published_at is null) + (select count(*) from allocation.outbox where published_at is null)"
 }
 # 인자: 쉼표로 구분한 공모주 ID, 제한 초. 진행 중 청약 0, 미발행 Outbox 0, 랙 0이 될 때까지 기다리고 걸린 초를 출력
+# 조회가 실패하면 0으로 보지 않고 다시 확인하고, 제한 시간이 지나면 실패
 drain() {
   local in start p o l
   in="'$(printf '%s' "$1" | sed "s/,/','/g")'"; start="$(date +%s)"
@@ -77,14 +80,26 @@ drain() {
        && o="$(outbox_unpublished)" && l="$(kafka_lag)" && [ "$p" = 0 ] && [ "$o" = 0 ] && [ "$l" = 0 ]; then
       echo $(( $(date +%s) - start )); return 0
     fi
-    sleep 2
+    sleep "$POLL"
   done
   return 1
 }
-# 인자: 이름, 개수. 공모주 ID를 쉼표로 이어 출력 (new_ipo.sh가 SQL 한 번으로 만든다)
+# 인자: 공모주 ID, 제한 초. CLOSED, ALLOCATED가 나오면 그 상태를 출력하고 성공.
+# 조회가 실패해 빈 값이 나오면 마감으로 보지 않고 다시 확인하고, 제한 시간이 지나면 마지막 조회 결과를 출력하고 실패
+wait_closed() {
+  local start st=""
+  start="$(date +%s)"
+  while :; do
+    st="$(pg "select status from subscription.ipo where ipo_id = '$1'")" || st=""
+    case "$st" in CLOSED|ALLOCATED) echo "$st"; return 0 ;; esac
+    [ $(( $(date +%s) - start )) -gt "$2" ] && { echo "${st:-조회 실패}"; return 1; }
+    sleep "$POLL"
+  done
+}
+# 인자: 이름, 개수. 공모주 ID를 쉼표로 이어 출력 (new_ipo.sh가 SQL 한 번으로 만든다). 개수가 다르면 실패
 new_ipos() {
   local ids n
-  ids="$(cd "$DIR" && bash seed/new_ipo.sh --name "$1" --count "$2" --price "$PRICE" | tr -d '\r ')" || return 1
+  ids="$(new_ipo_cmd --name "$1" --count "$2" --price "$PRICE" | tr -d '\r ')" || return 1
   n="$(printf '%s\n' "$ids" | grep -c .)"
   [ "$n" -eq "$2" ] || return 1
   printf '%s' "$ids" | paste -sd, -
@@ -97,7 +112,8 @@ wait_healthy() {
   done
   return 1
 }
-grace_env() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$SUB_CONTAINER" | grep '^IPO_CLOSE_GRACEPERIOD=' | cut -d= -f2; }
+# 청약 서비스 컨테이너에 들어간 마감 유예 환경변수 값 (없으면 빈 값)
+grace_env() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$SUB_CONTAINER" | tr -d '\r' | grep '^IPO_CLOSE_GRACEPERIOD=' | cut -d= -f2; }
 
 # --grace: 유예만 바꿔 청약 서비스를 다시 띄운다. 끝나면 덮어쓰기 없이 다시 띄워 원래 값으로 되돌린다
 restore_grace() {
@@ -107,93 +123,113 @@ restore_grace() {
   wait_healthy || say "!! 되돌린 뒤 healthy 대기 시간 초과. 직접 확인 필요"
   [ -z "$(grace_env)" ] && say "마감 유예 되돌림 확인 (기본값)" || say "!! 마감 유예 환경변수가 남아 있음. 직접 확인 필요"
 }
-docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1 || true
-if [ -n "$GRACE" ]; then
-  printf 'services:\n  subscription-service:\n    environment:\n      IPO_CLOSE_GRACEPERIOD: "%s"\n' "$GRACE" > "$REPO/$GRACE_FILE"
-  trap 'docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1; restore_grace' EXIT
-  say "마감 유예 $GRACE로 청약 서비스를 다시 띄움"
-  compose "${COMPOSE_FILES[@]}" -f "$GRACE_FILE" up -d subscription-service >> "$LOG" 2>&1 || die 1 "청약 서비스 재기동 실패"
-  wait_healthy || die 1 "청약 서비스 healthy 대기 시간 초과"
-  [ "$(grace_env)" = "$GRACE" ] || die 1 "컨테이너의 마감 유예가 $GRACE가 아님: '$(grace_env)'"
-else
-  trap 'docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1' EXIT
-  [ -z "$(grace_env)" ] || die 1 "청약 서비스에 마감 유예 덮어쓰기가 남아 있음: $(grace_env). --grace 없이 재야 하면 덮어쓰기 없이 다시 띄운다"
-fi
-GRACE_ACTUAL="${GRACE:-PT20S(기본)}"
 
-# 토큰 (1시간 만료): 워밍업(최대 WARM_MAX초)과 본 측정 전에 다시 받는다
-say "토큰 재발급"
-(cd "$REPO" && py loadtest/seed/seed_users.py --run-id "tok-$RUN_ID" --refresh-tokens) >> "$LOG" 2>&1 || die 1 "토큰 재발급 실패"
-U="$(($(grep -c . "$DIR/data/users.csv") - 1))"
-[ "$U" -ge 1 ] || die 1 "회원 CSV가 비어 있음"
+main() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --run-id) RUN_ID="$2"; shift 2 ;;
+      --grace) GRACE="$2"; shift 2 ;;
+      *) echo "알 수 없는 옵션: $1" >&2; exit 1 ;;
+    esac
+  done
+  [ -n "$RUN_ID" ] || { echo "사용: $0 --run-id <run_id> [--grace PT1S]" >&2; exit 1; }
+  check_dirty || exit $?
+  OUT="$DIR/results/$RUN_ID"; WRUN="$RUN_ID-W"
+  [ -e "$OUT" ] && { echo "이미 있는 run_id입니다: $OUT" >&2; exit 1; }
+  mkdir -p "$OUT" "$DIR/results/$WRUN"
+  LOG="$OUT/진행.log"
+  pick_python || die 1 "Python 3.8 이상이 필요합니다"
+  pick_compose
 
-# 워밍업: official.sh와 같은 방식 (WARM_RATE 일정 부하, warmup.py가 응답 시간 추세가 평평해졌다고 판정하면 멈춤)
-if [ "$WARM" = 1 ]; then
-  WIPOS="$(new_ipos "$WRUN" $(( ((WARM_MAX + 60) * WARM_RATE + U - 1) / U )))" || die 1 "워밍업 공모주 생성 실패"
-  say "워밍업 시작: ${WARM_RATE}건/초, 최소 ${WARM_MIN}초, 최대 ${WARM_MAX}초"
-  t0="$(date +%s)"
-  (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_NAME="k6-$WRUN" \
-    bash run-k6.sh s1 --ipo "${WIPOS%%,*}" --run-id "$WRUN" -e "IPO_IDS=$WIPOS" -e "RATE=$WARM_RATE" -e "DURATION=$((WARM_MAX + 60))s" -e "QUANTITY=$QUANTITY") \
-    > "$DIR/results/$WRUN/k6-console.out" 2>&1 &
-  kpid=$!
-  sleep 12
-  kill -0 "$kpid" 2>/dev/null || die 1 "워밍업 k6가 시작하자마자 끝남 (results/$WRUN/k6-console.out)"
-  py "$(pypath "$DIR/verify/warmup.py")" --since $((t0 + 10)) --csv "$(pypath "$OUT/warmup.csv")" --prometheus "${PROMETHEUS_URL:-http://127.0.0.1:9090}" \
-    --bucket "$WARM_BUCKET" --window "$WARM_WINDOW" --slope-pct "$WARM_SLOPE_PCT" --slope-ms "$WARM_SLOPE_MS" --consecutive "$WARM_CONSEC" \
-    --min "$WARM_MIN" --max "$WARM_MAX" >> "$LOG" 2>&1; wrc=$?
-  docker stop -t 30 "k6-$WRUN" >/dev/null 2>&1; wait "$kpid"
-  [ "$wrc" -eq 0 ] || die 1 "워밍업이 정상 상태에 닿지 않음 (warmup.py 종료 코드 $wrc, warmup.csv)"
-  d="$(drain "$WIPOS" "$DRAIN_TIMEOUT")" || die 1 "워밍업 뒤 소진 대기 시간 초과"
-  say "워밍업 끝: $(( $(date +%s) - t0 ))초, 소진 ${d}초. 30초 대기"
-  sleep 30
-fi
+  docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1 || true
+  if [ -n "$GRACE" ]; then
+    printf 'services:\n  subscription-service:\n    environment:\n      IPO_CLOSE_GRACEPERIOD: "%s"\n' "$GRACE" > "$REPO/$GRACE_FILE"
+    trap 'docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1; restore_grace' EXIT
+    say "마감 유예 $GRACE로 청약 서비스를 다시 띄움"
+    compose "${COMPOSE_FILES[@]}" -f "$GRACE_FILE" up -d subscription-service >> "$LOG" 2>&1 || die 1 "청약 서비스 재기동 실패"
+    wait_healthy || die 1 "청약 서비스 healthy 대기 시간 초과"
+    [ "$(grace_env)" = "$GRACE" ] || die 1 "컨테이너의 마감 유예가 $GRACE가 아님: '$(grace_env)'"
+  else
+    trap 'docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1' EXIT
+    [ -z "$(grace_env)" ] || die 1 "청약 서비스에 마감 유예 덮어쓰기가 남아 있음: $(grace_env). --grace 없이 재야 하면 덮어쓰기 없이 다시 띄운다"
+  fi
+  local grace_actual="${GRACE:-PT20S(기본)}"
 
-# 대상 1개 + 배경 (필요 수 = 올림((전체 요청 - 회원 수) / 회원 수), s2.js와 같은 계산)
-read -r WIN_MS TOTAL BG_N <<< "$(py -c "
+  # 토큰 (1시간 만료): 워밍업(최대 WARM_MAX초)과 본 측정 전에 다시 받는다
+  say "토큰 재발급"
+  (cd "$REPO" && py loadtest/seed/seed_users.py --run-id "tok-$RUN_ID" --refresh-tokens) >> "$LOG" 2>&1 || die 1 "토큰 재발급 실패"
+  local u
+  u="$(($(grep -c . "$DIR/data/users.csv") - 1))"
+  [ "$u" -ge 1 ] || die 1 "회원 CSV가 비어 있음"
+
+  # 워밍업: official.sh와 같은 방식 (WARM_RATE 일정 부하, warmup.py가 응답 시간 추세가 평평해졌다고 판정하면 멈춤)
+  local wipos t0 kpid wrc d
+  if [ "$WARM" = 1 ]; then
+    wipos="$(new_ipos "$WRUN" $(( ((WARM_MAX + 60) * WARM_RATE + u - 1) / u )))" || die 1 "워밍업 공모주 생성 실패"
+    say "워밍업 시작: ${WARM_RATE}건/초, 최소 ${WARM_MIN}초, 최대 ${WARM_MAX}초"
+    t0="$(date +%s)"
+    (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_NAME="k6-$WRUN" \
+      bash run-k6.sh s1 --ipo "${wipos%%,*}" --run-id "$WRUN" -e "IPO_IDS=$wipos" -e "RATE=$WARM_RATE" -e "DURATION=$((WARM_MAX + 60))s" -e "QUANTITY=$QUANTITY") \
+      > "$DIR/results/$WRUN/k6-console.out" 2>&1 &
+    kpid=$!
+    sleep 12
+    kill -0 "$kpid" 2>/dev/null || die 1 "워밍업 k6가 시작하자마자 끝남 (results/$WRUN/k6-console.out)"
+    py "$(pypath "$DIR/verify/warmup.py")" --since $((t0 + 10)) --csv "$(pypath "$OUT/warmup.csv")" --prometheus "${PROMETHEUS_URL:-http://127.0.0.1:9090}" \
+      --bucket "$WARM_BUCKET" --window "$WARM_WINDOW" --slope-pct "$WARM_SLOPE_PCT" --slope-ms "$WARM_SLOPE_MS" --consecutive "$WARM_CONSEC" \
+      --min "$WARM_MIN" --max "$WARM_MAX" >> "$LOG" 2>&1; wrc=$?
+    docker stop -t 30 "k6-$WRUN" >/dev/null 2>&1; wait "$kpid"
+    [ "$wrc" -eq 0 ] || die 1 "워밍업이 정상 상태에 닿지 않음 (warmup.py 종료 코드 $wrc, warmup.csv)"
+    d="$(drain "$wipos" "$DRAIN_TIMEOUT")" || die 1 "워밍업 뒤 소진 대기 시간 초과"
+    say "워밍업 끝: $(( $(date +%s) - t0 ))초, 소진 ${d}초. 30초 대기"
+    sleep 30
+  fi
+
+  # 대상 1개 + 배경 (필요 수 = 올림((전체 요청 - 회원 수) / 회원 수), s2.js와 같은 계산)
+  local win_ms total bg_n t bg now_ms start_at end_ms krc st jrc
+  read -r win_ms total bg_n <<< "$(py -c "
 import math
-U, RATE, PRE, POST, TS = $U, $RATE, $PRE, $POST, $TARGET_SEC
+U, RATE, PRE, POST, TS = $u, $RATE, $PRE, $POST, $TARGET_SEC
 win = TS if TS > 0 else U / RATE
 total = round(RATE * (PRE + win + POST))
 print(round(win * 1000), total, math.ceil((total - U) / U))")"
-T="$(new_ipos "$RUN_ID-T" 1)" || die 1 "대상 공모주 생성 실패"
-BG="$(new_ipos "$RUN_ID-BG" "$BG_N")" || die 1 "배경 공모주 생성 실패"
+  t="$(new_ipos "$RUN_ID-T" 1)" || die 1 "대상 공모주 생성 실패"
+  bg="$(new_ipos "$RUN_ID-BG" "$bg_n")" || die 1 "배경 공모주 생성 실패"
 
-# 시작 시각과 마감 시각은 컨테이너 시계(PostgreSQL, 게이트웨이, k6가 같은 Docker 시계)로 정한다
-NOW_MS="$(docker exec "$PG_CONTAINER" date +%s%3N)" || die 1 "컨테이너 시계 조회 실패"
-START_AT=$(( NOW_MS + LEAD * 1000 ))
-END_MS=$(( START_AT + PRE * 1000 + WIN_MS / 2 ))
-pg "update subscription.ipo set subscription_end_at = to_timestamp($END_MS / 1000.0) where ipo_id = '$T'" > /dev/null || die 1 "대상 공모주 마감 시각 설정 실패"
-{
-  echo "run_id=$RUN_ID git=$(cd "$REPO" && git rev-parse --short HEAD) branch=$(cd "$REPO" && git rev-parse --abbrev-ref HEAD) dirty=$DIRTY_N allow_dirty=${ALLOW_DIRTY:-0}"
-  echo "grace=$GRACE_ACTUAL rate=$RATE pre=$PRE post=$POST target_sec=$TARGET_SEC target_window_ms=$WIN_MS total=$TOTAL users=$U bg_ipos=$BG_N price=$PRICE quantity=$QUANTITY"
-  echo "target_ipo=$T start_at_ms=$START_AT end_at_ms=$END_MS"
-  echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY"
-} > "$OUT/env.txt"
-say "대상 $T 마감 시각 = 시작 + $((PRE * 1000 + WIN_MS / 2))ms. 부하 ${RATE}건/초 x 약 $(( TOTAL / RATE ))초 (배경 공모주 ${BG_N}개)"
+  # 시작 시각과 마감 시각은 컨테이너 시계(PostgreSQL, 게이트웨이, k6가 같은 Docker 시계)로 정한다
+  now_ms="$(docker exec "$PG_CONTAINER" date +%s%3N)" || die 1 "컨테이너 시계 조회 실패"
+  start_at=$(( now_ms + LEAD * 1000 ))
+  end_ms=$(( start_at + PRE * 1000 + win_ms / 2 ))
+  pg "update subscription.ipo set subscription_end_at = to_timestamp($end_ms / 1000.0) where ipo_id = '$t'" > /dev/null || die 1 "대상 공모주 마감 시각 설정 실패"
+  {
+    echo "run_id=$RUN_ID git=$(git_repo rev-parse --short HEAD) branch=$(git_repo rev-parse --abbrev-ref HEAD) dirty=$DIRTY_N allow_dirty=${ALLOW_DIRTY:-0}"
+    echo "grace=$grace_actual rate=$RATE pre=$PRE post=$POST target_sec=$TARGET_SEC target_window_ms=$win_ms total=$total users=$u bg_ipos=$bg_n price=$PRICE quantity=$QUANTITY"
+    echo "target_ipo=$t start_at_ms=$start_at end_at_ms=$end_ms"
+    echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY"
+  } > "$OUT/env.txt"
+  say "대상 $t 마감 시각 = 시작 + $((PRE * 1000 + win_ms / 2))ms. 부하 ${RATE}건/초 x 약 $(( total / RATE ))초 (배경 공모주 ${bg_n}개)"
 
-(cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_NAME="k6-$RUN_ID" \
-  bash run-k6.sh s2 --ipo "$T" --run-id "$RUN_ID" -e "IPO_IDS=$BG" -e "START_AT=$START_AT" -e "RATE=$RATE" -e "PRE=$PRE" \
-  -e "POST=$POST" -e "TARGET_SEC=$TARGET_SEC" -e "QUANTITY=$QUANTITY") > "$OUT/k6-console.out" 2>&1; krc=$?
-say "k6 종료 코드 $krc (0 통과, 99 임계값 위반)"
-case "$krc" in 0|99) ;; *) die 1 "k6 실행 실패 (k6-console.out)" ;; esac
+  (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_NAME="k6-$RUN_ID" \
+    bash run-k6.sh s2 --ipo "$t" --run-id "$RUN_ID" -e "IPO_IDS=$bg" -e "START_AT=$start_at" -e "RATE=$RATE" -e "PRE=$PRE" \
+    -e "POST=$POST" -e "TARGET_SEC=$TARGET_SEC" -e "QUANTITY=$QUANTITY") > "$OUT/k6-console.out" 2>&1; krc=$?
+  say "k6 종료 코드 $krc (0 통과, 99 임계값 위반)"
+  case "$krc" in 0|99) ;; *) die 1 "k6 실행 실패 (k6-console.out)" ;; esac
 
-# 대상 공모주 마감(CLOSED 또는 ALLOCATED)과 전체 소진을 기다린다. 조회가 실패해 빈 값이 나오면 마감으로 보지 않고 다시 확인한다
-start="$(date +%s)"; st=""
-while :; do
-  st="$(pg "select status from subscription.ipo where ipo_id = '$T'")" || st=""
-  case "$st" in CLOSED|ALLOCATED) break ;; esac
-  [ $(( $(date +%s) - start )) -gt "$CLOSE_TIMEOUT" ] && die 1 "대상 공모주가 ${CLOSE_TIMEOUT}초 안에 마감되지 않음 (마지막 조회: '${st:-조회 실패}')"
-  sleep 2
-done
-d="$(drain "$T,$BG" "$DRAIN_TIMEOUT")" || die 1 "소진 대기 시간 초과"
-say "마감 확인, 소진 ${d}초"
+  # 대상 공모주 마감(CLOSED 또는 ALLOCATED)과 전체 소진을 기다린다
+  st="$(wait_closed "$t" "$CLOSE_TIMEOUT")" || die 1 "대상 공모주가 ${CLOSE_TIMEOUT}초 안에 마감되지 않음 (마지막 조회: '$st')"
+  d="$(drain "$t,$bg" "$DRAIN_TIMEOUT")" || die 1 "소진 대기 시간 초과"
+  say "마감 확인 ($st), 소진 ${d}초"
 
-# 정합성 SQL (마감된 공모주 검사 20~22번 포함). 판정이 결과를 읽으므로 실패하면 멈춘다
-(cd "$DIR" && bash verify.sh --ipo "$T" --run-id "$RUN_ID") >> "$LOG" 2>&1 || die 1 "verify.sh 실패 (sql_result.txt 확인)"
+  # 정합성 SQL (마감된 공모주 검사 20~22번 포함). 판정이 결과를 읽으므로 실패하면 멈춘다
+  (cd "$DIR" && bash verify.sh --ipo "$t" --run-id "$RUN_ID") >> "$LOG" 2>&1 || die 1 "verify.sh 실패 (sql_result.txt 확인)"
 
-# 판정 (verify/s2_judge.py): k6 로그가 필요한 것(회차 유효성, 202인데 행 없음)은 직접 계산하고, DB만 보는 검사는 verify.sql 20~22번 결과를 읽는다
-py "$(pypath "$DIR/verify/s2_judge.py")" --requests "$(pypath "$OUT/requests.log")" --summary "$(pypath "$OUT/summary.json")"   --sql-result "$(pypath "$OUT/sql_result.txt")" --ipo "$T" --end-ms "$END_MS" --container "$PG_CONTAINER" > "$OUT/s2-judge.txt"
-jrc=$?
-cat "$OUT/s2-judge.txt" | tee -a "$LOG"
-[ "$jrc" -eq 0 ] || { [ "$jrc" -eq 3 ] && exit 3; die 1 "판정 스크립트 실패 (종료 코드 $jrc)"; }
-say "끝: $OUT"
+  # 판정 (verify/s2_judge.py): k6 로그가 필요한 것(회차 유효성, 202인데 행 없음)은 직접 계산하고, DB만 보는 검사는 verify.sql 20~22번 결과를 읽는다
+  py "$(pypath "$DIR/verify/s2_judge.py")" --requests "$(pypath "$OUT/requests.log")" --summary "$(pypath "$OUT/summary.json")" \
+    --sql-result "$(pypath "$OUT/sql_result.txt")" --ipo "$t" --end-ms "$end_ms" --container "$PG_CONTAINER" > "$OUT/s2-judge.txt"
+  jrc=$?
+  tee -a "$LOG" < "$OUT/s2-judge.txt"
+  [ "$jrc" -eq 0 ] || { [ "$jrc" -eq 3 ] && exit 3; die 1 "판정 스크립트 실패 (종료 코드 $jrc)"; }
+  say "끝: $OUT"
+}
+
+# source로 불러오면(테스트) main을 실행하지 않는다
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

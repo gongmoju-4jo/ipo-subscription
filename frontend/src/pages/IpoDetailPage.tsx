@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAccounts, useIpo, keys } from '../api/queries';
@@ -18,11 +18,11 @@ export function IpoDetailPage() {
 
   const [qty, setQty] = useState<number>(0);
   const [accountId, setAccountId] = useState('');
-  // 같은 신청을 여러 번 눌러도 한 건이 되도록 requestId를 멱등키로 쓴다
-  // 아직 보낸 적 없는 다음 신청용 ID. 한 번 보내면 결과와 관계없이 새로 만든다
-  const [freshRequestId, setFreshRequestId] = useState(newRequestId);
-  // 결과를 모르는 신청(응답이 끊김, 5xx). 같은 계좌, 수량으로 다시 보내면 이 ID를 그대로 쓴다
-  const [pending, setPending] = useState<{ accountId: string; qty: number; requestId: string } | null>(null);
+  // 결과가 불명확한 요청은 제출 당시 조건과 함께 보존한다.
+  const [pending, setPending] = useState<{
+    ipoId: string; accountId: string; qty: number; requestId: string; subscriptionId?: string;
+  } | null>(null);
+  const submitting = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -33,10 +33,6 @@ export function IpoDetailPage() {
     const first = accounts.data?.items[0];
     if (first && !accountId) setAccountId(first.accountId);
   }, [accounts.data, accountId]);
-  // 같은 requestId는 같은 내용으로만 보낸다. 결과 모르는 신청과 계좌, 수량이 같으면 그 ID, 다르면 새 ID
-  // (내용을 바꿔 새 ID로 보내도 사람 기준 이중청약 제약으로 두 번째는 거절돼서 증거금이 두 번 빠지지 않는다)
-  const requestId = pending && pending.accountId === accountId && pending.qty === qty ? pending.requestId : freshRequestId;
-
   const account = accounts.data?.items.find((a) => a.accountId === accountId);
   const expected = useMemo(() => (ipo.data ? Math.round(qty * ipo.data.offerPrice * Number(ipo.data.marginRate)) : 0), [qty, ipo.data]);
 
@@ -49,21 +45,48 @@ export function IpoDetailPage() {
   const short = account ? expected > account.cashBalance : false;
 
   async function submit() {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError(null);
-    const sent = { accountId, qty, requestId };
-    setFreshRequestId(newRequestId());
+    const sameConditions = pending && pending.ipoId === ipoId && pending.accountId === accountId && pending.qty === qty;
     try {
-      const res = await subscriptionApi.create({ requestId: sent.requestId, ipoId, accountId: sent.accountId, requestedQuantity: sent.qty });
-      queryClient.invalidateQueries({ queryKey: keys.subscriptions });
-      queryClient.invalidateQueries({ queryKey: keys.accounts });
-      navigate(`/subscriptions/${res.subscriptionId}?from=new`);
+      if (pending && !sameConditions) {
+        // 원래 내용으로 재접수해 응답을 잃은 청약 ID를 복구한다.
+        // 조회 404도 저장 지연일 수 있으므로 새 요청을 허용하지 않는다.
+        const subscriptionId = pending.subscriptionId ?? (await subscriptionApi.create({
+          requestId: pending.requestId, ipoId: pending.ipoId,
+          accountId: pending.accountId, requestedQuantity: pending.qty,
+        })).subscriptionId;
+        setPending({ ...pending, subscriptionId });
+        const previous = await subscriptionApi.get(subscriptionId);
+        if (previous.status !== 'REJECTED' && previous.status !== 'CANCELLED') {
+          navigate(`/subscriptions/${subscriptionId}`);
+          return;
+        }
+        setPending(null);
+      }
+
+      const sent = sameConditions ? pending : { ipoId, accountId, qty, requestId: newRequestId() };
+      setPending(sent);
+      try {
+        const res = await subscriptionApi.create({
+          requestId: sent.requestId, ipoId: sent.ipoId,
+          accountId: sent.accountId, requestedQuantity: sent.qty,
+        });
+        setPending(null);
+        queryClient.invalidateQueries({ queryKey: keys.subscriptions });
+        queryClient.invalidateQueries({ queryKey: keys.accounts });
+        navigate(`/subscriptions/${res.subscriptionId}?from=new`);
+      } catch (e) {
+        // 최초 제출의 4xx만 확정 실패다. 재시도 오류는 이전 접수 여부를 확정하지 못한다.
+        if (!sameConditions && e instanceof ApiError && e.status >= 400 && e.status < 500) setPending(null);
+        throw e;
+      }
     } catch (e) {
       setError(e);
-      // 업무 오류(마감 등, 4xx)는 결과를 안다. 네트워크 오류(0), 5xx는 서버에 도착했을 수 있어 같은 ID로 다시 보내게 보존한다
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) setPending((p) => (p?.requestId === sent.requestId ? null : p));
-      else setPending(sent);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }

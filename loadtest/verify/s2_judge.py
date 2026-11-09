@@ -75,14 +75,18 @@ def judge(requests_log, summary_path, sql_result, ipo, end_ms):
     # 요청 순번으로 대상 구간을 정하므로(k6 iterationInTest는 보낸 요청만 센다), 밀린 요청이 있으면 대상 구간이 그만큼 뒤로 밀린다
     with open(summary_path, encoding="utf-8") as f:
         metrics = json.load(f)["metrics"]
-    dropped = int(metrics.get("dropped_iterations", {}).get("count", 0))
+    # s2.js가 dropped_iterations에 임계값을 걸어 요약에 늘 남는다. 없으면 0으로 넘기지 않고 입력 오류
+    if "count" not in metrics.get("dropped_iterations", {}):
+        raise ValueError("summary.json에 dropped_iterations.count가 없음 (s2.js의 밀린 요청 수)")
+    dropped = int(metrics["dropped_iterations"]["count"])
     if dropped:
         reasons.append(f"밀린 요청 {dropped}건 (대상 구간이 계획보다 늦어짐)")
     # k6 응답 검사(상태 코드와 오류 코드, 예: 대상 422가 SUBSCRIPTION_CLOSED인지)가 하나라도 실패하면 무효.
     # s2.sh는 k6 종료 코드 99(임계값 위반)를 판정까지 넘기므로, k6가 잡는 것은 여기서도 무효 이유로 남긴다
-    if "checks" not in metrics:
-        raise ValueError("summary.json에 checks가 없음 (s2.js의 응답 검사 결과)")
-    check_fails = int(metrics["checks"].get("fails", 0))
+    # 확인하지 못한 값을 0으로 넘기지 않는다: checks나 실패 수(fails)가 없으면 입력 오류
+    if "fails" not in metrics.get("checks", {}):
+        raise ValueError("summary.json에 checks.fails가 없음 (s2.js의 응답 검사 결과)")
+    check_fails = int(metrics["checks"]["fails"])
     if check_fails:
         reasons.append(f"k6 응답 검사 실패 {check_fails}건 (상태 코드나 오류 코드가 기대와 다름)")
     if ts.get(202, 0) == 0 or ts.get(422, 0) == 0:

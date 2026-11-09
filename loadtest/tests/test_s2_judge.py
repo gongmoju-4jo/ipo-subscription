@@ -48,6 +48,8 @@ class Case:
         self.dropped = 0
         self.check_fails = 0
         self.no_checks = False
+        self.checks = None   # 주면 checks 칸을 그대로 쓴다
+        self.no_dropped = False
         self.sql = SQL_OK
         self.closed = [["1794215376.497", "2"]]   # ipo.closed Outbox: 생성 시각, confirmedCount
         self.subs = ["t1", "t2"]                  # 대상 공모주 청약 행의 request_id
@@ -69,8 +71,10 @@ class Case:
                 f.write('time="2026-11-09T09:00:00Z" level=info msg="' + json.dumps(r).replace('"', '\\"') + '" source=console\n')
         summ = os.path.join(self.tmp, "summary.json")
         with open(summ, "w", encoding="utf-8") as f:
-            m = {"dropped_iterations": {"count": self.dropped, "rate": 0}}
-            if not self.no_checks:
+            m = {} if self.no_dropped else {"dropped_iterations": {"count": self.dropped, "rate": 0}}
+            if self.checks is not None:
+                m["checks"] = self.checks
+            elif not self.no_checks:
                 m["checks"] = {"passes": 100, "fails": self.check_fails, "value": 1}
             json.dump({"metrics": m}, f)
         sqlf = os.path.join(self.tmp, "sql_result.txt")
@@ -116,11 +120,25 @@ class S2JudgeTest(unittest.TestCase):
         self.assertIn("k6 응답 검사 실패 2건", out)
 
     def test_missing_checks_in_summary_is_an_input_error(self):
+        # 확인하지 못한 실패 수를 0으로 넘기지 않는다: checks가 없거나, 비었거나, fails가 없으면 입력 오류
+        for name, checks in (("checks 없음", None), ("빈 checks", {}), ("fails 없음", {"passes": 100})):
+            with self.subTest(name):
+                c = Case().normal()
+                if checks is None:
+                    c.no_checks = True
+                else:
+                    c.checks = checks
+                rc, out, err = c.run()
+                self.assertEqual(rc, 1)
+                self.assertIn("checks.fails가 없음", err)
+                self.assertEqual(out, "")
+
+    def test_missing_dropped_count_is_an_input_error(self):
         c = Case().normal()
-        c.no_checks = True
+        c.no_dropped = True
         rc, out, err = c.run()
         self.assertEqual(rc, 1)
-        self.assertIn("checks가 없음", err)
+        self.assertIn("dropped_iterations.count가 없음", err)
 
     def test_no_422_means_close_time_outside_target_window(self):
         c = Case().req("t1", 202).req("t2", 202)

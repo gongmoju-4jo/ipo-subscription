@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { LogoMark } from './Logo';
 import { ApiInspector } from '../demo/ApiInspector';
+import { DEMO } from '../demo/flag';
 
 export function Layout() {
   const { session, logout } = useAuth();
@@ -19,8 +20,8 @@ export function Layout() {
             <NavLink to="/ipos">공모주</NavLink>
             <NavLink to="/subscriptions">내 청약</NavLink>
             <NavLink to="/account">계좌</NavLink>
-            <NavLink to="/system" className="ops-link">시스템 현황</NavLink>
-            <NavLink to="/goals" className="ops-link">성과와 로드맵</NavLink>
+            {DEMO && <NavLink to="/system" className="ops-link">시스템 현황</NavLink>}
+            {DEMO && <NavLink to="/goals" className="ops-link">성과와 로드맵</NavLink>}
           </nav>
           <div className="user-chip">
             <span>{session?.loginId}님</span>

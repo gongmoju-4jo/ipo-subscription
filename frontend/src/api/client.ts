@@ -62,11 +62,14 @@ function remember(rec: Omit<ExchangeRecord, 'id'>) {
   recent.length = Math.min(recent.length, RECENT_LIMIT);
   listeners.forEach((fn) => fn());
 }
+// 응답은 { success, data: { accessToken } }처럼 중첩돼서 안쪽까지 내려가며 가린다
+const SENSITIVE_KEYS = new Set(['password', 'accessToken']);
 function redact(body: unknown): unknown {
+  if (Array.isArray(body)) return body.map(redact);
   if (body && typeof body === 'object') {
-    const copy: Record<string, unknown> = { ...(body as Record<string, unknown>) };
-    for (const k of ['password', 'accessToken']) if (k in copy) copy[k] = '(가림)';
-    return copy;
+    return Object.fromEntries(
+      Object.entries(body as Record<string, unknown>).map(([k, v]) => [k, SENSITIVE_KEYS.has(k) ? '(가림)' : redact(v)]),
+    );
   }
   return body;
 }
@@ -98,7 +101,8 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   remember({ at: new Date().toISOString(), method, path, status: res.status, durationMs: Math.round(performance.now() - started), requestHeaders: shownHeaders, requestBody: redact(body), responseBody: redact(json ?? text) });
 
   if (!res.ok || json?.success === false) {
-    if (res.status === 401 && onUnauthorized) onUnauthorized();
+    // 운영 조회 서버(/ops)의 401은 그 서버 설정 문제일 수 있어서 로그아웃시키지 않는다
+    if (res.status === 401 && !path.startsWith('/ops/') && onUnauthorized) onUnauthorized();
     throw new ApiError(res.status, json?.error, path);
   }
   return (json?.data ?? (json as unknown)) as T;

@@ -39,7 +39,14 @@ const pool = new pg.Pool({
   options: '-c default_transaction_read_only=on',
 });
 
-const kafka = new Kafka({ clientId: 'ops-demo', brokers: env('OPS_KAFKA', 'localhost:29092').split(','), logLevel: logLevel.NOTHING });
+// Kafka가 꺼져 있을 때 기본 재시도(5회)로 화면이 오래 멈추지 않게 짧게 둔다
+const kafka = new Kafka({
+  clientId: 'ops-demo',
+  brokers: env('OPS_KAFKA', 'localhost:29092').split(','),
+  logLevel: logLevel.NOTHING,
+  connectionTimeout: 2000,
+  retry: { retries: 1 },
+});
 
 function readDotEnv(file) {
   const out = {};
@@ -191,7 +198,28 @@ const CHECKS = [
   },
 ];
 
+// DLT 토픽별 메시지 수. 실패해도 예외 대신 { dlt: null, dltError }로 돌려준다
+async function dltCounts() {
+  const admin = kafka.admin();
+  try {
+    await admin.connect();
+    const topics = (await admin.listTopics()).filter((t) => t.endsWith('.DLT')).sort();
+    const dlt = [];
+    for (const t of topics) {
+      const offs = await admin.fetchTopicOffsets(t);
+      dlt.push({ topic: t, messages: offs.reduce((a, o) => a + (Number(o.high) - Number(o.low)), 0) });
+    }
+    return { dlt };
+  } catch (e) {
+    return { dlt: null, dltError: `Kafka 조회 실패: ${e.message}` };
+  } finally {
+    await admin.disconnect().catch(() => {});
+  }
+}
+
 async function summary() {
+  // Kafka 조회가 늦어도 DB 결과가 같이 늦어지지 않게 동시에 시작한다
+  const kafkaPart = dltCounts();
   const outbox = await q(`select 'account' as service, count(*) filter (where published_at is null) as c from account.outbox
      union all select 'subscription', count(*) filter (where published_at is null) from subscription.outbox
      union all select 'allocation', count(*) filter (where published_at is null) from allocation.outbox`);
@@ -204,22 +232,7 @@ async function summary() {
       checks.push({ id: c.id, name: c.name, description: c.description, violations: null, error: String(e.message) });
     }
   }
-  let dlt = null;
-  let dltError;
-  const admin = kafka.admin();
-  try {
-    await admin.connect();
-    const topics = (await admin.listTopics()).filter((t) => t.endsWith('.DLT')).sort();
-    dlt = [];
-    for (const t of topics) {
-      const offs = await admin.fetchTopicOffsets(t);
-      dlt.push({ topic: t, messages: offs.reduce((a, o) => a + (Number(o.high) - Number(o.low)), 0) });
-    }
-  } catch (e) {
-    dltError = `Kafka 조회 실패: ${e.message}`;
-  } finally {
-    await admin.disconnect().catch(() => {});
-  }
+  const { dlt, dltError } = await kafkaPart;
   return [200, { outboxUnpublished: outbox.map((o) => ({ service: o.service, count: Number(o.c) })), dlt, dltError, checks, checkedAt: new Date().toISOString() }];
 }
 
@@ -255,7 +268,7 @@ async function dltMessages(topic, limit) {
   await consumer.connect();
   try {
     await consumer.subscribe({ topic, fromBeginning: true });
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, 5000);
       consumer.run({
         eachMessage: async ({ partition, message }) => {
@@ -278,6 +291,10 @@ async function dltMessages(topic, limit) {
             resolve();
           }
         },
+      }).catch((e) => {
+        // 구독 시작이 실패하면 5초 뒤 빈 목록이 아니라 오류로 돌려준다
+        clearTimeout(timer);
+        reject(e);
       });
     });
   } finally {

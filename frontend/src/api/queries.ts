@@ -3,6 +3,7 @@ import { accountApi, allocationApi, ipoApi, subscriptionApi } from './endpoints'
 import { ApiError } from './client';
 import { opsApi } from './ops';
 import { inProgressStatuses } from '../lib/status';
+import { DEMO } from '../demo/flag';
 
 // 서버 상태(조회 결과)는 React Query가 관리한다. 화면 상태(입력값 등)는 각 화면이 관리한다
 
@@ -57,4 +58,4 @@ export const useTrace = (id: string, live: boolean) =>
   useQuery({ queryKey: keys.trace(id), queryFn: () => opsApi.trace(id), retry: false, refetchInterval: live ? 2000 : false });
 
 export const useOpsSummary = () =>
-  useQuery({ queryKey: keys.opsSummary, queryFn: opsApi.summary, retry: false, refetchInterval: 5000 });
+  useQuery({ queryKey: keys.opsSummary, queryFn: opsApi.summary, retry: false, refetchInterval: 5000, enabled: DEMO });

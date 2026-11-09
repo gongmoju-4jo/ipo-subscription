@@ -52,8 +52,9 @@ export function IpoDetailPage() {
       navigate(`/subscriptions/${res.subscriptionId}?from=new`);
     } catch (e) {
       setError(e);
-      // 업무 오류(마감 등)는 같은 요청을 다시 보내도 결과가 같아서 새 요청 ID로 바꾼다
-      if (e instanceof ApiError && e.status < 500) setRequestId(newRequestId());
+      // 업무 오류(마감 등, 4xx)는 같은 요청을 다시 보내도 결과가 같아서 새 요청 ID로 바꾼다
+      // 네트워크 오류(0)는 서버에 도착했을 수 있어 같은 ID로 다시 보내야 청약이 1건으로 남는다
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) setRequestId(newRequestId());
     } finally {
       setBusy(false);
     }

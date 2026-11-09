@@ -13,6 +13,7 @@ import { SubscriptionDetailPage } from './pages/SubscriptionDetailPage';
 import { AccountPage } from './pages/AccountPage';
 import { SystemPage } from './pages/SystemPage';
 import { GoalsPage } from './pages/GoalsPage';
+import { DEMO } from './demo/flag';
 import './styles/global.css';
 
 const queryClient = new QueryClient({
@@ -44,8 +45,8 @@ createRoot(document.getElementById('root')!).render(
               <Route path="subscriptions" element={<SubscriptionsPage />} />
               <Route path="subscriptions/:subscriptionId" element={<SubscriptionDetailPage />} />
               <Route path="account" element={<AccountPage />} />
-              <Route path="system" element={<SystemPage />} />
-              <Route path="goals" element={<GoalsPage />} />
+              {DEMO && <Route path="system" element={<SystemPage />} />}
+              {DEMO && <Route path="goals" element={<GoalsPage />} />}
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

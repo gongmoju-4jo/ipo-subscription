@@ -150,8 +150,8 @@ export function GoalsPage() {
           <table className="table">
             <thead><tr><th>목표</th><th>목표값</th><th>측정값</th><th>판정</th><th>출처</th></tr></thead>
             <tbody>
-              {GOALS.map((g, i) => (
-                <tr key={i}>
+              {GOALS.map((g) => (
+                <tr key={`${g.id}-${g.name}`}>
                   <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{g.id} {g.name}</td>
                   <td className="sub">{g.target}</td>
                   <td style={{ fontWeight: 700 }}><span className="lines">{g.measured}</span></td>

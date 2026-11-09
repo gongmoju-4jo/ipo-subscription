@@ -58,7 +58,8 @@ export function AccountPage() {
       refresh();
     } catch (e) {
       setError(e);
-      if (e instanceof ApiError && e.status < 500) setDepositRequestId(newRequestId());
+      // 서버가 4xx로 확정 거절한 경우만 새 요청 ID. 네트워크 오류(0)는 서버에 도착했을 수 있어 같은 ID로 다시 보낸다
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) setDepositRequestId(newRequestId());
     } finally {
       setBusy(false);
     }

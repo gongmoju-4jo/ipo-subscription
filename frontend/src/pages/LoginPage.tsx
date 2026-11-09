@@ -22,7 +22,11 @@ export function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      if (mode === 'signup') await authApi.signUp({ loginId, password, name });
+      if (mode === 'signup') {
+        await authApi.signUp({ loginId, password, name });
+        // 가입 뒤 로그인이 실패해 다시 누르면 가입은 건너뛰고 로그인만 하게
+        setMode('login');
+      }
       await login(loginId, password);
       navigate('/');
     } catch (err) {

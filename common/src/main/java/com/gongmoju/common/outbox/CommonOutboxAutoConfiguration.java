@@ -5,6 +5,7 @@ import jakarta.persistence.EntityManagerFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurationPackage;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
@@ -34,17 +35,19 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class CommonOutboxAutoConfiguration {
 
     /**
-     * 메시지 팩토리를 등록한다.
+     * 메시지 팩토리를 등록한다. 같은 타입의 빈이 이미 있으면 등록하지 않는다.
      */
     @Bean
+    @ConditionalOnMissingBean
     OutboxMessageFactory outboxMessageFactory(ObjectMapper objectMapper) {
         return new OutboxMessageFactory(objectMapper);
     }
 
     /**
-     * 발행기를 등록한다. 스케줄링은 아래 {@link SchedulingConfig}가 켠다.
+     * 발행기를 등록한다. 같은 타입의 빈이 이미 있으면 등록하지 않는다. 스케줄링은 아래 {@link SchedulingConfig}가 켠다.
      */
     @Bean
+    @ConditionalOnMissingBean
     OutboxPublisher outboxPublisher(OutboxJpaRepository outboxRepository,
                                     OutboxMessageFactory messageFactory,
                                     KafkaTemplate<String, String> kafkaTemplate,

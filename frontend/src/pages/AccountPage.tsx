@@ -15,7 +15,7 @@ export function AccountPage() {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState('');
   const [amount, setAmount] = useState(1_000_000);
-  // 아직 보낸 적 없는 다음 입금용 ID. 한 번 보내면 결과와 관계없이 새로 만든다
+  // 입금 결과가 확인된 뒤에만 다음 입금용 ID를 만든다
   const [freshRequestId, setFreshRequestId] = useState(newRequestId);
   // 결과를 모르는 입금(응답이 끊김, 5xx). 같은 계좌, 금액으로 다시 보내면 이 ID를 그대로 써서 두 번 입금되지 않게
   const [pending, setPending] = useState<{ accountId: string; amount: number; requestId: string } | null>(null);
@@ -28,8 +28,6 @@ export function AccountPage() {
     if (!selected && items[0]) setSelected(items[0].accountId);
   }, [items, selected]);
   const account = items.find((a) => a.accountId === selected);
-  // 같은 requestId는 같은 내용으로만 보낸다. 결과 모르는 입금과 계좌, 금액이 같으면 그 ID, 다르면 새 ID
-  const depositRequestId = pending && pending.accountId === selected && pending.amount === amount ? pending.requestId : freshRequestId;
   const ledger = useLedger(account?.accountId);
 
   const refresh = () => {
@@ -56,18 +54,21 @@ export function AccountPage() {
     setBusy(true);
     setError(null);
     setDone(null);
-    const sent = { accountId: account.accountId, amount, requestId: depositRequestId };
-    setFreshRequestId(newRequestId());
+    const sent = pending ?? { accountId: account.accountId, amount, requestId: freshRequestId };
+    setPending(sent);
     try {
       const r = await accountApi.deposit(sent.accountId, sent.amount, sent.requestId);
       setDone(`${formatWon(r.amount)} 입금했어요. 예수금 ${formatWon(r.cashBalance)}`);
-      setPending((p) => (p?.requestId === sent.requestId ? null : p));
+      setPending(null);
+      setFreshRequestId(newRequestId());
       refresh();
     } catch (e) {
       setError(e);
       // 4xx는 서버가 확정 거절한 것이라 결과를 안다. 네트워크 오류(0), 5xx는 서버에 반영됐을 수 있어 보존한다
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) setPending((p) => (p?.requestId === sent.requestId ? null : p));
-      else setPending(sent);
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
+        setPending(null);
+        setFreshRequestId(newRequestId());
+      }
     } finally {
       setBusy(false);
     }
@@ -80,7 +81,7 @@ export function AccountPage() {
           <div className="page-title">계좌</div>
           <p className="page-sub">가상 계좌예요. 실제 금전 거래는 발생하지 않아요</p>
         </div>
-        <button className="btn btn-ghost" onClick={open} disabled={busy}>+ 계좌 만들기</button>
+        <button className="btn btn-ghost" onClick={open} disabled={busy || pending !== null}>+ 계좌 만들기</button>
       </div>
 
       {accounts.isLoading ? (
@@ -88,13 +89,13 @@ export function AccountPage() {
       ) : accounts.error ? (
         <ErrorBox error={accounts.error} />
       ) : items.length === 0 ? (
-        <Card><Empty title="계좌가 없어요" desc="계좌를 만들면 가상 예수금을 넣고 청약할 수 있어요" action={<button className="btn btn-primary" onClick={open} disabled={busy}>계좌 만들기</button>} /></Card>
+        <Card><Empty title="계좌가 없어요" desc="계좌를 만들면 가상 예수금을 넣고 청약할 수 있어요" action={<button className="btn btn-primary" onClick={open} disabled={busy || pending !== null}>계좌 만들기</button>} /></Card>
       ) : (
         <>
           {items.length > 1 && (
             <div className="tabs wrap">
               {items.map((a) => (
-                <button key={a.accountId} className={a.accountId === selected ? 'on' : ''} onClick={() => setSelected(a.accountId)}>{a.accountNumber}</button>
+                <button key={a.accountId} className={a.accountId === selected ? 'on' : ''} disabled={busy || pending !== null} onClick={() => setSelected(a.accountId)}>{a.accountNumber}</button>
               ))}
             </div>
           )}
@@ -113,14 +114,14 @@ export function AccountPage() {
               <div className="stack">
                 <div className="row wrap">
                   {QUICK.map((q) => (
-                    <button key={q} className={`btn btn-sm ${amount === q ? 'btn-dark' : 'btn-ghost'}`} onClick={() => setAmount(q)}>{formatWon(q)}</button>
+                    <button key={q} className={`btn btn-sm ${amount === q ? 'btn-dark' : 'btn-ghost'}`} disabled={busy || pending !== null} onClick={() => setAmount(q)}>{formatWon(q)}</button>
                   ))}
                 </div>
-                <input className="input num" type="number" min={1} value={amount || ''} onChange={(e) => setAmount(Math.floor(Number(e.target.value)))} />
+                <input className="input num" type="number" disabled={busy || pending !== null} min={1} value={amount || ''} onChange={(e) => setAmount(Math.floor(Number(e.target.value)))} />
                 {done && <div className="notice success">{done}</div>}
                 {error !== null && <ErrorBox error={error} title="처리하지 못했어요" />}
-                <button className="btn btn-primary btn-block" onClick={deposit} disabled={busy || amount <= 0}>{busy ? '처리 중…' : `${formatWon(amount)} 입금하기`}</button>
-                <div className="hint">같은 입금을 두 번 눌러도 요청 ID가 같아서 한 번만 반영돼요</div>
+                <button className="btn btn-primary btn-block" onClick={deposit} disabled={busy || amount <= 0}>{busy ? '처리 중…' : pending ? `${formatWon(pending.amount)} 입금 결과 확인하기` : `${formatWon(amount)} 입금하기`}</button>
+                <div className="hint">입금 결과를 확인하지 못하면 같은 계좌·금액으로 재시도해요. 결과 확인 후 새 입금을 할 수 있어요</div>
                 <DesignNote title="잔고와 원장이 어긋나지 않는 이유">
                   <ul className="dots">
                     <li>잔고를 바꾸는 곳은 계좌 서비스의 정해진 메서드 하나뿐이에요.</li>

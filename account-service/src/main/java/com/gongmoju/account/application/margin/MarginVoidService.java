@@ -54,19 +54,29 @@ public class MarginVoidService {
                 command.eventId(), command.subscriptionId(), command.accountId(), command.reason());
 
         // 2. 계좌 락: margin 조회보다 먼저 걸어서, 같은 계좌의 인출, 반환이 순서대로 처리된다.
-        //   - 계좌가 없으면 margin 유무와 관계없이 DLT로 보낸다 (E-20)
-        //   - 락을 걸 계좌가 없어서, 커밋 전인 다른 계좌의 인출과 순서를 보장할 수 없다.
-        //   - margin 조회에서 인출 내역이 누락될 수 있고, fk 제약으로 반환 기록(margin_void_intent)도 저장할 수 없다.
-        //   - 따라서 0원 반환으로 처리하면 뒤늦게 커밋되는 인출을 막을 수 없다.
-        //   - 예외로 롤백되어 processed_event도 남지 않고, 청약은 DLT 처리 전까지 COMPENSATING 상태로 남는다.
+        //   - 계좌가 없으면 옮긴 돈도 없어서 amount 0으로 응답한다 (E-20). FK 때문에 반환 기록도 남길 수 없다
         Account account = accountRepository.findByIdForUpdate(command.accountId()).orElse(null);
         if (account == null) {
-            log.error("[증거금 반환] 요청 계좌가 없어 DLT 대상. eventId={}, subscriptionId={}, accountId={}",
+
+            // 요청 계좌는 없는데 margin이 있으면, margin의 계좌와 다른 것이므로 계좌 불일치가 우선, DLT로 전송 (E-20)
+            //   - 락을 걸 계좌가 없어서, 처리 중인 다른 계좌의 인출과 충돌 가능
+            if (marginRepository.findBySubscriptionId(command.subscriptionId()).isPresent()) {
+
+                log.error("[증거금 반환] 요청 계좌는 없는데 margin이 있어 DLT 대상. eventId={}, subscriptionId={}, accountId={}",
+                        command.eventId(), command.subscriptionId(), command.accountId());
+
+                throw new InvalidEventException(
+                        "증거금 계좌와 요청 계좌가 다릅니다. subscriptionId=" + command.subscriptionId()
+                );
+            }
+            log.warn("[증거금 반환] 계좌 없음, amount 0으로 응답. eventId={}, subscriptionId={}, accountId={}",
                     command.eventId(), command.subscriptionId(), command.accountId());
-            throw new InvalidEventException(
-                    "반환 요청 계좌가 없습니다. subscriptionId="
-                            + command.subscriptionId() 
-                            + ", accountId=" + command.accountId());
+
+            marginEventPublisher.publishVoided( // 0원으로 이벤트 발행
+                    new MarginVoided(
+                            command.subscriptionId(), null, command.accountId(), 0
+                    ));
+            return;
         }
 
         log.debug("[증거금 반환] 계좌 락 획득. accountId={}, cashBalance={}, marginBalance={}",

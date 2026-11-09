@@ -114,12 +114,28 @@ class S2JudgeTest(unittest.TestCase):
         self.assertEqual(rc, 3)
         self.assertIn("401 1건 (토큰 만료)", out)
         self.assertNotIn("기대하지 않은 상태 코드", out)   # 401은 토큰 만료 이유로만 센다
+        self.assertNotIn("202가 아닌 응답", out)
 
-    def test_unexpected_status_makes_run_invalid(self):
-        c = Case().normal().req("b2", 500, stage="bg")
+    def test_unexpected_target_status_makes_run_invalid(self):
+        c = Case().normal().req("t5", 500)
         rc, out, _ = c.run()
         self.assertEqual(rc, 3)
-        self.assertIn("기대하지 않은 상태 코드 {500: 1}", out)
+        self.assertIn("대상 요청에 기대하지 않은 상태 코드 {500: 1}", out)
+
+    def test_background_non_202_makes_run_invalid(self):
+        # 배경 공모주는 마감되지 않으므로 202만 정상이다. 대상에서는 정상인 409, 422도 배경에서는 무효다
+        for status, code in ((500, ""), (409, "INVALID_STATUS_TRANSITION"), (422, "SUBSCRIPTION_CLOSED")):
+            with self.subTest(status=status):
+                c = Case().normal().req("b2", status, stage="bg", code=code)
+                rc, out, _ = c.run()
+                self.assertEqual(rc, 3)
+                self.assertIn(f"배경 요청에 202가 아닌 응답 {{{status}: 1}}", out)
+
+    def test_target_409_and_422_are_expected(self):
+        c = Case().normal().req("t5", 409, code="INVALID_STATUS_TRANSITION")
+        rc, out, _ = c.run()
+        self.assertEqual(rc, 0)
+        self.assertIn("회차: 유효", out)
 
     def test_not_closed_makes_run_invalid_without_reading_20_22(self):
         c = Case().normal()

@@ -5,7 +5,7 @@
                          --sql-result results/<run_id>/sql_result.txt --ipo <대상 공모주 ID> --end-ms <마감 시각 epoch ms>
                          [--container ipo-postgres]
 
-- 회차 유효성 (k6 로그와 요약을 본다): 밀린 요청이 없고, 401이 없고, 기대하지 않은 상태 코드가 없고,
+- 회차 유효성 (k6 로그와 요약을 본다): 밀린 요청이 없고, 401이 없고, 대상은 202, 422, 409만, 배경은 202만 있고,
   대상 요청에 202(마감 전 도착)와 422(마감 후 도착)가 모두 있고, 대상 공모주가 마감(ipo.closed)됐어야 한다
 - 측정값: verify.sql 20~22번 결과 행 수(sql_result.txt), 202를 받았는데 청약 행이 없는 요청 수(k6 로그와 DB 대조)
 - 종료 코드: 0 유효, 3 무효(이유를 출력), 1 입력을 읽지 못함(sql_result.txt에 20~22번이 없거나 건너뜀 등)
@@ -81,9 +81,13 @@ def judge(requests_log, summary_path, sql_result, ipo, end_ms):
         reasons.append("대상 요청에 202와 422가 모두 있지 않음 (마감 시각이 대상 구간 밖)")
     if unauth:
         reasons.append(f"401 {unauth}건 (토큰 만료)")
-    others = {s: n for s, n in (ts + bs).items() if s not in (202, 401, 409, 422)}
-    if others:
-        reasons.append(f"기대하지 않은 상태 코드 {dict(others)}")
+    # 대상은 마감 전후라 202, 422, 409가 정상이고, 배경 공모주는 마감되지 않으므로 202만 정상이다 (401은 위에서 따로 센다)
+    t_other = {s: n for s, n in ts.items() if s not in (202, 401, 409, 422)}
+    b_other = {s: n for s, n in bs.items() if s not in (202, 401)}
+    if t_other:
+        reasons.append(f"대상 요청에 기대하지 않은 상태 코드 {dict(t_other)}")
+    if b_other:
+        reasons.append(f"배경 요청에 202가 아닌 응답 {dict(b_other)} (배경 공모주는 마감되지 않아야 함)")
     if close_epoch is None:
         reasons.append("ipo.closed Outbox 없음 (대상 공모주가 마감되지 않음)")
 

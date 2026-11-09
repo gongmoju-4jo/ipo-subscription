@@ -447,7 +447,7 @@ POST=0 bash loadtest/s2.sh --run-id S2-g1-r1 --grace PT1S              # ② 장
 - `--grace`: 청약 서비스의 마감 유예(`ipo.close.grace-period`, 기본 `PT20S`)만 바꿔 다시 띄우고, 끝나면(오류로 멈춰도) 덮어쓰기 없이 다시 띄워 되돌립니다. 덮어쓰기 파일은 `loadtest/data/`(커밋하지 않음)에 둡니다.
 - ②에서 `POST=0`인 이유: 접수 토픽 랙을 마감 조건으로 보는 구조에서는 다른 공모주 요청이 이어지면 랙이 0이 되지 않아 마감이 미뤄지고(① 평소 부하에서 마감 시각 약 46초 뒤), 그 사이 늦은 발행이 끝나 누락이 가려집니다. 마감 뒤 요청이 없어 랙이 바로 0이 되는 조건에서 "발행 지연 > 유예"를 봅니다.
 - 판정 (`results/<run_id>/s2-judge.txt`)
-  - 회차 무효 (종료 코드 3, 다시 실행): 밀린 요청(`dropped_iterations`)이 있음(요청 순번으로 대상 구간을 정해서 밀리면 구간이 늦어짐), 401(토큰 만료), 대상 요청에 202와 422가 모두 있지 않음(마감 시각이 대상 구간 밖)
+  - 회차 무효 (종료 코드 3, 다시 실행): 밀린 요청(`dropped_iterations`)이 있음(요청 순번으로 대상 구간을 정해서 밀리면 구간이 늦어짐), 401(토큰 만료), 대상 요청에 202와 422가 모두 있지 않음(마감 시각이 대상 구간 밖), 배경 요청에 202가 아닌 응답(배경 공모주는 마감되지 않아야 함)
   - 측정값 (기대 0): `verify.sql` 20번(마감 처리 뒤 생긴 청약), 21번(마감 시각 이후 도착인데 접수된 청약), 22번(마감 때 확정 수와 지금 유효 청약 수 차이), 202를 받았는데 청약 행이 없는 요청(k6 로그 대조)
 - 결과 파일: `results/<run_id>/`에 `s2-judge.txt`, `sql_result.txt`, `env.txt`(커밋, 유예, 설정값, 대상 공모주, 시작과 마감 시각), `warmup.csv`, `진행.log`와 k6 원본. 워밍업 k6 원본은 `results/<run_id>-W/`
 - 한계: 대상 공모주에 요청이 몰리는 시간은 약 3.6초입니다 (회원 1,000명). 한 공모주 행에 잠금이 몰리는 부담은 실제보다 작고, 로컬 PC 안의 전후 비교로만 씁니다.
@@ -588,7 +588,7 @@ python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 
 python loadtest/tests/test_g2_estimate.py   # 212만 건 추정 (규칙 경계 r = 0.9, 1.1, 결정 문서 계산 예시, 중앙값, 제외 회차, 측정 불가, 입력 부족, 판정 경계)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
 bash loadtest/tests/test_s2.sh            # S2 셸 함수 (Kafka lag, 소진 대기, 마감 대기, 커밋 안 된 변경 거부, 마감 유예 확인, 공모주 생성). 조회 실패를 0이나 마감으로 넘기지 않는지 확인
-python loadtest/tests/test_s2_judge.py    # S2 판정 (회차 무효 조건, 마감되지 않은 공모주, sql_result.txt 20~22번 읽기와 입력 오류, 202인데 행 없음)
+python loadtest/tests/test_s2_judge.py    # S2 판정 (회차 무효 조건(배경은 202만), 마감되지 않은 공모주, sql_result.txt 20~22번 읽기와 입력 오류, 202인데 행 없음)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)
 python loadtest/tests/test_autovacuum.py  # 실행별 autovacuum 차이 (새 테이블, 기록 없는 실행, 통계 초기화, 형식 오류)

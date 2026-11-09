@@ -46,6 +46,8 @@ class Case:
         self.tmp = tempfile.mkdtemp()
         self.rows = []
         self.dropped = 0
+        self.check_fails = 0
+        self.no_checks = False
         self.sql = SQL_OK
         self.closed = [["1794215376.497", "2"]]   # ipo.closed Outbox: 생성 시각, confirmedCount
         self.subs = ["t1", "t2"]                  # 대상 공모주 청약 행의 request_id
@@ -67,7 +69,10 @@ class Case:
                 f.write('time="2026-11-09T09:00:00Z" level=info msg="' + json.dumps(r).replace('"', '\\"') + '" source=console\n')
         summ = os.path.join(self.tmp, "summary.json")
         with open(summ, "w", encoding="utf-8") as f:
-            json.dump({"metrics": {"dropped_iterations": {"count": self.dropped, "rate": 0}}}, f)
+            m = {"dropped_iterations": {"count": self.dropped, "rate": 0}}
+            if not self.no_checks:
+                m["checks"] = {"passes": 100, "fails": self.check_fails, "value": 1}
+            json.dump({"metrics": m}, f)
         sqlf = os.path.join(self.tmp, "sql_result.txt")
         with open(sqlf, "w", encoding="utf-8") as f:
             f.write(self.sql)
@@ -101,6 +106,21 @@ class S2JudgeTest(unittest.TestCase):
         rc, out, _ = c.run()
         self.assertEqual(rc, 3)
         self.assertIn("밀린 요청 103건", out)
+
+    def test_k6_check_failures_make_run_invalid(self):
+        # 상태 코드는 맞아도 오류 코드가 다르면(예: 대상 422가 VALIDATION_ERROR) k6 응답 검사만 잡는다
+        c = Case().normal()
+        c.check_fails = 2
+        rc, out, _ = c.run()
+        self.assertEqual(rc, 3)
+        self.assertIn("k6 응답 검사 실패 2건", out)
+
+    def test_missing_checks_in_summary_is_an_input_error(self):
+        c = Case().normal()
+        c.no_checks = True
+        rc, out, err = c.run()
+        self.assertEqual(rc, 1)
+        self.assertIn("checks가 없음", err)
 
     def test_no_422_means_close_time_outside_target_window(self):
         c = Case().req("t1", 202).req("t2", 202)

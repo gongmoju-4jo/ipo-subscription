@@ -145,10 +145,10 @@ main() {
   if [ -n "$GRACE" ]; then
     printf 'services:\n  subscription-service:\n    environment:\n      IPO_CLOSE_GRACEPERIOD: "%s"\n' "$GRACE" > "$REPO/$GRACE_FILE"
     trap 'docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1; restore_grace' EXIT
-    say "마감 유예 $GRACE로 청약 서비스를 다시 띄움"
+    say "마감 유예 ${GRACE}로 청약 서비스를 다시 띄움"
     compose "${COMPOSE_FILES[@]}" -f "$GRACE_FILE" up -d subscription-service >> "$LOG" 2>&1 || die 1 "청약 서비스 재기동 실패"
     wait_healthy || die 1 "청약 서비스 healthy 대기 시간 초과"
-    [ "$(grace_env)" = "$GRACE" ] || die 1 "컨테이너의 마감 유예가 $GRACE가 아님: '$(grace_env)'"
+    [ "$(grace_env)" = "$GRACE" ] || die 1 "컨테이너의 마감 유예가 ${GRACE}가 아님: '$(grace_env)'"
   else
     trap 'docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1' EXIT
     [ -z "$(grace_env)" ] || die 1 "청약 서비스에 마감 유예 덮어쓰기가 남아 있음: $(grace_env). --grace 없이 재야 하면 덮어쓰기 없이 다시 띄운다"

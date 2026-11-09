@@ -9,6 +9,7 @@
 # 환경변수: RATE(274), PRE(60), POST(40), TARGET_SEC(0: 회원 수 ÷ RATE초 동안 전부 대상), PRICE(1000), QUANTITY(10),
 #          LEAD(25, 시작까지 여유 초), WARM(1, 0이면 워밍업 생략), WARM_*(official.sh와 같은 기본값),
 #          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g),
+#          REQUIRED_GROUPS(official.sh와 같은 기본값. 소진 대기에서 모두 조회돼야 하는 Consumer 그룹),
 #          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다)
 # 종료 코드: 0 유효 회차, 3 회차 무효(판정 파일 참고), 5 커밋하지 않은 변경, 그 밖은 준비, 실행 실패
 # source로 불러오면(tests/test_s2.sh) 함수만 정의하고 실행하지 않는다
@@ -23,6 +24,7 @@ PRICE="${PRICE:-1000}"; QUANTITY="${QUANTITY:-10}"; LEAD="${LEAD:-25}"
 WARM="${WARM:-1}"; WARM_RATE="${WARM_RATE:-200}"; WARM_BUCKET="${WARM_BUCKET:-15}"; WARM_WINDOW="${WARM_WINDOW:-8}"
 WARM_SLOPE_PCT="${WARM_SLOPE_PCT:-5}"; WARM_SLOPE_MS="${WARM_SLOPE_MS:-1}"; WARM_CONSEC="${WARM_CONSEC:-2}"; WARM_MIN="${WARM_MIN:-180}"; WARM_MAX="${WARM_MAX:-900}"
 CLOSE_TIMEOUT="${CLOSE_TIMEOUT:-300}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"; POLL="${POLL:-2}"
+REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:1.3.0}"; K6_CPUS="${K6_CPUS:-2}"; K6_MEMORY="${K6_MEMORY:-1g}"
 GRACE_FILE="loadtest/data/compose.s2-grace.yml"
 LOG="${LOG:-/dev/null}"; PY=""; COMPOSE=(); RUN_ID=""; WRUN=""; GRACE=""; DIRTY_N=0
@@ -60,12 +62,21 @@ check_dirty() {
 }
 
 # 모든 Consumer 그룹의 랙 합. 커밋 오프셋이 '-'인데 메시지가 있으면 끝 오프셋 전체를 대기로 센다 (official.sh와 같은 방식)
-# 조회가 실패하거나 읽을 행이 없으면 0이 아니라 실패를 돌려준다
+# 조회가 실패하거나, 읽을 행이 없거나, 필수 그룹(REQUIRED_GROUPS)이 하나라도 없으면 0이 아니라 실패를 돌려준다
+# (아직 조회되지 않은 그룹의 대기를 0으로 넘기지 않는다)
 kafka_lag() {
   local out
   out="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:29092 --describe --all-groups 2>/dev/null)" || return 1
   printf '%s\n' "$out" | tr -d '\r' \
-    | awk '$3 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ { lag += ($4 ~ /^[0-9]+$/) ? $5 - $4 : $5; n++ } END { if (n == 0) exit 1; print lag + 0 }'
+    | awk -v req="$REQUIRED_GROUPS" '
+        $3 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ { lag += ($4 ~ /^[0-9]+$/) ? $5 - $4 : $5; seen[$1] = 1; n++ }
+        END {
+          if (n == 0) exit 1
+          k = split(req, R, " "); bad = 0
+          for (i = 1; i <= k; i++) if (!(R[i] in seen)) { print "필수 Consumer 그룹 없음: " R[i] > "/dev/stderr"; bad = 1 }
+          if (bad) exit 1
+          print lag + 0
+        }'
 }
 outbox_unpublished() {
   pg "select (select count(*) from subscription.outbox where published_at is null) + (select count(*) from account.outbox where published_at is null) + (select count(*) from allocation.outbox where published_at is null)"

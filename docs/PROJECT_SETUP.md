@@ -517,7 +517,7 @@ compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
 
 | 규칙 | 비고 |
 | --- | --- |
-| `BaseEntity` 상속 | Audit 필드 자동. `ledger_entry`(원장)는 수정이 없어 상속 ❌ |
+| `BaseEntity` 상속 | Audit 필드 자동. 예외(상속 ❌): `ledger_entry`(원장, 수정 없음), `outbox`, `processed_event`(이벤트 인프라 기록, 자체 시각 컬럼) |
 | 📌 테이블 이름: 접두사 없음, snake_case 단수 (`@Table(name = "subscription")`) | 서비스별 스키마라 이름 충돌 없음. 회원만 `users` (`user`는 PostgreSQL 예약어) |
 | PK: UUID (`@GeneratedValue(strategy = UUID)` + `@Column(name = "subscription_id")`) | API 명세 ID 형식과 동일 |
 | 다른 서비스 엔티티 참조 ❌ → `UUID`만 | 다른 서비스 데이터는 이벤트 또는 Feign |

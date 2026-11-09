@@ -35,6 +35,7 @@
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
 | `loadtest/s2.sh` | S2 마감 경계 한 회차 실행 (워밍업, 공모주 준비, 대상 공모주 마감 시각 설정, 실행, 판정). 6장 |
+| `loadtest/verify/s2_judge.py` | S2 한 회차 판정 (회차 유효성, `verify.sql` 20~22번 결과, 202인데 청약 행이 없는 요청. `s2-judge.txt`) |
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js` |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
 | `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 22종 실행 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족 검사, 20~22는 마감된 공모주 검사로 마감 전이면 20, 22번 건너뜀. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
@@ -417,13 +418,14 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`를 고치면 정식 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `baseline.sh`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`, `s2_judge.py`를 고치면 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
 bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
+python loadtest/tests/test_s2_judge.py    # S2 판정 (회차 무효 조건, 마감되지 않은 공모주, sql_result.txt 20~22번 읽기와 입력 오류, 202인데 행 없음)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)
 python loadtest/tests/test_autovacuum.py  # 실행별 autovacuum 차이 (새 테이블, 기록 없는 실행, 통계 초기화, 형식 오류)

@@ -47,4 +47,12 @@ class QueueExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(ApiResponse.failure("SERVICE_UNAVAILABLE", "서비스를 이용할 수 없습니다. 잠시 후 다시 시도해주세요.", null));
     }
+
+    // 그 밖의 예상하지 못한 오류. Spring 기본 오류 JSON 대신 공통 형식으로 내려주고, 원인은 로그로만 남긴다 (서비스 GlobalExceptionHandler와 같음)
+    @ExceptionHandler(Exception.class)
+    ResponseEntity<ApiResponse<Void>> unexpected(Exception e) {
+        log.error("대기열 API 처리 중 예상하지 못한 오류", e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.failure("INTERNAL_SERVER_ERROR", "서버 내부 오류가 발생했습니다.", null));
+    }
 }

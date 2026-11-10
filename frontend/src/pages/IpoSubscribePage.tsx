@@ -8,6 +8,7 @@ import { Card, ErrorBox, Loading, Money } from '../components/ui';
 import { formatWon } from '../lib/format';
 import { ipoStatusLabel } from '../lib/status';
 import { DesignNote } from '../demo/DesignNote';
+import { IpoInfoCard } from '../components/IpoInfoCard';
 import { useAdmission } from '../queue/useAdmission';
 import { AdmissionTimer, QueueSheet } from '../queue/QueueUi';
 
@@ -203,6 +204,7 @@ export function IpoSubscribePage() {
         </Card>
 
         <div className="stack">
+          <IpoInfoCard ipo={d} />
           <DesignNote title="몰릴 때는 대기열로 순서대로">
             <ul className="dots">
               <li>청약 화면은 게이트웨이의 공모주별 대기열을 지나야 열려요. 1초마다 서비스가 받을 수 있는 만큼(433명)만 입장시켜요.</li>

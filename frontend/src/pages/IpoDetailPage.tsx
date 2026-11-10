@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom';
 import { useAccounts, useIpo } from '../api/queries';
 import { Badge, Card, ErrorBox, Loading } from '../components/ui';
+import { IpoInfoCard } from '../components/IpoInfoCard';
 import { formatDateTime, formatWon } from '../lib/format';
 import { ipoStatusLabel } from '../lib/status';
 
@@ -31,25 +32,7 @@ export function IpoDetailPage() {
       </div>
 
       <div className="grid grid-wide-left">
-        <Card title="청약 정보">
-          <dl className="kv">
-            <dt>청약 기간</dt>
-            <dd>{formatDateTime(d.subscriptionStartAt)} ~ {formatDateTime(d.subscriptionEndAt)}</dd>
-            <dt>환불일</dt>
-            <dd>{d.refundDate}</dd>
-            <dt>일반청약 물량</dt>
-            <dd className="num">{d.retailQuantity.toLocaleString()}주</dd>
-            <dt>균등배정 물량</dt>
-            <dd className="num">{d.equalQuantity.toLocaleString()}주</dd>
-            <dt>청약 수량</dt>
-            <dd className="num">{d.minQuantity.toLocaleString()}주 ~ {d.maxQuantity.toLocaleString()}주</dd>
-            <dt>증거금률</dt>
-            <dd>{Math.round(Number(d.marginRate) * 100)}%</dd>
-          </dl>
-          <div className="notice gray" style={{ marginTop: 16 }}>
-            마감 후 균등배정(최소 수량 이상 청약자에게 같은 몫)과 비례배정(청약 수량 비례)을 하고, 배정받지 못한 증거금은 예수금으로 돌려드려요.
-          </div>
-        </Card>
+        <IpoInfoCard ipo={d} />
 
         <Card title="청약">
           {!canSubscribe ? (

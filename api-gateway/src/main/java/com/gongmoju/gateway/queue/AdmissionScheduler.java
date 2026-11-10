@@ -15,6 +15,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -22,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 입장 스케줄러. queue.admit-interval마다 대기자가 있는 공모주에 입장 인원을 나눠 앞에서부터 허가를 준다.
  *
  * <p>입장 인원(queue.admit-rate)은 전체 공모주 합이다. 공모주별로 주면 대기자가 있는 공모주 수만큼 서비스 유입이 곱해진다.
+ * 나누는 방식은 {@link #allocate}: 대기자가 적은 공모주는 바로 들어가고 남는 자리는 대기자가 많은 공모주로 넘긴다.
  * 게이트웨이 1대 전제: 여러 대면 대수만큼 입장시킨다 (스크립트가 원자라 같은 사람이 두 번 허가받지는 않는다).
  *
  * <p>입장 처리 결과를 지표 두 개로 내보낸다. 대기자가 없어도 매 주기 Redis를 조회하므로 요청이 없는 시간의 Redis 장애도 잡힌다.
@@ -119,10 +122,14 @@ public class AdmissionScheduler {
             if (ipoIds.isEmpty()) {
                 return Mono.empty();
             }
-            long[] shares = split(properties.admitsPerTick(), ipoIds.size(), offset);
-            return Flux.range(0, ipoIds.size())
-                    .concatMap(i -> admit(ipoIds.get(i), now, shares[i]))
-                    .then();
+            // 공모주마다 대기 인원을 먼저 읽어 남는 자리가 버려지지 않게 나눈다
+            return Flux.fromIterable(ipoIds).concatMap(repository::waitingCount).collectList().flatMap(counts -> {
+                long[] demands = counts.stream().mapToLong(Long::longValue).toArray();
+                long[] shares = allocate(properties.admitsPerTick(), demands, offset);
+                return Flux.range(0, ipoIds.size())
+                        .concatMap(i -> admit(ipoIds.get(i), now, shares[i]))
+                        .then();
+            });
         });
     }
 
@@ -137,18 +144,52 @@ public class AdmissionScheduler {
     }
 
     /**
-     * 입장 인원을 공모주 수로 나눈다. 나누어떨어지지 않는 나머지는 1명씩 주되, 받는 공모주를 주기마다 돌려 한쪽에 몰리지 않게 한다.
-     * 예: 433명, 공모주 2개 → 217, 216 (다음 주기에는 216, 217)
+     * 이번 주기의 입장 인원을 공모주들에 나눈다. 남는 자리를 버리지 않고 아직 대기자가 남은 공모주에 넘긴다.
+     * <ol>
+     *   <li>대기자가 남은 공모주들에 똑같이 나눈다</li>
+     *   <li>대기자가 몫보다 적은 공모주는 대기자 수만큼만 가져가고, 남은 자리는 아직 대기자가 남은 공모주에 다시 똑같이 나눈다</li>
+     *   <li>똑같이 나누고 남는 몇 자리는 1명씩 주되, 받는 공모주를 주기마다 돌려 한쪽에 몰리지 않게 한다</li>
+     * </ol>
+     * 예 (433명): 대기 5만 명 + 3명 → 430, 3 / 5만 명 + 5만 명 → 217, 216 (다음 주기 216, 217) / 5만 명 + 1명짜리 10개 → 423, 1 x 10.
+     * 대기자가 적은 공모주는 기다리지 않고 바로 들어가고, 대기자가 많은 공모주가 남는 자리를 쓴다.
+     * 입장 인원은 서비스가 받을 수 있는 전체 한도라, 어느 공모주가 다 쓰지 못한 자리는 다른 공모주가 써야 한도만큼 처리된다.
+     *
+     * <p>대기 인원에는 아직 정리되지 않은 이탈자가 들어 있을 수 있다. 그 몫은 입장 처리에서 이탈자를 빼면서 그 주기에만 덜 쓰인다.
+     *
+     * @param total   이번 주기에 허가할 전체 인원
+     * @param demands 공모주별 대기 인원 (순서는 반환값과 같다)
+     * @param offset  나머지를 받을 공모주를 돌리는 값 (주기마다 1씩 늘린다)
+     * @return 공모주별 허가 인원. 대기 인원을 넘지 않고, 합은 min(total, 대기 인원 합)이다
      */
-    static long[] split(long total, int count, long offset) {
-        long[] shares = new long[count];
-        long base = total / count;
-        long remainder = total % count;
-        for (int i = 0; i < count; i++) {
-            shares[i] = base;
+    static long[] allocate(long total, long[] demands, long offset) {
+        long[] shares = new long[demands.length];
+        List<Integer> open = new ArrayList<>();
+        for (int i = 0; i < demands.length; i++) {
+            if (demands[i] > 0) {
+                open.add(i);
+            }
         }
-        for (long r = 0; r < remainder; r++) {
-            shares[(int) ((offset + r) % count)]++;
+        long remaining = total;
+        while (remaining > 0 && !open.isEmpty()) {
+            long each = remaining / open.size();
+            if (each == 0) {
+                // 남은 자리가 공모주 수보다 적다. 남은 공모주는 모두 1자리 이상 비어 있으므로 1명씩 돌려 준다
+                int start = (int) Math.floorMod(offset, (long) open.size());
+                for (int k = 0; k < remaining; k++) {
+                    shares[open.get((start + k) % open.size())]++;
+                }
+                break;
+            }
+            List<Integer> stillOpen = new ArrayList<>();
+            for (int i : open) {
+                long give = Math.min(each, demands[i] - shares[i]);
+                shares[i] += give;
+                remaining -= give;
+                if (shares[i] < demands[i]) {
+                    stillOpen.add(i);
+                }
+            }
+            open = stillOpen;
         }
         return shares;
     }

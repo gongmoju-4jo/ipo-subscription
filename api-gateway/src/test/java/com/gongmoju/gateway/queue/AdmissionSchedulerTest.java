@@ -19,8 +19,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -42,11 +44,82 @@ class AdmissionSchedulerTest extends RedisTestSupport {
 
     @Test
     void 입장_인원을_공모주_수로_나누고_나머지는_주기마다_돌아가며_준다() {
-        assertThat(AdmissionScheduler.split(433, 2, 0)).containsExactly(217, 216);
-        assertThat(AdmissionScheduler.split(433, 2, 1)).containsExactly(216, 217);
-        assertThat(AdmissionScheduler.split(5, 3, 0)).containsExactly(2, 2, 1);
-        assertThat(AdmissionScheduler.split(2, 3, 2)).containsExactly(1, 0, 1);
-        assertThat(AdmissionScheduler.split(433, 1, 7)).containsExactly(433);
+        // 대기자가 모두 몫보다 많으면 똑같이 나눈다
+        long many = 50_000;
+        assertThat(AdmissionScheduler.allocate(433, new long[]{many, many}, 0)).containsExactly(217, 216);
+        assertThat(AdmissionScheduler.allocate(433, new long[]{many, many}, 1)).containsExactly(216, 217);
+        assertThat(AdmissionScheduler.allocate(5, new long[]{many, many, many}, 0)).containsExactly(2, 2, 1);
+        assertThat(AdmissionScheduler.allocate(2, new long[]{many, many, many}, 2)).containsExactly(1, 0, 1);
+        assertThat(AdmissionScheduler.allocate(433, new long[]{many}, 7)).containsExactly(433);
+    }
+
+    @Test
+    void 대기자가_적은_공모주는_있는_만큼만_받고_남는_자리는_대기자가_많은_공모주로_넘어간다() {
+        // 인기 5만 명 + 비인기 3명: 똑같이 나누면 217, 216(213자리 버려짐)이던 것이 430, 3
+        assertThat(AdmissionScheduler.allocate(433, new long[]{50_000, 3}, 0)).containsExactly(430, 3);
+        // 없는 공모주 번호로 1명짜리 줄 10개를 만들어도 인기 공모주는 423명 (줄 개수로 나누면 39명)
+        long[] withFakes = new long[11];
+        withFakes[0] = 50_000;
+        Arrays.fill(withFakes, 1, 11, 1);
+        long[] shares = AdmissionScheduler.allocate(433, withFakes, 0);
+        assertThat(shares[0]).isEqualTo(423);
+        assertThat(Arrays.stream(shares, 1, 11)).containsOnly(1L);
+        // 여러 단계로 넘어간다: 2명, 50명, 많음 → 2, 50, 나머지 381
+        assertThat(AdmissionScheduler.allocate(433, new long[]{2, 50, 50_000}, 0)).containsExactly(2, 50, 381);
+    }
+
+    @Test
+    void 대기자가_입장_인원보다_적으면_모두_허가하고_대기자가_없는_공모주는_0이다() {
+        assertThat(AdmissionScheduler.allocate(433, new long[]{3, 0, 5}, 0)).containsExactly(3, 0, 5);
+        assertThat(AdmissionScheduler.allocate(433, new long[]{0, 0}, 0)).containsExactly(0, 0);
+        assertThat(AdmissionScheduler.allocate(433, new long[]{}, 0)).isEmpty();
+    }
+
+    @Test
+    void 어떤_입력에서도_대기_인원을_넘지_않고_합은_입장_인원과_대기_인원_중_작은_값이다() {
+        Random random = new Random(42);
+        for (int run = 0; run < 2_000; run++) {
+            int count = 1 + random.nextInt(20);
+            long total = random.nextInt(1_000);
+            long[] demands = new long[count];
+            for (int i = 0; i < count; i++) {
+                // 0명, 몇 명, 아주 많음이 섞이게
+                demands[i] = switch (random.nextInt(3)) {
+                    case 0 -> 0;
+                    case 1 -> random.nextInt(50);
+                    default -> random.nextInt(1_000_000);
+                };
+            }
+            long[] shares = AdmissionScheduler.allocate(total, demands, random.nextInt(100));
+
+            long demandSum = Arrays.stream(demands).sum();
+            assertThat(Arrays.stream(shares).sum()).isEqualTo(Math.min(total, demandSum));
+            for (int i = 0; i < count; i++) {
+                assertThat(shares[i]).isBetween(0L, demands[i]);
+            }
+            // 자리를 덜 받은 공모주는 대기자를 모두 입장시킨 공모주뿐이다 (몫이 1 넘게 차이 나는데 덜 받은 쪽이 대기자가 남으면 안 된다)
+            for (int i = 0; i < count; i++) {
+                for (int j = 0; j < count; j++) {
+                    if (shares[i] + 1 < shares[j]) {
+                        assertThat(shares[i]).isEqualTo(demands[i]);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void 실제_입장_처리에서도_대기자가_적은_공모주는_바로_들어가고_남는_자리는_다른_공모주로_넘어간다() {
+        UUID popular = UUID.randomUUID();
+        UUID quiet = UUID.randomUUID();
+        enterUsers(popular, 50);
+        enterUsers(quiet, 3);
+
+        scheduler(20).admitOnce().block();
+
+        // 20명: 비인기 3명 모두 + 인기 17명 (똑같이 나누면 인기 10명, 7자리 버려짐)
+        assertThat(waitingCount(quiet)).isZero();
+        assertThat(waitingCount(popular)).isEqualTo(33);
     }
 
     @Test

@@ -438,7 +438,7 @@ python loadtest/report.py --run-id $RUN                                         
 | S0 | 회원 1,000명이 각 1건 (100명 × 10회, 1초에 걸쳐 시작) | 새 공모주 | `users.csv` | 전부 202 |
 | S1 | 도착률 고정 단계 부하 (`STAGES` 기본 100,200,300,433,600,800건/초, 단계마다 전환 `RAMP` 10초 + 유지 `HOLD` 90초, 앞에 `WARMUP` 60초). 정식 측정은 한 속도 고정(`RATE`, `DURATION`)을 단계마다 따로 실행 | 새 공모주 (`IPO_IDS`면 여러 개) | `users.csv` | 전부 202 |
 | S2 | 마감 경계: 대상 공모주에 회원 1,000명이 1건씩, 마감 시각 앞뒤에 걸쳐 요청하고 배경 공모주로 전체 274건/초 유지 (아래 S2 절) | 대상 1개(측정 중 마감) + 배경 여러 개(`IPO_IDS`) | `users.csv` | 대상: 마감 전 도착 202, 마감 후 422 `SUBSCRIPTION_CLOSED`, 마감 처리 뒤 409 `INVALID_STATUS_TRANSITION`. 배경: 전부 202 |
-| S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약 거절은 Consumer |
+| S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약(다른 계좌 청약)은 청약 API가 접수 트랜잭션에서 `REJECTED(ALREADY_SUBSCRIBED)`로 저장 |
 | S4 | Synthetic Data `s4-behavior.csv`: 투자자 1,000명 x 1건, 97명 예수금 부족 (S0과 같은 100명 x 10회) | 새 공모주 | `users-s4.csv` (S4 행동 CSV의 입금액으로 시드) | 전부 202 (잔액 부족 판정은 Consumer) |
 
 - **S1의 조건(요청 속도, 유지 시간, 요청 구성)은 임시 값입니다.** 첫 측정 전에 확정하고, 측정을 시작한 뒤에는 바꾸지 않습니다.

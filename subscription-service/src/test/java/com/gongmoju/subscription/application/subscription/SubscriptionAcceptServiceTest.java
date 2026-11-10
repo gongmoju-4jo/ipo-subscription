@@ -301,6 +301,33 @@ class SubscriptionAcceptServiceTest {
     }
 
     @Test
+    @DisplayName("API: 마감 시각 뒤에 도착한 요청은 공모주 행을 잡지 않아, 마감이 행을 잡고 있어도 기다리지 않고 바로 거절된다")
+    void acceptApi_rejectsLateRequestWithoutWaitingForIpoRow() throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        jdbcTemplate.update("UPDATE ipo SET subscription_end_at = now() - interval '10 seconds' WHERE ipo_id = ?", ipoId);
+        try (Connection closer = dataSource.getConnection()) {
+            // given: 마감 트랜잭션이 공모주 행을 FOR UPDATE로 잡고 있음
+            closer.setAutoCommit(false);
+            try (PreparedStatement lock = closer.prepareStatement("SELECT ipo_id FROM ipo WHERE ipo_id = ? FOR UPDATE")) {
+                lock.setObject(1, ipoId);
+                lock.executeQuery().close();
+            }
+
+            // when: 마감 시각 뒤(지금)에 도착한 요청
+            Future<AcceptResult> late = executor.submit(() -> acceptService.accept(userId, Instant.now(), command(UUID.randomUUID(), 100)));
+
+            // then: 행 잠금을 기다리지 않고 422로 바로 거절됨
+            assertThatThrownBy(() -> late.get(3, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e.getCause()).getErrorCode())
+                    .isEqualTo(SubscriptionErrorCode.SUBSCRIPTION_CLOSED);
+            closer.rollback();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("API: 접수 트랜잭션이 끝나기 전에 마감하면, 마감은 접수 커밋을 기다렸다가 그 PENDING을 세어 마감하지 않는다")
     void close_waitsForAcceptingTransaction_andCountsItsPending() throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);

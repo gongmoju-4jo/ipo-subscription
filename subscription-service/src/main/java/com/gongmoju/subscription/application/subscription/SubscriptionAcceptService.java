@@ -30,7 +30,8 @@ public class SubscriptionAcceptService {
     /**
      * 청약 API의 접수를 한 트랜잭션으로 처리함 (D-29 B-2). 검증, 이중청약 판정, 청약 저장, 증거금 인출 요청 Outbox 기록까지 하고 커밋하면 접수가 끝남.
      * <p>
-     * 공모주 행을 공유 잠금(FOR SHARE)으로 읽어 접수끼리는 함께 진행하고, 마감(FOR UPDATE)과는 순서를 정함.
+     * 상태, 기간, 수량 검증을 통과한 요청만 공모주 행을 공유 잠금(FOR SHARE)으로 다시 읽고, 잠근 뒤 최신 상태로 한 번 더 검증함.
+     * 거절될 요청(마감 시각 뒤 도착 등)은 행을 잡지 않으므로, 마감(FOR UPDATE)은 마감 전에 도착해 처리 중인 접수만 기다림.
      * 마감이 먼저 행을 잡으면 마감이 끝난 뒤 {@code CLOSED}를 읽고 거절되고, 접수가 먼저 잡으면 마감이 이 청약까지 세도록 커밋을 기다림.
      * 같은 {@code requestId}의 청약이 이미 있으면 상태, 기간 검증보다 먼저 확인해, 같은 내용이면 마감 뒤에 다시 와도 처음과 같이 접수된 것으로 응답함.
      *
@@ -44,7 +45,7 @@ public class SubscriptionAcceptService {
      */
     @Transactional
     public AcceptResult accept(UUID userId, Instant receivedAt, SubscribeCommand command) {
-        Ipo ipo = ipoRepository.findByIdForShare(command.ipoId())
+        Ipo ipo = ipoRepository.findById(command.ipoId())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "공모주를 찾을 수 없습니다.", "ipoId"));
 
         Optional<Subscription> existing = subscriptionRepository.findByRequestId(command.requestId());
@@ -52,6 +53,9 @@ public class SubscriptionAcceptService {
             return replayOrConflict(existing.get(), userId, command);
         }
 
+        // 잠그기 전에 거절될 요청을 거른다. 통과한 요청만 행을 잡고, 그사이 마감됐을 수 있어 잠근 뒤 최신 상태로 다시 검증한다
+        ipo.validateSubscription(receivedAt, command.requestedQuantity());
+        ipoRepository.refreshForShare(ipo);
         ipo.validateSubscription(receivedAt, command.requestedQuantity());
         if (!ipo.hasFullMarginRate()) {
             throw new IllegalStateException("증거금률이 100%가 아닌 공모주는 접수할 수 없습니다. ipoId=" + command.ipoId());

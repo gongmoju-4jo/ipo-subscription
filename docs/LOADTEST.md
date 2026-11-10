@@ -211,6 +211,9 @@ bash loadtest/seed/g2_ipo.sh --case B --count 10000 --out loadtest/data/g2-B-10k
 W=$(awk '$1=="W1"{print $2}' loadtest/data/g2-B-10k/ipo-ids.txt); M=$(awk '$1=="M"{print $2}' loadtest/data/g2-B-10k/ipo-ids.txt)
 # 4. 청약: W는 앞 1,000명이 172주, M은 CSV 전원이 케이스 B 수량
 bash loadtest/run-k6.sh g2 --ipo "$W" --run-id g2-B-10k-W --users data/users-g2.csv -e CASE=A -e COUNT=1000
+# --warmups 2면 W2도 같은 수량으로
+W2=$(awk '$1=="W2"{print $2}' loadtest/data/g2-B-10k/ipo-ids.txt)
+bash loadtest/run-k6.sh g2 --ipo "$W2" --run-id g2-B-10k-W2 --users data/users-g2.csv -e CASE=A -e COUNT=1000
 bash loadtest/run-k6.sh g2 --ipo "$M" --run-id g2-B-10k-M --users data/users-g2.csv -e CASE=B
 # 5. 저장 전 확인 (아래 조건을 모두 만족할 때까지 다시 조회한다)
 docker exec ipo-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:29092 --describe --group subscription-requested

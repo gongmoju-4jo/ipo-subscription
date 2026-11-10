@@ -35,16 +35,17 @@ public class SubscriptionAcceptService {
      * 마감이 먼저 행을 잡으면 마감이 끝난 뒤 {@code CLOSED}를 읽고 거절되고, 접수가 먼저 잡으면 마감이 이 청약까지 세도록 커밋을 기다림.
      * 같은 {@code requestId}의 청약이 이미 있으면 상태, 기간 검증보다 먼저 확인해, 같은 내용이면 마감 뒤에 다시 와도 처음과 같이 접수된 것으로 응답함.
      *
-     * @param userId     Gateway가 넘긴 회원 ID
-     * @param receivedAt Gateway가 기록한 최초 도착 시각 (D-12)
-     * @param command    청약 신청 내용
+     * @param subscriptionId 회원 ID와 requestId로 계산한 청약 ID ({@link SubscriptionIdGenerator}). 응답과 저장에 같은 값을 쓰도록 호출하는 쪽이 한 번 계산해 넘김
+     * @param userId         Gateway가 넘긴 회원 ID
+     * @param receivedAt     Gateway가 기록한 최초 도착 시각 (D-12)
+     * @param command        청약 신청 내용
      * @return 접수 결과. 새로 접수했거나, 이중청약으로 거절해 저장했거나, 같은 내용의 재요청이라 아무것도 저장하지 않음
      * @throws BusinessException     공모주가 없으면 RESOURCE_NOT_FOUND(404), 같은 {@code requestId}로 내용이 다르거나 다른 회원이 쓴 요청이면
      *                               DUPLICATE_RESOURCE(409), 청약 조건 위반은 {@link Ipo#validateSubscription}
      * @throws IllegalStateException 증거금률이 100%가 아니거나 증거금이 {@code long} 범위를 넘는 공모주 (공모주 데이터 오류, 500)
      */
     @Transactional
-    public AcceptResult accept(UUID userId, Instant receivedAt, SubscribeCommand command) {
+    public AcceptResult accept(UUID subscriptionId, UUID userId, Instant receivedAt, SubscribeCommand command) {
         Ipo ipo = ipoRepository.findById(command.ipoId())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "공모주를 찾을 수 없습니다.", "ipoId"));
 
@@ -67,7 +68,6 @@ public class SubscriptionAcceptService {
             throw new IllegalStateException("증거금이 long 범위를 넘습니다: 수량=" + command.requestedQuantity() + ", 공모가=" + ipo.getOfferPrice(), e);
         }
 
-        UUID subscriptionId = SubscriptionIdGenerator.generate(userId, command.requestId());
         boolean alreadySubscribed = subscriptionRepository.existsActiveByIpoIdAndUserId(command.ipoId(), userId);
         Subscription subscription = alreadySubscribed
                 ? Subscription.reject(subscriptionId, command.requestId(), ipo, userId, command.accountId(),

@@ -37,7 +37,7 @@ public class SubscriptionService {
     /**
      * 청약 신청을 접수한다 (D-29 B-2). 한 트랜잭션에서 검증, 이중청약 판정, 청약 저장, 증거금 인출 요청 Outbox 기록을 마치면 접수가 끝난다.
      * 이중청약이면 {@code REJECTED}로 저장하고, 같은 {@code requestId}로 같은 내용이 다시 오면 새로 저장하지 않는다. 세 경우 모두 같은 청약 ID를 돌려준다.
-     * 트랜잭션은 {@link SubscriptionAcceptService#accept(UUID, Instant, SubscribeCommand)}가 건다.
+     * 트랜잭션은 {@link SubscriptionAcceptService#accept(UUID, UUID, Instant, SubscribeCommand)}가 건다.
      * <p>
      * 같은 회원이 다른 {@code requestId}로 거의 동시에 청약하면 늦은 쪽이 {@code uk_subscription_active} 위반으로 실패한다.
      * 실패한 트랜잭션은 이어 갈 수 없어서 새 트랜잭션으로 한 번 다시 실행하고, 다시 실행하면 앞 청약을 보고 {@code REJECTED}로 저장된다.
@@ -53,14 +53,15 @@ public class SubscriptionService {
      * @throws DataIntegrityViolationException 다시 실행해도 무결성 위반이면 그대로 던진다 (공통 처리: 유니크 위반 409, 그 밖은 500)
      */
     public SubscribeResult subscribe(UUID userId, Instant receivedAt, SubscribeCommand command) {
+        UUID subscriptionId = SubscriptionIdGenerator.generate(userId, command.requestId());
         try {
-            acceptService.accept(userId, receivedAt, command);
+            acceptService.accept(subscriptionId, userId, receivedAt, command);
         } catch (DataIntegrityViolationException e) {
             log.info("청약 저장 중 무결성 위반이라 한 번 다시 실행함 (같은 회원의 동시 청약). requestId={}, userId={}, ipoId={}",
                     command.requestId(), userId, command.ipoId());
-            acceptService.accept(userId, receivedAt, command);
+            acceptService.accept(subscriptionId, userId, receivedAt, command);
         }
-        return new SubscribeResult(SubscriptionIdGenerator.generate(userId, command.requestId()), command.requestId());
+        return new SubscribeResult(subscriptionId, command.requestId());
     }
 
     /**

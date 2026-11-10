@@ -1,6 +1,7 @@
 package com.gongmoju.subscription.application.subscription;
 
 import com.gongmoju.subscription.domain.subscription.MarginReserveRequestRecorder;
+import com.gongmoju.subscription.domain.subscription.SubscriptionIdGenerator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -72,12 +73,13 @@ class SubscriptionAcceptServiceRollbackTest {
     @DisplayName("증거금 인출 요청 기록이 실패하면 예외가 전파되고 PENDING 청약도 저장되지 않는다")
     void accept_rollsBackSubscription_whenRecordingFails() {
         // given
+        UUID userId = UUID.randomUUID();
         SubscribeCommand command = new SubscribeCommand(UUID.randomUUID(), ipoId, UUID.randomUUID(), 100);
         Instant receivedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS).minusSeconds(60);
         doThrow(new IllegalStateException("기록 실패")).when(marginReserveRequestRecorder).record(any());
 
         // when, then
-        assertThatThrownBy(() -> acceptService.accept(UUID.randomUUID(), receivedAt, command))
+        assertThatThrownBy(() -> acceptService.accept(SubscriptionIdGenerator.generate(userId, command.requestId()), userId, receivedAt, command))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("기록 실패");
         Integer saved = jdbcTemplate.queryForObject("SELECT count(*) FROM subscription WHERE ipo_id = ?", Integer.class, ipoId);

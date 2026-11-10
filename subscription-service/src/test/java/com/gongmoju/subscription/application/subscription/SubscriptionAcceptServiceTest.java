@@ -108,7 +108,7 @@ class SubscriptionAcceptServiceTest {
         SubscribeCommand command = command(UUID.randomUUID(), 100);
 
         // when
-        AcceptResult result = acceptService.accept(userId, receivedAt, command);
+        AcceptResult result = accept(userId, receivedAt, command);
 
         // then
         assertThat(result).isEqualTo(AcceptResult.ACCEPTED);
@@ -131,10 +131,10 @@ class SubscriptionAcceptServiceTest {
     void acceptApi_ignores_whenSameRequestRepeated() {
         // given
         SubscribeCommand command = command(UUID.randomUUID(), 100);
-        acceptService.accept(userId, receivedAt, command);
+        accept(userId, receivedAt, command);
 
         // when
-        AcceptResult result = acceptService.accept(userId, receivedAt.plusSeconds(3), command);
+        AcceptResult result = accept(userId, receivedAt.plusSeconds(3), command);
 
         // then
         assertThat(result).isEqualTo(AcceptResult.DUPLICATE_IGNORED);
@@ -147,11 +147,11 @@ class SubscriptionAcceptServiceTest {
     void acceptApi_ignoresRepeat_evenAfterIpoClosed() {
         // given
         SubscribeCommand command = command(UUID.randomUUID(), 100);
-        acceptService.accept(userId, receivedAt, command);
+        accept(userId, receivedAt, command);
         jdbcTemplate.update("UPDATE ipo SET status = 'CLOSED', subscription_end_at = now() - interval '10 seconds' WHERE ipo_id = ?", ipoId);
 
         // when
-        AcceptResult result = acceptService.accept(userId, Instant.now(), command);
+        AcceptResult result = accept(userId, Instant.now(), command);
 
         // then
         assertThat(result).isEqualTo(AcceptResult.DUPLICATE_IGNORED);
@@ -163,10 +163,10 @@ class SubscriptionAcceptServiceTest {
     void acceptApi_conflicts_whenSameRequestIdHasDifferentContent() {
         // given
         UUID requestId = UUID.randomUUID();
-        acceptService.accept(userId, receivedAt, command(requestId, 100));
+        accept(userId, receivedAt, command(requestId, 100));
 
         // when, then
-        assertThatThrownBy(() -> acceptService.accept(userId, receivedAt, command(requestId, 200)))
+        assertThatThrownBy(() -> accept(userId, receivedAt, command(requestId, 200)))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.DUPLICATE_RESOURCE);
@@ -180,10 +180,10 @@ class SubscriptionAcceptServiceTest {
     void acceptApi_conflicts_whenOtherUserUsedRequestId() {
         // given
         UUID requestId = UUID.randomUUID();
-        acceptService.accept(userId, receivedAt, command(requestId, 100));
+        accept(userId, receivedAt, command(requestId, 100));
 
         // when, then
-        assertThatThrownBy(() -> acceptService.accept(UUID.randomUUID(), receivedAt, command(requestId, 100)))
+        assertThatThrownBy(() -> accept(UUID.randomUUID(), receivedAt, command(requestId, 100)))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("이미 사용된 requestId입니다. 새 requestId로 다시 요청해 주세요.")
                 .extracting(e -> ((BusinessException) e).getErrorCode())
@@ -195,11 +195,11 @@ class SubscriptionAcceptServiceTest {
     @DisplayName("API: 같은 회원의 유효 청약이 이미 있으면 REJECTED(ALREADY_SUBSCRIBED)로 저장하고 인출 요청은 기록하지 않는다")
     void acceptApi_rejects_whenUserAlreadyHasActiveSubscription() {
         // given
-        acceptService.accept(userId, receivedAt, command(UUID.randomUUID(), 100));
+        accept(userId, receivedAt, command(UUID.randomUUID(), 100));
         SubscribeCommand second = command(UUID.randomUUID(), 50);
 
         // when
-        AcceptResult result = acceptService.accept(userId, receivedAt, second);
+        AcceptResult result = accept(userId, receivedAt, second);
 
         // then
         assertThat(result).isEqualTo(AcceptResult.REJECTED_ALREADY_SUBSCRIBED);
@@ -215,12 +215,12 @@ class SubscriptionAcceptServiceTest {
     void acceptApi_acceptsAgain_whenPreviousSubscriptionWasCancelled() {
         // given
         SubscribeCommand first = command(UUID.randomUUID(), 100);
-        acceptService.accept(userId, receivedAt, first);
+        accept(userId, receivedAt, first);
         jdbcTemplate.update("UPDATE subscription SET status = 'CANCELLED', cancel_reason = 'USER_CANCEL' WHERE request_id = ?",
                 first.requestId());
 
         // when
-        AcceptResult result = acceptService.accept(userId, receivedAt, command(UUID.randomUUID(), 100));
+        AcceptResult result = accept(userId, receivedAt, command(UUID.randomUUID(), 100));
 
         // then
         assertThat(result).isEqualTo(AcceptResult.ACCEPTED);
@@ -237,7 +237,7 @@ class SubscriptionAcceptServiceTest {
         jdbcTemplate.update("UPDATE ipo SET status = 'CLOSED', subscription_end_at = now() - interval '10 seconds' WHERE ipo_id = ?", ipoId);
 
         // when, then
-        assertThatThrownBy(() -> acceptService.accept(userId, receivedAt, command(UUID.randomUUID(), 100)))
+        assertThatThrownBy(() -> accept(userId, receivedAt, command(UUID.randomUUID(), 100)))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(SubscriptionErrorCode.INVALID_STATUS_TRANSITION);
@@ -252,7 +252,7 @@ class SubscriptionAcceptServiceTest {
         jdbcTemplate.update("UPDATE ipo SET margin_rate = 0.50 WHERE ipo_id = ?", ipoId);
 
         // when, then
-        assertThatThrownBy(() -> acceptService.accept(userId, receivedAt, command(UUID.randomUUID(), 100)))
+        assertThatThrownBy(() -> accept(userId, receivedAt, command(UUID.randomUUID(), 100)))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(subscriptionCount()).isZero();
     }
@@ -261,7 +261,7 @@ class SubscriptionAcceptServiceTest {
     @DisplayName("API: 없는 공모주는 404 RESOURCE_NOT_FOUND")
     void acceptApi_throwsNotFound_whenIpoDoesNotExist() {
         // when, then
-        assertThatThrownBy(() -> acceptService.accept(userId, receivedAt,
+        assertThatThrownBy(() -> accept(userId, receivedAt,
                 new SubscribeCommand(UUID.randomUUID(), UUID.randomUUID(), accountId, 100)))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode())
@@ -284,7 +284,7 @@ class SubscriptionAcceptServiceTest {
             }
 
             // when: 접수는 공모주 행 잠금을 기다림
-            Future<AcceptResult> accepting = executor.submit(() -> acceptService.accept(userId, receivedAt, command(UUID.randomUUID(), 100)));
+            Future<AcceptResult> accepting = executor.submit(() -> accept(userId, receivedAt, command(UUID.randomUUID(), 100)));
             Thread.sleep(1000);
             assertThat(accepting).isNotDone();
             closer.commit();
@@ -314,7 +314,7 @@ class SubscriptionAcceptServiceTest {
             }
 
             // when: 마감 시각 뒤(지금)에 도착한 요청
-            Future<AcceptResult> late = executor.submit(() -> acceptService.accept(userId, Instant.now(), command(UUID.randomUUID(), 100)));
+            Future<AcceptResult> late = executor.submit(() -> accept(userId, Instant.now(), command(UUID.randomUUID(), 100)));
 
             // then: 행 잠금을 기다리지 않고 422로 바로 거절됨
             assertThatThrownBy(() -> late.get(3, TimeUnit.SECONDS))
@@ -338,7 +338,7 @@ class SubscriptionAcceptServiceTest {
             // given: 접수가 끝났지만 트랜잭션은 아직 커밋하지 않음 (바깥 트랜잭션에 참여해 커밋을 미룸)
             TransactionTemplate transaction = new TransactionTemplate(transactionManager);
             Future<AcceptResult> accepting = executor.submit(() -> transaction.execute(status -> {
-                AcceptResult result = acceptService.accept(userId, receivedAt, command(UUID.randomUUID(), 100));
+                AcceptResult result = accept(userId, receivedAt, command(UUID.randomUUID(), 100));
                 accepted.countDown();
                 awaitQuietly(release);
                 return result;
@@ -361,6 +361,11 @@ class SubscriptionAcceptServiceTest {
             release.countDown();
             executor.shutdownNow();
         }
+    }
+
+    // 청약 API(SubscriptionService)처럼 회원 ID와 requestId로 청약 ID를 계산해 넘긴다
+    private AcceptResult accept(UUID user, Instant at, SubscribeCommand command) {
+        return acceptService.accept(SubscriptionIdGenerator.generate(user, command.requestId()), user, at, command);
     }
 
     private SubscribeCommand command(UUID requestId, long requestedQuantity) {

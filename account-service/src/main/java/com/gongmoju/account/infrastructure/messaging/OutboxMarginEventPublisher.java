@@ -9,6 +9,8 @@ import com.gongmoju.account.domain.margin.MarginReserveFailed;
 import com.gongmoju.account.domain.margin.MarginReserved;
 import com.gongmoju.account.domain.margin.MarginSettled;
 import com.gongmoju.account.domain.margin.MarginVoided;
+import com.gongmoju.common.outbox.Outbox;
+import com.gongmoju.common.outbox.OutboxJpaRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

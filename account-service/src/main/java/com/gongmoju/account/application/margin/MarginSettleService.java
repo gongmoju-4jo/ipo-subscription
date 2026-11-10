@@ -2,7 +2,7 @@ package com.gongmoju.account.application.margin;
 
 import com.gongmoju.account.domain.account.Account;
 import com.gongmoju.account.domain.account.AccountRepository;
-import com.gongmoju.account.domain.event.ProcessedEventRecorder;
+import com.gongmoju.common.event.ProcessedEventRepository;
 import com.gongmoju.account.domain.ledger.LedgerEntry;
 import com.gongmoju.account.domain.ledger.LedgerEntryRepository;
 import com.gongmoju.account.domain.ledger.LedgerEntryType;
@@ -35,13 +35,13 @@ public class MarginSettleService {
     private final MarginRepository marginRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final MarginEventPublisher marginEventPublisher;
-    private final ProcessedEventRecorder processedEventRecorder;
+    private final ProcessedEventRepository processedEventRepository;
 
     @Transactional
     public void settle(SettleMarginCommand command) {
 
         // 1. processed_event: 같은 eventId가 처리된 것 있다면 중복 정산하지 않고 종료
-        if (!processedEventRecorder.insertIfAbsent(command.eventId(), CONSUMER_NAME, TOPIC)) {
+        if (!processedEventRepository.insertIfAbsent(command.eventId(), CONSUMER_NAME, TOPIC)) {
             log.info("[증거금 정산] 중복 수신, 건너뜀. eventId={}, subscriptionId={}",
                     command.eventId(), command.subscriptionId());
             return;

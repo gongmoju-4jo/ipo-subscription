@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gongmoju.allocation.domain.allocation.Allocation;
 import com.gongmoju.allocation.domain.allocation.AllocationEventPublisher;
 import com.gongmoju.allocation.domain.allocation.AllocationRound;
+import com.gongmoju.common.outbox.Outbox;
+import com.gongmoju.common.outbox.OutboxJpaRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 

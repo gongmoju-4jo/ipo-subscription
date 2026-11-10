@@ -2,6 +2,8 @@ package com.gongmoju.subscription.infrastructure.messaging;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gongmoju.common.outbox.Outbox;
+import com.gongmoju.common.outbox.OutboxJpaRepository;
 import com.gongmoju.subscription.domain.subscription.MarginReserveRequestRecorder;
 import com.gongmoju.subscription.domain.subscription.Subscription;
 import org.springframework.stereotype.Component;

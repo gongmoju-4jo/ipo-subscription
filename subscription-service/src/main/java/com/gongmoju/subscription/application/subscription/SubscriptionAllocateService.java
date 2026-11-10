@@ -1,6 +1,6 @@
 package com.gongmoju.subscription.application.subscription;
 
-import com.gongmoju.subscription.domain.event.ProcessedEventRepository;
+import com.gongmoju.common.event.ProcessedEventRepository;
 import com.gongmoju.subscription.domain.subscription.AllocationResult;
 import com.gongmoju.subscription.domain.subscription.Subscription;
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;

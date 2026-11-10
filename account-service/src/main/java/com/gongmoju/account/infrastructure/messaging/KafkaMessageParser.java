@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectReader;
 import com.gongmoju.account.global.exception.InvalidEventException;
 
 // Consumer 3개가 같은 방식으로 메시지 본문을 읽는다 (#106에서 각 Consumer의 parse()를 모음)
-// 빈 본문, JSON 객체가 아님, 읽기 실패는 재시도해도 결과가 같아서 InvalidEventException으로 바꿔 바로 DLT로 보낸다
+// 빈 본문, JSON 객체가 아님, 읽기 실패는 재시도해도 결과가 같아서 InvalidEventException으로 변환해 바로 DLT로 전송한다
 // 읽는 방식(소수 금액 거절 등)은 Consumer마다 달라서 ObjectReader를 받는다
 final class KafkaMessageParser {
 
@@ -18,7 +18,7 @@ final class KafkaMessageParser {
         }
         try {
             T message = reader.readValue(payload);
-            // 본문이 "null"이면 예외 없이 null이 나온다
+            // 본문이 "null"이면 예외 없이 null을 반환한다
             if (message == null) {
                 throw new InvalidEventException("메시지 본문이 JSON 객체가 아닙니다.");
             }

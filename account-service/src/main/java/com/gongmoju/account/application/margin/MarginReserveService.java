@@ -58,7 +58,7 @@ public class MarginReserveService {
         }
 
         // 2. 계좌 락: 기존 margin 조회보다 먼저 건다.
-        //   - 같은 청약 요청이 동시에 와도 한줄씩 처리되어 두 번째 요청이 첫번째 요청으로 만들어진 margin을 조회하게 된다.
+        //   - 같은 청약 요청이 동시에 수신되어도 순서대로 처리되어, 두 번째 요청은 첫 번째 요청으로 생성된 margin을 조회한다.
         //   - 계좌가 없으면 잠글 행이 없어서 바로 거절한다.
         log.debug("[증거금 인출] 시작. eventId={}, subscriptionId={}, accountId={}, userId={}, amount={}",
                 command.eventId(), command.subscriptionId(), command.accountId(), command.userId(), command.amount());
@@ -131,7 +131,7 @@ public class MarginReserveService {
                 account.getId(), account.getCashBalance(), account.getMarginBalance());
 
         // 9. outbox 저장: 증거금 인출 성공 결과 객체를 생성하고 outbox 저장을 요청한다.
-        //   - 잔고 변경과 같은 트랜잭션에 저장해서, 커밋되면 응답 이벤트도 필수로 발행된다. (Kafka로 바로 보내면 커밋 실패, 발행 실패 시 잔고와 이벤트 불일치 발생)
+        //   - 잔고 변경과 같은 트랜잭션에 저장해서, 커밋되면 응답 이벤트도 필수로 발행된다. (Kafka로 바로 발행하면 커밋 실패, 발행 실패 시 잔고와 이벤트 불일치 발생)
         marginEventPublisher.publishReserved(MarginReserved.from(margin));
 
         // 트랜잭션 커밋 전 로그. 커밋이 실패하면 롤백 후 재시도되고 에러 로그가 별도로 기록된다

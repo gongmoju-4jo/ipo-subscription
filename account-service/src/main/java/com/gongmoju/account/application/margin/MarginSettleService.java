@@ -38,7 +38,7 @@ public class MarginSettleService {
     @Transactional
     public void settle(SettleMarginCommand command) {
 
-        // 1. processed_event: 같은 eventId가 처리된 것 있다면 중복 정산하지 않고 종료
+        // 1. processed_event: 같은 eventId 재수신이면 처리 없이 종료한다 (인출, 반환과 동일한 방식)
         if (!processedEventRepository.insertIfAbsent(command.eventId(), CONSUMER_NAME, TOPIC)) {
             log.info("[증거금 정산] 중복 수신, 건너뜀. eventId={}, subscriptionId={}",
                     command.eventId(), command.subscriptionId());
@@ -48,8 +48,9 @@ public class MarginSettleService {
         log.debug("[증거금 정산] 시작. eventId={}, subscriptionId={}, accountId={}, allocatedAmount={}",
                 command.eventId(), command.subscriptionId(), command.accountId(), command.allocatedAmount());
 
-        // 2. 계좌 락: 같은 계좌의 인출, 반환, 정산이 순서대로 처리된다
-        //   - 배정된 청약은 margin이 있어야 하므로 계좌가 없으면 값이 잘못된 것이라 DLT
+        // 2. 계좌 락: margin 조회보다 먼저 획득해서, 같은 계좌의 인출, 반환, 정산이 순서대로 처리된다.
+        //   - 계좌가 없으면 요청 데이터 불일치라 DLT. 배정은 확정(CONFIRMED)된 청약만 대상이라 계좌와 margin이 필수로 존재한다
+        //     (반환과 달리 0원으로 응답하지 않는다: 반환은 인출 전 TIMEOUT으로 요청될 수 있지만 정산은 인출 후에만 요청된다)
         Account account = accountRepository.findByIdForUpdate(command.accountId())
                 .orElseThrow(() -> invalid(command, "계좌가 없습니다."));
 
@@ -84,7 +85,7 @@ public class MarginSettleService {
                 }
             }
             case POSTED -> {
-                // 4-3. 이미 정산됨: 같은 배정 대금이면 잔고 변경 없이 처음 응답을 재발행한다
+                // 4-3. 이미 정산됨: 동일한 배정 대금이면 잔고 변경 없이 처음 응답을 재발행한다. 배정 대금이 다르면 DLT
                 if (!Objects.equals(margin.getPostedAmount(), command.allocatedAmount())) {
                     throw invalid(command, "이미 다른 배정 대금으로 정산됐습니다. postedAmount=" + margin.getPostedAmount());
                 }
@@ -108,7 +109,7 @@ public class MarginSettleService {
         }
     }
 
-    // 4-1. 0주: 정산이 아니라 반환 (VOIDED, MARGIN_VOID). 응답은 margin.settled(0, 전액)
+    // 4-1. 0주: 정산이 아니라 반환. 청약증거금 차감, 예수금 증가 (MARGIN_VOID 원장), margin VOIDED. 응답은 margin.settled(0, 전액)
     private void voidZero(SettleMarginCommand command, Account account, Margin margin) {
         ledgerEntryRepository.save(account.voidMargin(margin.getAmount(), margin));
         margin.voidPending();
@@ -119,7 +120,7 @@ public class MarginSettleService {
                 command.eventId(), command.subscriptionId(), account.getId(), margin.getId(), margin.getAmount());
     }
 
-    // 4-2. 배정 있음: 배정 대금 차감(MARGIN_POST), 나머지 환불(REFUND). 환불액이 0이면 환불 원장은 저장하지 않는다
+    // 4-2. 배정 있음: 청약증거금에서 배정 대금 차감 (MARGIN_POST), 나머지는 청약증거금 차감, 예수금 증가 (REFUND). 환불액이 0이면 환불 원장은 저장하지 않는다
     private void post(SettleMarginCommand command, Account account, Margin margin) {
         long postedAmount = command.allocatedAmount();
         long refundAmount = margin.getAmount() - postedAmount;
@@ -144,7 +145,7 @@ public class MarginSettleService {
                 postedAmount, margin.getAmount() - postedAmount);
     }
 
-    // 값이 잘못된 요청: 예외로 롤백(processed_event도 남지 않음), 재시도 없이 DLT
+    // 요청 값이 유효하지 않거나 데이터 불일치인 경우: 예외로 롤백(processed_event도 저장되지 않음), 재시도 없이 DLT
     private InvalidEventException invalid(SettleMarginCommand command, String reason) {
         log.error("[증거금 정산] DLT 대상. {} eventId={}, subscriptionId={}, accountId={}, ipoId={}, allocatedAmount={}",
                 reason, command.eventId(), command.subscriptionId(), command.accountId(), command.ipoId(), command.allocatedAmount());

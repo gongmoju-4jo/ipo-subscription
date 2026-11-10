@@ -52,7 +52,7 @@ public class MarginVoidService {
                 command.eventId(), command.subscriptionId(), command.accountId(), command.reason());
 
         // 2. 계좌 락: margin 조회보다 먼저 획득해서, 같은 계좌의 인출, 반환이 순서대로 처리된다.
-        //   - 계좌가 없는 경우 (E-20): 모든 요청을 DLT로 보내면 청약이 COMPENSATING에 잔류해 공모주 마감이 중단됨
+        //   - 계좌가 없는 경우 (E-20): 모든 요청을 DLT로 전송하면 청약이 COMPENSATING에 잔류해 공모주 마감이 중단됨
         //     - margin이 있으면: 요청 계좌와 margin의 계좌가 다른 데이터 불일치라 DLT
         //     - margin이 없으면: 0원으로 반환 완료를 응답해 청약이 CANCELLED로 종료되도록 한다.
         //       인출, 반환 요청 모두 청약의 account_id를 사용하므로, 존재하지 않는 계좌로 요청된 인출은

@@ -54,7 +54,7 @@ class AllocationResultConsumer {
     }
 
     private AllocationResultMessage parse(String payload) {
-        // 금액에 소수가 오면 버림으로 바뀌지 않게 거절한다 (45000.5 → 45000 방지)
+        // 금액에 소수가 수신되면 버림 처리되지 않게 거부한다 (45000.5 → 45000 방지)
         return KafkaMessageParser.parse(payload, objectMapper.readerFor(AllocationResultMessage.class)
                 .without(DeserializationFeature.ACCEPT_FLOAT_AS_INT));
     }

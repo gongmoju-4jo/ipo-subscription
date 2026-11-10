@@ -1,4 +1,4 @@
--- 정합성 검증 SQL 19종 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족이 섞인 S3, S4용). 슈퍼유저로 접속해서 실행한다.
+-- 정합성 검증 SQL 22종 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족이 섞인 S3, S4용, 20~22는 마감된 공모주 검사). 슈퍼유저로 접속해서 실행한다.
 -- 사용: psql -v ipo="'<이번 회차 공모주 ID>'" -f verify.sql    (verify.sh가 대신 실행한다)
 -- skip_global 변수를 주면 전체 계좌 기준인 2, 3번을 건너뛴다 (verify.sh가 공모주 여러 개를 한 번에 검사할 때 두 번째 공모주부터)
 \pset pager off
@@ -82,4 +82,25 @@ SELECT EXISTS (SELECT 1 FROM subscription.subscription WHERE ipo_id = :ipo AND s
 SELECT s.subscription_id, s.account_id, a.cash_balance, s.margin_amount FROM subscription.subscription s JOIN account.account a ON a.account_id = s.account_id WHERE s.ipo_id = :ipo AND s.status = 'REJECTED' AND s.reject_reason = 'INSUFFICIENT_BALANCE' AND a.cash_balance >= s.margin_amount;
 \else
 \echo '== 19. (건너뜀: 이 공모주에 잔액 부족 거절이 없다. S4가 아니면 정상)'
+\endif
+
+-- 20~22: 마감된 공모주 검사 (S2 마감 경계). 모두 위반만 행으로 나온다 (기대 0행). 어느 시나리오에서 돌려도 맞아야 하는 조건이다
+--   마감 처리 시각은 ipo.closed Outbox를 기록한 시각이다 (공모주 CLOSED 전환과 같은 트랜잭션)
+--   아직 마감되지 않은 공모주는 대상이 없어 0행이 통과로 오해될 수 있으므로 20, 22번은 건너뛴다고 출력한다
+SELECT EXISTS (SELECT 1 FROM subscription.outbox WHERE topic = 'ipo.closed' AND aggregate_id = :ipo) AS is_closed \gset
+\if :is_closed
+\echo '== 20. 마감 처리 뒤에 생긴 청약 (기대: 0행. 202를 받고도 마감 때 집계에서 빠진 청약)'
+SELECT s.subscription_id, s.status, s.received_at, s.created_at, c.closed_at FROM subscription.subscription s CROSS JOIN (SELECT min(created_at) AS closed_at FROM subscription.outbox WHERE topic = 'ipo.closed' AND aggregate_id = :ipo) c WHERE s.ipo_id = :ipo AND s.created_at > c.closed_at;
+\else
+\echo '== 20. (건너뜀: 아직 마감되지 않은 공모주)'
+\endif
+
+\echo '== 21. 마감 시각 이후 도착(received_at >= 마감 시각)인데 접수된 청약 (기대: 0행)'
+SELECT s.subscription_id, s.status, s.received_at, i.subscription_end_at FROM subscription.subscription s JOIN subscription.ipo i ON i.ipo_id = s.ipo_id WHERE s.ipo_id = :ipo AND s.received_at >= i.subscription_end_at;
+
+\if :is_closed
+\echo '== 22. 마감 때 확정 수(ipo.closed confirmedCount)와 지금 유효 청약 수(REJECTED, CANCELLED 제외)가 다름 (기대: 0행. 마감 뒤에 청약이 늘거나 줄었음)'
+SELECT c.confirmed_at_close, v.valid_now FROM (SELECT (payload::json->>'confirmedCount')::bigint AS confirmed_at_close FROM subscription.outbox WHERE topic = 'ipo.closed' AND aggregate_id = :ipo ORDER BY created_at LIMIT 1) c CROSS JOIN (SELECT count(*) AS valid_now FROM subscription.subscription WHERE ipo_id = :ipo AND status NOT IN ('REJECTED', 'CANCELLED')) v WHERE c.confirmed_at_close <> v.valid_now;
+\else
+\echo '== 22. (건너뜀: 아직 마감되지 않은 공모주)'
 \endif

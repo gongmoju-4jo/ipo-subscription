@@ -117,6 +117,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 | --- | --- |
 | `POST /api/v1/queues/{ipoId}/entries` | 대기열 진입. 새로 진입 201, 이미 줄에 있거나 입장 허가 상태면 200 (순번 유지) |
 | `GET /api/v1/queues/{ipoId}/entries/me` | 순서 조회. 줄에도 없고 허가도 없으면 404 `RESOURCE_NOT_FOUND` (화면은 다시 진입) |
+| `DELETE /api/v1/queues/{ipoId}/entries/me` | 이탈. 줄과 입장 허가를 모두 지운다. 줄에 없어도 200 |
 
 - 인증은 다른 API와 같이 JWT. 대기열 주인은 토큰의 `sub`
 - 응답: `status`(`WAITING`, `ADMITTED`), `position`, `waitingCount`, `estimatedWaitSeconds`, `enteredAt`, `admissionExpiresAt`, `pollIntervalMillis`. 시각은 KST

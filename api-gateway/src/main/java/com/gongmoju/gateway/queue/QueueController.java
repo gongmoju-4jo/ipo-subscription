@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -46,6 +47,13 @@ class QueueController {
     Mono<ApiResponse<QueueEntryResponse>> find(@PathVariable UUID ipoId, @AuthenticationPrincipal Jwt jwt) {
         return queueService.find(ipoId, userId(jwt))
                 .map(view -> ApiResponse.success(QueueEntryResponse.from(view), "대기열 순서를 조회했습니다."));
+    }
+
+    @Operation(summary = "대기열 이탈", description = "줄과 입장 허가를 모두 지운다. 줄에 없어도 200")
+    @DeleteMapping("/me")
+    Mono<ApiResponse<Void>> leave(@PathVariable UUID ipoId, @AuthenticationPrincipal Jwt jwt) {
+        return queueService.leave(ipoId, userId(jwt))
+                .then(Mono.fromSupplier(() -> ApiResponse.<Void>success(null, "대기열에서 나갔습니다.")));
     }
 
     private static UUID userId(Jwt jwt) {

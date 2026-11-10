@@ -64,6 +64,13 @@ public class QueueService {
     }
 
     /**
+     * 대기열에서 나간다. 줄과 입장 허가를 모두 지운다. 줄에 없어도 성공한다 (여러 번 눌러도 같은 결과).
+     */
+    public Mono<Void> leave(UUID ipoId, UUID userId) {
+        return repository.leave(ipoId, userId);
+    }
+
+    /**
      * 순서 조회 간격 = max(1초, 대기 인원 ÷ 조회 예산).
      */
     Duration pollInterval(long waitingCount) {

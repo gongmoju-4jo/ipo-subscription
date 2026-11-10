@@ -209,6 +209,89 @@ class QueueControllerTest extends RedisTestSupport {
                 .expectStatus().isUnauthorized();
     }
 
+    @Test
+    void 이탈하면_200이고_줄에서_빠져_뒷사람_순번이_당겨진다() throws Exception {
+        UUID next = UUID.randomUUID();
+        enter(ipoId.toString(), token(userId)).expectStatus().isCreated();
+        enter(ipoId.toString(), token(next)).expectStatus().isCreated();
+
+        leave(ipoId.toString(), token(userId))
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.success").isEqualTo(true)
+                .jsonPath("$.message").isEqualTo("대기열에서 나갔습니다.")
+                .jsonPath("$.data").doesNotExist();
+
+        find(ipoId.toString(), token(userId)).expectStatus().isNotFound();
+        find(ipoId.toString(), token(next))
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.data.position").isEqualTo(1)
+                .jsonPath("$.data.waitingCount").isEqualTo(1);
+        assertThat(TEMPLATE.opsForZSet().score(QueueRedisRepository.heartbeatKey(ipoId), userId.toString()).block()).isNull();
+    }
+
+    @Test
+    void 입장_허가_상태에서_이탈하면_허가도_지워진다() throws Exception {
+        repository.enter(ipoId, userId, Instant.now(), Instant.now().plusSeconds(60)).block();
+        repository.admit(ipoId, Instant.now(), 1, Duration.ofMinutes(5), 1000).block();
+
+        leave(ipoId.toString(), token(userId)).expectStatus().isOk();
+
+        assertThat(TEMPLATE.hasKey(QueueRedisRepository.admittedKey(ipoId, userId)).block()).isFalse();
+        find(ipoId.toString(), token(userId)).expectStatus().isNotFound();
+    }
+
+    @Test
+    void 이탈한_뒤_다시_진입하면_줄_맨_뒤에_201로_선다() throws Exception {
+        enter(ipoId.toString(), token(userId)).expectStatus().isCreated();
+        enter(ipoId.toString(), token(UUID.randomUUID())).expectStatus().isCreated();
+        leave(ipoId.toString(), token(userId)).expectStatus().isOk();
+
+        enter(ipoId.toString(), token(userId))
+                .expectStatus().isCreated()
+                .expectBody().jsonPath("$.data.position").isEqualTo(2);
+    }
+
+    @Test
+    void 줄에_없어도_이탈은_여러_번_200() throws Exception {
+        leave(ipoId.toString(), token(userId)).expectStatus().isOk();
+        leave(ipoId.toString(), token(userId)).expectStatus().isOk();
+    }
+
+    @Test
+    void 이탈도_토큰의_사용자_기준이다() throws Exception {
+        enter(ipoId.toString(), token(userId)).expectStatus().isCreated();
+
+        webTestClient.delete().uri("/api/v1/queues/{ipoId}/entries/me", ipoId)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token(UUID.randomUUID()))
+                .header("X-User-Id", userId.toString())
+                .exchange()
+                .expectStatus().isOk();
+
+        find(ipoId.toString(), token(userId)).expectStatus().isOk();
+    }
+
+    @Test
+    void 이탈_ipoId가_UUID가_아니면_400() throws Exception {
+        leave("not-a-uuid", token(userId))
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.error.code").isEqualTo("VALIDATION_ERROR");
+    }
+
+    @Test
+    void 이탈도_토큰이_없으면_401() {
+        webTestClient.delete().uri("/api/v1/queues/{ipoId}/entries/me", ipoId)
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    private WebTestClient.ResponseSpec leave(String ipoIdPath, String token) {
+        return webTestClient.delete().uri("/api/v1/queues/{ipoId}/entries/me", ipoIdPath)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                .exchange();
+    }
+
     private WebTestClient.ResponseSpec find(String ipoIdPath, String token) {
         return webTestClient.get().uri("/api/v1/queues/{ipoId}/entries/me", ipoIdPath)
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)

@@ -34,6 +34,16 @@ class QueueRedisDownTest {
     }
 
     @Test
+    void Redis에_접속할_수_없으면_이탈은_503() throws Exception {
+        webTestClient.delete().uri("/api/v1/queues/{ipoId}/entries/me", UUID.randomUUID())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + JwtTestTokens.valid(secret, UUID.randomUUID().toString(), "USER"))
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectBody()
+                .jsonPath("$.error.code").isEqualTo("SERVICE_UNAVAILABLE");
+    }
+
+    @Test
     void Redis에_접속할_수_없으면_조회는_503() throws Exception {
         webTestClient.get().uri("/api/v1/queues/{ipoId}/entries/me", UUID.randomUUID())
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + JwtTestTokens.valid(secret, UUID.randomUUID().toString(), "USER"))

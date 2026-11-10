@@ -33,6 +33,20 @@ class QueueRedisDownTest {
                 .jsonPath("$.error.code").isEqualTo("SERVICE_UNAVAILABLE");
     }
 
+    // 실제 청약 서비스가 없어 라우팅되면 게이트웨이 기본 503(공통 형식 아님)이 나므로, 공통 형식의 SERVICE_UNAVAILABLE인지로 필터가 막았는지 본다
+    @Test
+    void Redis에_접속할_수_없으면_청약_신청은_허가_확인_없이_통과하지_않고_503() throws Exception {
+        webTestClient.post().uri("/api/v1/subscriptions")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + JwtTestTokens.valid(secret, UUID.randomUUID().toString(), "USER"))
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .bodyValue("{\"ipoId\":\"" + UUID.randomUUID() + "\"}")
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectBody()
+                .jsonPath("$.success").isEqualTo(false)
+                .jsonPath("$.error.code").isEqualTo("SERVICE_UNAVAILABLE");
+    }
+
     @Test
     void Redis에_접속할_수_없으면_이탈은_503() throws Exception {
         webTestClient.delete().uri("/api/v1/queues/{ipoId}/entries/me", UUID.randomUUID())

@@ -90,6 +90,13 @@ public class QueueRedisRepository {
     }
 
     /**
+     * 이 사람이 이 공모주의 입장 허가를 갖고 있는지. 청약 신청 전 입장 허가 확인에 쓴다.
+     */
+    public Mono<Boolean> isAdmitted(UUID ipoId, UUID userId) {
+        return redis.hasKey(admittedKey(ipoId, userId));
+    }
+
+    /**
      * 이 공모주의 대기 인원. 순서 조회 간격을 정할 때 쓴다.
      */
     public Mono<Long> waitingCount(UUID ipoId) {

@@ -12,7 +12,8 @@
 #          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g),
 #          REQUIRED_GROUPS(official.sh와 같은 기본값. 소진 대기에서 모두 조회돼야 하는 Consumer 그룹),
 #          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다),
-#          SKIP_BUILD(0, 1이면 빌드, 배포를 건너뛴다. 서비스 5개의 로컬 jar와 컨테이너 jar sha256 비교는 그대로 하고 env.txt에 남는다)
+#          SKIP_BUILD(0, 1이면 빌드, 배포를 건너뛴다. 서비스 5개의 로컬 jar와 컨테이너 jar sha256 비교는 그대로 하고 env.txt에 남는다.
+#                     둘 다 이전 커밋의 jar여도 비교를 통과하므로, 이 커밋으로 빌드, 배포한 것을 따로 확인했을 때만 쓴다)
 # 종료 코드: 0 유효 회차, 3 회차 무효(판정 파일 참고), 5 커밋하지 않은 변경 또는 컨테이너 jar가 로컬 jar와 다름, 그 밖은 준비, 실행 실패
 # source로 불러오면(tests/test_s2.sh) 함수만 정의하고 실행하지 않는다
 set -uo pipefail

@@ -14,7 +14,7 @@ import java.util.UUID;
  * 필수 필드와 이벤트 형식을 검증한 후 ReserveMarginCommand로 변환한다.
  * 검증 실패 시 InvalidEventException을 발생, Kafka 오류 처리기가 재시도 없이 DLT로 전송된다.
  * <p>
- * amount값이 없으면 0으로 읽혀 금액 검사에서 걸려 DLT로 간다.
+ * amount 값이 없으면 0으로 역직렬화되어 금액 검사에서 거부되고 DLT로 전송된다.
  *
  * @param eventId        이벤트 고유 ID
  * @param eventType      이벤트 유형

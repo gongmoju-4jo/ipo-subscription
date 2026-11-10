@@ -33,7 +33,7 @@ public class LedgerQueryService {
         accountRepository.findByIdAndUserId(accountId, userId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "존재하지 않는 계좌입니다.", "accountId"));
         Pageable stable = PageableUtils.toStablePageable(pageable, SORTABLE_FIELDS);
-        // type이 없으면 전체, 있으면 그 거래 종류만
+        // type이 없으면 전체, 있으면 해당 거래 종류만 조회한다
         Page<LedgerEntry> entries = type == null
                 ? ledgerEntryRepository.findByAccount_Id(accountId, stable)
                 : ledgerEntryRepository.findByAccount_IdAndType(accountId, type, stable);

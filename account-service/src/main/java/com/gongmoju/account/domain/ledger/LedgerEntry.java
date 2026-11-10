@@ -85,12 +85,12 @@ public class LedgerEntry {
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
-    // 돈을 움직인 주체 (회원 ID 또는 SYSTEM:account-service)
+    // 잔고를 변경한 주체 (회원 ID 또는 SYSTEM:account-service)
     @CreatedBy
     @Column(nullable = false, updatable = false, length = 100)
     private String createdBy;
 
-    // 원장 기록 생성 시 거래 금액을 검증하고, 잔고 변경 직후의 계좌 잔액을 기록한다.
+    // 원장 기록 생성 시 거래 금액을 검증하고, 잔고 변경 직후의 계좌 잔고(예수금, 청약증거금)를 기록한다.
     private LedgerEntry(Account account, LedgerEntryType type, long amount, Margin margin, UUID subscriptionId, UUID requestId) {
         if (amount <= 0) {
             throw new IllegalArgumentException("원장 금액은 1 이상이어야 합니다. amount=" + amount);

@@ -65,6 +65,10 @@ export function useAdmission(ipoId: string, { enabled, closesAt }: { enabled: bo
   const phaseRef = useRef<AdmissionPhase>('idle');
   // 진입, 이탈, 다시 진입할 때마다 늘린다. 이전 흐름에서 늦게 도착한 응답과 예약된 조회는 버린다
   const generation = useRef(0);
+  // 진입, 순번 조회 요청마다 붙이는 번호. 응답은 보낸 순서대로 오지 않을 수 있어서
+  // 이미 처리한 응답보다 먼저 보낸 요청의 응답은 버린다 (늦게 온 WAITING이 ADMITTED를 되돌리지 않게)
+  const requestSeq = useRef(0);
+  const settledSeq = useRef(0);
   const pollTimer = useRef<number>();
   const expiryTimer = useRef<number>();
   const closeTimer = useRef<number>();
@@ -92,8 +96,15 @@ export function useAdmission(ipoId: string, { enabled, closesAt }: { enabled: bo
     queueApi.leave(ipoId).catch(() => undefined);
   }, [clearTimers, go, ipoId]);
 
-  const apply = useCallback((gen: number, res: QueueEntryResponse) => {
-    if (gen !== generation.current) return;
+  // 이 세대의 응답이고, 이미 처리한 응답보다 나중에 보낸 요청이면 처리한다
+  const accept = useCallback((gen: number, seq: number) => {
+    if (gen !== generation.current || seq < settledSeq.current) return false;
+    settledSeq.current = seq;
+    return true;
+  }, []);
+
+  const apply = useCallback((gen: number, seq: number, res: QueueEntryResponse) => {
+    if (!accept(gen, seq)) return;
     setUnstable(false);
     setEntry(res);
     window.clearTimeout(pollTimer.current);
@@ -109,10 +120,10 @@ export function useAdmission(ipoId: string, { enabled, closesAt }: { enabled: bo
     go('waiting');
     setFirstPosition((p) => p ?? res.position);
     pollTimer.current = window.setTimeout(() => actions.current.poll(gen), res.pollIntervalMillis);
-  }, [go]);
+  }, [accept, go]);
 
-  const fail = useCallback((gen: number, e: unknown, retry: 'poll' | 'enter') => {
-    if (gen !== generation.current) return;
+  const fail = useCallback((gen: number, seq: number, e: unknown, retry: 'poll' | 'enter') => {
+    if (!accept(gen, seq)) return;
     if (retry === 'poll' && e instanceof ApiError && e.status === 404) {
       clearTimers();
       go('removed');
@@ -120,6 +131,7 @@ export function useAdmission(ipoId: string, { enabled, closesAt }: { enabled: bo
     }
     if (isTransient(e)) {
       setUnstable(true);
+      window.clearTimeout(pollTimer.current);
       pollTimer.current = window.setTimeout(() => actions.current[retry](gen), RETRY_MS);
       return;
     }
@@ -127,7 +139,7 @@ export function useAdmission(ipoId: string, { enabled, closesAt }: { enabled: bo
     clearTimers();
     setError(e);
     go('idle');
-  }, [clearTimers, go]);
+  }, [accept, clearTimers, go]);
 
   actions.current.poll = (gen: number) => {
     if (gen !== generation.current) return;
@@ -135,11 +147,13 @@ export function useAdmission(ipoId: string, { enabled, closesAt }: { enabled: bo
       closeOut();
       return;
     }
-    queueApi.me(ipoId).then((res) => apply(gen, res), (e) => fail(gen, e, 'poll'));
+    const seq = ++requestSeq.current;
+    queueApi.me(ipoId).then((res) => apply(gen, seq, res), (e) => fail(gen, seq, e, 'poll'));
   };
   actions.current.enter = (gen: number) => {
     if (gen !== generation.current) return;
-    queueApi.enter(ipoId).then((res) => apply(gen, res), (e) => fail(gen, e, 'enter'));
+    const seq = ++requestSeq.current;
+    queueApi.enter(ipoId).then((res) => apply(gen, seq, res), (e) => fail(gen, seq, e, 'enter'));
   };
 
   const join = useCallback(() => {

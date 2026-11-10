@@ -147,7 +147,13 @@ export function IpoSubscribePage() {
               </div>
             </div>
           ) : !admitted ? (
-            <Loading lines={5} />
+            <div className="stack">
+              {/* 대기 창은 진입 응답을 받은 뒤에 열리므로, 첫 진입이 503, 네트워크 오류로 재시도 중이면 여기서 알린다 */}
+              {admission.phase === 'entering' && admission.unstable && (
+                <div className="notice warn">연결이 원활하지 않아요. 대기열 진입을 다시 시도하고 있어요</div>
+              )}
+              <Loading lines={5} />
+            </div>
           ) : (
             <div className="stack">
               {admission.entry?.admissionExpiresAt && <AdmissionTimer expiresAt={admission.entry.admissionExpiresAt} />}

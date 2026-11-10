@@ -30,6 +30,11 @@ class IpoRepositoryAdapter implements IpoRepository {
     }
 
     @Override
+    public List<Ipo> findByStatus(IpoStatus status) {
+        return jpaRepository.findByStatus(status);
+    }
+
+    @Override
     public List<Ipo> findByStatusAndSubscriptionEndAtLessThanEqual(IpoStatus status, Instant endAt) {
         return jpaRepository.findByStatusAndSubscriptionEndAtLessThanEqual(status, endAt);
     }

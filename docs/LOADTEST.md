@@ -565,7 +565,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
 | `S1_REPEAT` | `3` | `official.sh` (S1 단계마다 반복 측정 횟수. 팀 규칙은 최소 3회, 3 미만이면 판정이 참고값) |
 | `S0_PRICE`, `S1_PRICE`, `QUANTITY` | `15000`, `1000`, `10` | `official.sh` (공모가, 청약 수량) |
-| `PRE_VUS`, `MAX_VUS` | `500`, `2000` | `official.sh` (S1 k6 가상 사용자) |
+| `PRE_VUS`, `MAX_VUS` | `500`, `2000` | `official.sh`, `s2.sh` (S1, S2 k6 가상 사용자. S2는 접수 Outbox 뒤 202가 DB 커밋을 기다려 DB가 잠깐 멈추면 응답이 늦어지므로 S1과 같게 둔다) |
 | `P95_LIMIT`, `DRAIN_LIMIT` | `15`, `15` | `official.sh` → `judge.py` (G2 합격 기준 초) |
 | `DRAIN_TIMEOUT` | `2400` | `official.sh` (소진 대기 상한 초) |
 | `REQUIRED_GROUPS` | `subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve` | `official.sh` (lag을 확인할 필수 Consumer 그룹) |

@@ -10,6 +10,8 @@
 # 환경변수: RATE(274), PRE(60), POST(40), TARGET_SEC(0: 회원 수 ÷ RATE초 동안 전부 대상), PRICE(1000), QUANTITY(10),
 #          LEAD(25, 시작까지 여유 초), WARM(1, 0이면 워밍업 생략), WARM_*(official.sh와 같은 기본값),
 #          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g),
+#          PRE_VUS(500), MAX_VUS(2000)(k6 가상 사용자, official.sh S1과 같음. 202가 DB 커밋을 기다려서 DB가 잠깐 멈추면 응답이 늦어지고,
+#                    가상 사용자가 모자라면 요청이 밀려 회차가 무효가 된다. 요청 속도는 RATE로 고정이라 서버 부하는 바뀌지 않는다),
 #          REQUIRED_GROUPS(소진 대기에서 모두 조회돼야 하는 Consumer 그룹. 접수 Outbox 뒤에는 접수 Consumer 그룹이 없어 official.sh 기본값에서 subscription-requested를 뺐다),
 #          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다),
 #          SKIP_BUILD(0, 1이면 빌드, 배포를 건너뛴다. 서비스 5개의 로컬 jar와 컨테이너 jar sha256 비교는 그대로 하고 env.txt에 남는다.
@@ -29,6 +31,7 @@ WARM_SLOPE_PCT="${WARM_SLOPE_PCT:-5}"; WARM_SLOPE_MS="${WARM_SLOPE_MS:-1}"; WARM
 CLOSE_TIMEOUT="${CLOSE_TIMEOUT:-300}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"; POLL="${POLL:-2}"
 REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:1.3.0}"; K6_CPUS="${K6_CPUS:-2}"; K6_MEMORY="${K6_MEMORY:-1g}"
+PRE_VUS="${PRE_VUS:-500}"; MAX_VUS="${MAX_VUS:-2000}"
 GRACE_FILE="loadtest/data/compose.s2-grace.yml"
 # 컨테이너:모듈 (jar sha256 비교 대상, official.sh와 같은 목록)
 JAR_TARGETS="ipo-api-gateway:api-gateway ipo-account-service:account-service ipo-subscription-service:subscription-service ipo-allocation-service:allocation-service ipo-eureka-server:eureka-server"
@@ -276,14 +279,14 @@ main() {
     echo "run_id=$RUN_ID git=$(git_repo rev-parse --short HEAD) branch=$(git_repo rev-parse --abbrev-ref HEAD) dirty=$DIRTY_N allow_dirty=${ALLOW_DIRTY:-0}"
     echo "grace=$grace_actual rate=$RATE pre=$PRE post=$POST target_sec=$TARGET_SEC target_window_ms=$win_ms total=$total users=$u bg_ipos=$bg_n price=$PRICE quantity=$QUANTITY"
     echo "target_ipo=$t start_at_ms=$start_at end_at_ms=$end_ms"
-    echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY skip_build=${SKIP_BUILD:-0}"
+    echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY pre_vus=$PRE_VUS max_vus=$MAX_VUS skip_build=${SKIP_BUILD:-0}"
     printf '%s\n' "$jars_info"
   } > "$OUT/env.txt"
   say "대상 $t 마감 시각 = 시작 + $((PRE * 1000 + win_ms / 2))ms. 부하 ${RATE}건/초 x 약 $(( total / RATE ))초 (배경 공모주 ${bg_n}개)"
 
   (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_NAME="k6-$RUN_ID" \
     bash run-k6.sh s2 --ipo "$t" --run-id "$RUN_ID" -e "IPO_IDS=$bg" -e "START_AT=$start_at" -e "RATE=$RATE" -e "PRE=$PRE" \
-    -e "POST=$POST" -e "TARGET_SEC=$TARGET_SEC" -e "QUANTITY=$QUANTITY") > "$OUT/k6-console.out" 2>&1; krc=$?
+    -e "POST=$POST" -e "TARGET_SEC=$TARGET_SEC" -e "QUANTITY=$QUANTITY" -e "PRE_VUS=$PRE_VUS" -e "MAX_VUS=$MAX_VUS") > "$OUT/k6-console.out" 2>&1; krc=$?
   say "k6 종료 코드 $krc (0 통과, 99 임계값 위반)"
   case "$krc" in 0|99) ;; *) die 1 "k6 실행 실패 (k6-console.out)" ;; esac
 

@@ -148,6 +148,8 @@ rm -rf "$REPO"; REPO="$REPO_REAL"
 S2_SRC="${1:-$HERE/../s2.sh}"
 grep -q 'verify/s2_judge.py.*' "$S2_SRC" && grep -A2 'verify/s2_judge.py' "$S2_SRC" | grep -q -- '--expect-requests "$total"' \
   && ok "main: 판정에 --expect-requests \"\$total\"을 넘김" || bad "main: 판정 인자" "s2_judge.py 호출에 --expect-requests \"\$total\"이 없음"
+grep -A2 'bash run-k6.sh s2 ' "$S2_SRC" | grep -q -- '-e "PRE_VUS=$PRE_VUS" -e "MAX_VUS=$MAX_VUS"' \
+  && ok "main: k6 s2에 PRE_VUS, MAX_VUS를 넘김" || bad "main: k6 가상 사용자" "run-k6.sh s2 호출에 PRE_VUS, MAX_VUS가 없음"
 
 rm -f "$CG_LAG"
 echo "통과 $PASS, 실패 $FAIL"

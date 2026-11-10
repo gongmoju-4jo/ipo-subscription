@@ -39,10 +39,10 @@ docker() { cat "$CG_LAG"; }
 REQ_ALL="$REQUIRED_GROUPS"; REQUIRED_GROUPS="subscription-requested account-margin-reserve"   # 이 가짜 출력에 있는 그룹만
 expect_out "kafka_lag: 밀린 메시지 5 + 커밋 전 메시지 3 = 8 (멤버 없는 그룹도 셈)" 0 8 kafka_lag
 REQUIRED_GROUPS="$REQ_ALL"
-docker() { grep -v '^subscription-requested ' "$REAL_CG"; }
-expect_out "kafka_lag: 필수 그룹(subscription-requested)이 없으면 다른 그룹 랙이 0이어도 실패" 1 "" kafka_lag
+docker() { grep -v '^subscription-margin-reserved ' "$REAL_CG"; }
+expect_out "kafka_lag: 필수 그룹(subscription-margin-reserved)이 없으면 다른 그룹 랙이 0이어도 실패" 1 "" kafka_lag
 out="$(kafka_lag 2>&1 >/dev/null)"
-[[ "$out" == *"필수 Consumer 그룹 없음: subscription-requested"* ]] && ok "kafka_lag: 없는 필수 그룹 이름을 남김" || bad "kafka_lag: 없는 그룹 이름" "stderr='$out'"
+[[ "$out" == *"필수 Consumer 그룹 없음: subscription-margin-reserved"* ]] && ok "kafka_lag: 없는 필수 그룹 이름을 남김" || bad "kafka_lag: 없는 그룹 이름" "stderr='$out'"
 docker() { echo "Error response from daemon: container is not running" >&2; return 1; }
 expect_out "kafka_lag: docker 실패면 0이 아니라 실패" 1 "" kafka_lag
 docker() { echo "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG"; }

@@ -46,6 +46,10 @@ public class Allocation extends BaseEntity {
     @Column(nullable = false)
     private UUID accountId;
 
+    // 배정 계산에 넣은 청약 수량. 회차의 공모주 조건, lotterySeed와 함께 배정 결과를 다시 계산(재현)할 때 쓴다
+    // 이 컬럼을 추가하기 전에 저장한 행은 null이라 재현할 수 없다
+    private Long requestedQuantity;
+
     @Column(nullable = false)
     private long equalAllocatedQuantity;
 
@@ -73,10 +77,25 @@ public class Allocation extends BaseEntity {
         allocation.subscriptionId = result.subscription().subscriptionId();
         allocation.userId = result.subscription().userId();
         allocation.accountId = result.subscription().accountId();
+        allocation.requestedQuantity = result.subscription().requestedQuantity();
         allocation.equalAllocatedQuantity = result.equalAllocatedQuantity();
         allocation.proportionalAllocatedQuantity = result.proportionalAllocatedQuantity();
         allocation.allocatedQuantity = result.allocatedQuantity();
         allocation.allocatedAmount = result.allocatedAmount();
         return allocation;
+    }
+
+    /**
+     * 다시 계산한 결과가 저장된 배정 결과와 같은지 확인한다 (균등, 비례, 배정 수량, 배정 대금).
+     *
+     * @param result 같은 청약을 다시 계산한 결과
+     * @return 네 값이 모두 같으면 true
+     */
+    public boolean hasSameResult(AllocationCalculation.SubscriptionAllocation result) {
+        return subscriptionId.equals(result.subscription().subscriptionId())
+                && equalAllocatedQuantity == result.equalAllocatedQuantity()
+                && proportionalAllocatedQuantity == result.proportionalAllocatedQuantity()
+                && allocatedQuantity == result.allocatedQuantity()
+                && allocatedAmount == result.allocatedAmount();
     }
 }

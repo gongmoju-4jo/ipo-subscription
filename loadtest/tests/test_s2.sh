@@ -114,6 +114,36 @@ POST=0; expect_out "plan: 기본 ② POST=0 (지난 측정 env.txt와 같음)" 0
 RATE=275 POST=40 TARGET_SEC=3.5; expect_out "plan: .5는 Math.round처럼 올림 (28462.5 → 28463)" 0 "3500 28463 28" plan 1000
 RATE=274 PRE=60 POST=40 TARGET_SEC=0
 
+# ---------- check_jars: 서비스마다 로컬 jar와 컨테이너 jar sha256이 같아야 통과 ----------
+REPO_REAL="$REPO"; REPO="$(mktemp -d)"
+for m in api-gateway account-service subscription-service allocation-service eureka-server; do
+  mkdir -p "$REPO/$m/build/libs"; printf 'jar-%s' "$m" > "$REPO/$m/build/libs/$m-0.0.1-SNAPSHOT.jar"
+done
+SHA_SUB="$(sha256_file "$REPO/subscription-service/build/libs/subscription-service-0.0.1-SNAPSHOT.jar")"
+JAR_DIFF=""   # 이 컨테이너만 다른 sha를 돌려준다
+docker() { # docker exec <컨테이너> sha256sum /app/app.jar → 같은 이름 모듈의 로컬 jar sha (CRLF)
+  local c="$2" m
+  [ "$c" = "$JAR_DIFF" ] && { printf 'deadbeef  /app/app.jar\r\n'; return 0; }
+  m="${c#ipo-}"; printf '%s  /app/app.jar\r\n' "$(sha256_file "$REPO/$m/build/libs/$m-0.0.1-SNAPSHOT.jar")"
+}
+out="$(check_jars)"; rc=$?
+[ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c '(컨테이너와 같음)')" = 5 ] && [[ "$out" == *"jar subscription-service sha256=$SHA_SUB"* ]] \
+  && ok "check_jars: 5개 모두 같으면 통과하고 sha256을 줄마다 남김" || bad "check_jars: 같음" "rc=$rc out='$out'"
+JAR_DIFF=ipo-subscription-service
+out="$(check_jars)"; rc=$?
+[ "$rc" = 1 ] && [[ "$out" == *"jar subscription-service 로컬=$SHA_SUB 컨테이너=deadbeef (다름)"* ]] \
+  && ok "check_jars: 하나라도 다르면 실패" || bad "check_jars: 다름" "rc=$rc out='$out'"
+JAR_DIFF=""; docker() { [ "$2" = ipo-allocation-service ] && return 1; printf 'x  /app/app.jar\n'; }
+out="$(check_jars)"; rc=$?
+[ "$rc" = 1 ] && [[ "$out" == *"jar allocation-service 로컬="*"컨테이너=조회 실패 (다름)"* ]] \
+  && ok "check_jars: 컨테이너 조회 실패를 같음으로 보지 않음" || bad "check_jars: 조회 실패" "rc=$rc out='$out'"
+printf 'plain' > "$REPO/api-gateway/build/libs/api-gateway-0.0.1-SNAPSHOT-plain.jar"
+rm -f "$REPO/eureka-server/build/libs/"*.jar
+out="$(check_jars)"; rc=$?
+[ "$rc" = 1 ] && [[ "$out" == *"jar api-gateway: 로컬 jar가 1개가 아님"* ]] && [[ "$out" == *"jar eureka-server: 로컬 jar가 1개가 아님"* ]] \
+  && ok "check_jars: 로컬 jar가 2개이거나 없으면 실패" || bad "check_jars: 로컬 jar 개수" "rc=$rc out='$out'"
+rm -rf "$REPO"; REPO="$REPO_REAL"
+
 # ---------- main: 판정에 계획한 전체 요청 수를 넘김 (main은 Docker가 필요해 호출 줄만 본다) ----------
 S2_SRC="${1:-$HERE/../s2.sh}"
 grep -q 'verify/s2_judge.py.*' "$S2_SRC" && grep -A2 'verify/s2_judge.py' "$S2_SRC" | grep -q -- '--expect-requests "$total"' \

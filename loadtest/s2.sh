@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# S2 마감 경계 한 회차: 워밍업 → 대상, 배경 공모주 준비 → 대상 공모주 마감 시각 설정 → k6 s2 → 마감, 소진 대기 → 판정
+# S2 마감 경계 한 회차: 빌드, 배포(jar 확인) → 워밍업 → 대상, 배경 공모주 준비 → 대상 공모주 마감 시각 설정 → k6 s2 → 마감, 소진 대기 → 판정
 # 사용: bash loadtest/s2.sh --run-id <run_id> [--grace PT1S]
 #   --grace: 청약 서비스의 마감 유예(ipo.close.grace-period, 기본 PT20S)만 바꿔 다시 띄우고, 끝나면(오류로 멈춰도) 원래대로 되돌린다
 # 결과: results/<run_id>/ (k6 원본, s2-judge.txt, sql_result.txt), results/<run_id>-W/ (워밍업)
@@ -11,8 +11,9 @@
 #          LEAD(25, 시작까지 여유 초), WARM(1, 0이면 워밍업 생략), WARM_*(official.sh와 같은 기본값),
 #          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g),
 #          REQUIRED_GROUPS(official.sh와 같은 기본값. 소진 대기에서 모두 조회돼야 하는 Consumer 그룹),
-#          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다)
-# 종료 코드: 0 유효 회차, 3 회차 무효(판정 파일 참고), 5 커밋하지 않은 변경, 그 밖은 준비, 실행 실패
+#          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다),
+#          SKIP_BUILD(0, 1이면 빌드, 배포를 건너뛴다. 서비스 5개의 로컬 jar와 컨테이너 jar sha256 비교는 그대로 하고 env.txt에 남는다)
+# 종료 코드: 0 유효 회차, 3 회차 무효(판정 파일 참고), 5 커밋하지 않은 변경 또는 컨테이너 jar가 로컬 jar와 다름, 그 밖은 준비, 실행 실패
 # source로 불러오면(tests/test_s2.sh) 함수만 정의하고 실행하지 않는다
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
@@ -28,6 +29,9 @@ CLOSE_TIMEOUT="${CLOSE_TIMEOUT:-300}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"; PO
 REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:1.3.0}"; K6_CPUS="${K6_CPUS:-2}"; K6_MEMORY="${K6_MEMORY:-1g}"
 GRACE_FILE="loadtest/data/compose.s2-grace.yml"
+# 컨테이너:모듈 (jar sha256 비교 대상, official.sh와 같은 목록)
+JAR_TARGETS="ipo-api-gateway:api-gateway ipo-account-service:account-service ipo-subscription-service:subscription-service ipo-allocation-service:allocation-service ipo-eureka-server:eureka-server"
+ALL_CONTAINERS="ipo-postgres ipo-kafka ipo-eureka-server ipo-api-gateway ipo-account-service ipo-subscription-service ipo-allocation-service"
 LOG="${LOG:-/dev/null}"; PY=""; COMPOSE=(); RUN_ID=""; WRUN=""; GRACE=""; DIRTY_N=0
 
 # ---------- 공통 ----------
@@ -135,6 +139,42 @@ wait_healthy() {
   done
   return 1
 }
+# 인자: 제한 초. 모든 컨테이너(ALL_CONTAINERS)가 healthy가 되면 게이트웨이의 서비스 목록 반영을 위해 45초 기다리고 성공
+wait_all_healthy() {
+  local start c ok
+  start="$(date +%s)"
+  while [ $(( $(date +%s) - start )) -le "$1" ]; do
+    ok=1
+    for c in $ALL_CONTAINERS; do [ "$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null)" = healthy ] || ok=0; done
+    [ "$ok" = 1 ] && { sleep 45; return 0; }
+    sleep 5
+  done
+  return 1
+}
+sha256_file() { py - "$(pypath "$1")" <<'PYEOF'
+import hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as f:
+    for b in iter(lambda: f.read(1 << 20), b""):
+        h.update(b)
+print(h.hexdigest())
+PYEOF
+}
+# 서비스마다 로컬 jar와 컨테이너 안 jar의 sha256을 한 줄씩 출력한다 (official.sh record_versions와 같은 비교)
+# 하나라도 다르거나, 컨테이너 조회가 실패하거나, 로컬 jar가 1개가 아니면 실패 (측정한 코드가 HEAD인지 알 수 없다)
+check_jars() {
+  local pair c mod jars ls cs bad=0
+  for pair in $JAR_TARGETS; do
+    c="${pair%%:*}"; mod="${pair#*:}"
+    jars=( "$REPO/$mod/build/libs/"*.jar )
+    if [ "${#jars[@]}" -ne 1 ] || [ ! -f "${jars[0]}" ]; then echo "jar $mod: 로컬 jar가 1개가 아님"; bad=1; continue; fi
+    ls="$(sha256_file "${jars[0]}")" || ls="?"
+    cs="$(docker exec "$c" sha256sum /app/app.jar 2>/dev/null | tr -d '\r' | awk '{print $1}')"
+    if [ -n "$cs" ] && [ "$ls" = "$cs" ]; then echo "jar $mod sha256=$ls (컨테이너와 같음)"
+    else echo "jar $mod 로컬=$ls 컨테이너=${cs:-조회 실패} (다름)"; bad=1; fi
+  done
+  return "$bad"
+}
 # 청약 서비스 컨테이너에 들어간 마감 유예 환경변수 값 (없으면 빈 값)
 grace_env() { docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$SUB_CONTAINER" | tr -d '\r' | grep '^IPO_CLOSE_GRACEPERIOD=' | cut -d= -f2; }
 
@@ -165,6 +205,18 @@ main() {
   pick_compose
 
   docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1 || true
+  # 이 커밋으로 빌드, 배포하고 컨테이너 jar가 같은지 확인한다 (official.sh와 같은 방식. 다시 빌드하지 않은 채 재면 env.txt의 git과 실제 코드가 달라진다)
+  if [ "${SKIP_BUILD:-0}" != 1 ]; then
+    say "jar 빌드 (./gradlew build -x test)"
+    (cd "$REPO" && ./gradlew build -x test -q) >> "$LOG" 2>&1 || die 1 "gradle 빌드 실패 (진행.log)"
+    say "컨테이너 배포 (compose up -d --build)"
+    compose "${COMPOSE_FILES[@]}" up -d --build >> "$LOG" 2>&1 || die 1 "compose up 실패 (진행.log)"
+  else
+    say "빌드, 배포 건너뜀 (SKIP_BUILD=1). jar 비교는 한다"
+  fi
+  wait_all_healthy 600 || die 1 "컨테이너가 600초 안에 모두 healthy가 되지 않음"
+  local jars_info
+  jars_info="$(check_jars)" || { printf '%s\n' "$jars_info" | tee -a "$LOG" >&2; die 5 "컨테이너 안 jar가 로컬 jar와 다름. 이 커밋으로 다시 빌드, 배포한다"; }
   if [ -n "$GRACE" ]; then
     printf 'services:\n  subscription-service:\n    environment:\n      IPO_CLOSE_GRACEPERIOD: "%s"\n' "$GRACE" > "$REPO/$GRACE_FILE"
     trap 'docker stop -t 30 "k6-$RUN_ID" "k6-$WRUN" >/dev/null 2>&1; restore_grace' EXIT
@@ -223,7 +275,8 @@ main() {
     echo "run_id=$RUN_ID git=$(git_repo rev-parse --short HEAD) branch=$(git_repo rev-parse --abbrev-ref HEAD) dirty=$DIRTY_N allow_dirty=${ALLOW_DIRTY:-0}"
     echo "grace=$grace_actual rate=$RATE pre=$PRE post=$POST target_sec=$TARGET_SEC target_window_ms=$win_ms total=$total users=$u bg_ipos=$bg_n price=$PRICE quantity=$QUANTITY"
     echo "target_ipo=$t start_at_ms=$start_at end_at_ms=$end_ms"
-    echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY"
+    echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY skip_build=${SKIP_BUILD:-0}"
+    printf '%s\n' "$jars_info"
   } > "$OUT/env.txt"
   say "대상 $t 마감 시각 = 시작 + $((PRE * 1000 + win_ms / 2))ms. 부하 ${RATE}건/초 x 약 $(( total / RATE ))초 (배경 공모주 ${bg_n}개)"
 

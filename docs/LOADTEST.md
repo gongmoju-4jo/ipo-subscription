@@ -443,6 +443,7 @@ POST=0 bash loadtest/s2.sh --run-id S2-g1-r1 --grace PT1S              # ② 장
 - 요청 배치: 회원은 공모주 하나에 한 번씩만 청약할 수 있어서, 마감을 볼 **대상 공모주**(회원 1,000명이 1건씩)와 부하만 만드는 **배경 공모주**(마감 시각이 12시간 뒤)를 나눕니다. 시간 순서는 배경 `PRE`초 → 대상 구간(274건/초면 약 3.6초, 가운데가 마감 시각) → 배경 `POST`초이고, 전체 속도는 처음부터 끝까지 `RATE`입니다. 배경 공모주 수는 요청 수로 계산합니다. k6는 요청을 보내기 전에(`setup()`) 요청 순번 전체를 배분해 보고, 대상 요청 수가 회원 수와 다르거나 대상 회원, 배경 공모주와 회원 조합이 겹치면 멈춥니다.
 - 기본값: `RATE` 274(SA 기획서 규모 산정 ⑤, 마감 직전 10분 피크), `PRE` 60초(SA "마감 몇 분 전 몰림"을 로컬에 맞춰 줄임), `POST` 40초(마감 유예 20초 + 마감 확인 주기 5초 + 여유). `TARGET_SEC`를 주면 대상 구간을 그 길이로 늘려 배경과 섞습니다.
 - 시작 시각과 대상 공모주의 마감 시각은 컨테이너 시계(PostgreSQL)로 정하고, k6는 `setup()`에서 시작 시각까지 기다립니다. 판정은 DB의 `received_at`(게이트웨이 도착 시각)과 마감 시각으로 합니다.
+- 시작할 때 `official.sh`와 같이 이 커밋으로 jar를 빌드해 배포하고(`./gradlew build -x test`, `compose up -d --build`), 서비스 5개의 로컬 jar와 컨테이너 안 jar의 sha256이 같은지 확인합니다. 다르면 시작하지 않습니다(종료 코드 5). `SKIP_BUILD=1`이면 빌드, 배포만 건너뛰고 비교는 그대로 합니다. 그래서 회차마다 서비스가 다시 뜨고 1회에 2~3분이 더 걸립니다.
 - 회차마다 토큰을 다시 받고, 정식 측정과 같은 워밍업(`warmup.py`, 응답 시간 추세가 평평해질 때까지)을 합니다 (`WARM=0`이면 생략).
 - `--grace`: 청약 서비스의 마감 유예(`ipo.close.grace-period`, 기본 `PT20S`)만 바꿔 다시 띄우고, 끝나면(오류로 멈춰도) 덮어쓰기 없이 다시 띄워 되돌립니다. 덮어쓰기 파일은 `loadtest/data/`(커밋하지 않음)에 둡니다.
 - ②에서 `POST=0`인 이유: 접수 토픽 랙을 마감 조건으로 보는 구조에서는 다른 공모주 요청이 이어지면 랙이 0이 되지 않아 마감이 미뤄지고(① 평소 부하에서 마감 시각 약 46초 뒤), 그 사이 늦은 발행이 끝나 누락이 가려집니다. 마감 뒤 요청이 없어 랙이 바로 0이 되는 조건에서 "발행 지연 > 유예"를 봅니다.
@@ -450,7 +451,7 @@ POST=0 bash loadtest/s2.sh --run-id S2-g1-r1 --grace PT1S              # ② 장
   - 입력 오류 (종료 코드 1, 판정하지 않음): k6 요청 수(`http_reqs.count`)나 읽은 로그 행 수가 계획한 전체 요청 수와 다름(읽지 못한 행이나 일찍 끝난 실행을 0건으로 넘기지 않음), `stage`가 `target`, `bg`가 아닌 로그 행, 요약에 밀린 요청 수나 응답 검사 실패 수가 없음, 마감된 대상 공모주인데 `verify.sql` 20~22번 결과가 없음
   - 회차 무효 (종료 코드 3, 다시 실행): 밀린 요청(`dropped_iterations`)이 있음(요청 순번으로 대상 구간을 정해서 밀리면 구간이 늦어짐), k6 응답 검사 실패(상태 코드나 오류 코드가 기대와 다름), 401(토큰 만료), 대상 요청에 202와 422가 모두 있지 않음(마감 시각이 대상 구간 밖), 배경 요청에 202가 아닌 응답(배경 공모주는 마감되지 않아야 함)
   - 측정값 (기대 0): `verify.sql` 20번(마감 처리 뒤 생긴 청약), 21번(마감 시각 이후 도착인데 접수된 청약), 22번(마감 때 확정 수와 지금 유효 청약 수 차이), 202를 받았는데 청약 행이 없는 요청(k6 로그 대조)
-- 결과 파일: `results/<run_id>/`에 `s2-judge.txt`, `sql_result.txt`, `env.txt`(커밋, 유예, 설정값, 대상 공모주, 시작과 마감 시각), `warmup.csv`, `진행.log`와 k6 원본. 워밍업 k6 원본은 `results/<run_id>-W/`
+- 결과 파일: `results/<run_id>/`에 `s2-judge.txt`, `sql_result.txt`, `env.txt`(커밋, 유예, 설정값, 대상 공모주, 시작과 마감 시각, 서비스별 jar sha256), `warmup.csv`, `진행.log`와 k6 원본. 워밍업 k6 원본은 `results/<run_id>-W/`
 - 한계: 대상 공모주에 요청이 몰리는 시간은 약 3.6초입니다 (회원 1,000명). 한 공모주 행에 잠금이 몰리는 부담은 실제보다 작고, 로컬 PC 안의 전후 비교로만 씁니다.
 
 ### S3, S4 Synthetic Data
@@ -556,7 +557,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `DRAIN_TIMEOUT` | `2400` | `official.sh` (소진 대기 상한 초) |
 | `REQUIRED_GROUPS` | `subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve` | `official.sh`, `s2.sh` (lag을 확인할 필수 Consumer 그룹) |
 | `STATS_INTERVAL` | `5` | `official.sh`, `g2_run.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
-| `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
+| `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh`, `s2.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
 | `BEHAVIOR_CSV` | `../synthetic/<시나리오>-behavior.csv` | `s3.js`, `s4.js` (`-e BEHAVIOR_CSV=...`, 행동 CSV 경로. k6 스크립트 기준 상대 경로) |
 | `S4_PREFIX` | `lb` | `official.sh` → `s4.js`, `judge.py --s4-prefix` (잔액 부족 묶음의 loginId 접두사. 회원 CSV가 이 묶음이 아니면 시작 전에 멈춤) |
@@ -588,7 +589,7 @@ node loadtest/tests/test_g2_quantity.mjs  # 대량 환불 청약 수량 (케이�
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)
 python loadtest/tests/test_g2_estimate.py   # 212만 건 추정 (규칙 경계 r = 0.9, 1.1, 결정 문서 계산 예시, 중앙값, 제외 회차, 측정 불가, 입력 부족, 판정 경계)
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
-bash loadtest/tests/test_s2.sh            # S2 셸 함수 (Kafka lag, 필수 Consumer 그룹 없음, 소진 대기, 마감 대기, 커밋 안 된 변경 거부, 마감 유예 확인, 공모주 생성, 판정에 계획 요청 수 전달). 조회 실패를 0이나 마감으로 넘기지 않는지 확인
+bash loadtest/tests/test_s2.sh            # S2 셸 함수 (Kafka lag, 필수 Consumer 그룹 없음, 소진 대기, 마감 대기, 커밋 안 된 변경 거부, 마감 유예 확인, 공모주 생성, 요청 계획 반올림, jar 비교, 판정에 계획 요청 수 전달). 조회 실패를 0이나 마감으로 넘기지 않는지 확인
 python loadtest/tests/test_s2_judge.py    # S2 판정 (요청 수가 계획과 다르거나 stage 없는 로그 행은 입력 오류, 회차 무효 조건(배경은 202만, k6 응답 검사 실패), 마감되지 않은 공모주, sql_result.txt 20~22번 읽기와 입력 오류, 202인데 행 없음)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)

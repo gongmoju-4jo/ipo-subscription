@@ -116,6 +116,17 @@ new_ipos() {
   [ "$n" -eq "$2" ] || return 1
   printf '%s' "$ids" | paste -sd, -
 }
+# 인자: 회원 수. 대상 구간 ms, 전체 요청 수, 배경 공모주 수(올림((전체 요청 - 회원 수) / 회원 수))를 출력한다 (s2.js와 같은 계산)
+# 반올림은 JS Math.round와 같은 floor(x + 0.5)로 한다. Python round()는 .5를 짝수 쪽으로 보내 k6가 보내는 요청 수와 1 차이 날 수 있다
+plan() {
+  py -c "
+import math
+U, RATE, PRE, POST, TS = $1, $RATE, $PRE, $POST, $TARGET_SEC
+js_round = lambda x: math.floor(x + 0.5)
+win = TS if TS > 0 else U / RATE
+total = js_round(RATE * (PRE + win + POST))
+print(js_round(win * 1000), total, math.ceil((total - U) / U))"
+}
 wait_healthy() {
   local i
   for i in $(seq 1 60); do
@@ -196,14 +207,10 @@ main() {
     sleep 30
   fi
 
-  # 대상 1개 + 배경 (필요 수 = 올림((전체 요청 - 회원 수) / 회원 수), s2.js와 같은 계산)
+  # 대상 1개 + 배경
   local win_ms total bg_n t bg now_ms start_at end_ms krc st jrc
-  read -r win_ms total bg_n <<< "$(py -c "
-import math
-U, RATE, PRE, POST, TS = $u, $RATE, $PRE, $POST, $TARGET_SEC
-win = TS if TS > 0 else U / RATE
-total = round(RATE * (PRE + win + POST))
-print(round(win * 1000), total, math.ceil((total - U) / U))")"
+  read -r win_ms total bg_n <<< "$(plan "$u")"
+  [[ "$win_ms $total $bg_n" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]] || die 1 "요청 계획 계산 실패: '$win_ms $total $bg_n'"
   t="$(new_ipos "$RUN_ID-T" 1)" || die 1 "대상 공모주 생성 실패"
   bg="$(new_ipos "$RUN_ID-BG" "$bg_n")" || die 1 "배경 공모주 생성 실패"
 

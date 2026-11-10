@@ -106,6 +106,14 @@ expect_out "new_ipos: 요청한 개수와 다르면 실패" 1 "" new_ipos run 4
 new_ipo_cmd() { echo "psql: error" >&2; return 1; }
 expect_out "new_ipos: 생성 실패" 1 "" new_ipos run 1
 
+# ---------- plan: 대상 구간 ms, 전체 요청 수, 배경 공모주 수. 반올림은 s2.js(Math.round)와 같아야 한다 ----------
+pick_python || { echo "Python 3.8 이상이 필요합니다" >&2; exit 1; }
+RATE=274 PRE=60 POST=40 TARGET_SEC=0; expect_out "plan: 기본 ① 274건/초 (지난 측정 env.txt와 같음)" 0 "3650 28400 28" plan 1000
+POST=0; expect_out "plan: 기본 ② POST=0 (지난 측정 env.txt와 같음)" 0 "3650 17440 17" plan 1000
+# 275 x 103.5 = 28462.5: Math.round는 28463, Python round()는 28462 (짝수 쪽)
+RATE=275 POST=40 TARGET_SEC=3.5; expect_out "plan: .5는 Math.round처럼 올림 (28462.5 → 28463)" 0 "3500 28463 28" plan 1000
+RATE=274 PRE=60 POST=40 TARGET_SEC=0
+
 # ---------- main: 판정에 계획한 전체 요청 수를 넘김 (main은 Docker가 필요해 호출 줄만 본다) ----------
 S2_SRC="${1:-$HERE/../s2.sh}"
 grep -q 'verify/s2_judge.py.*' "$S2_SRC" && grep -A2 'verify/s2_judge.py' "$S2_SRC" | grep -q -- '--expect-requests "$total"' \

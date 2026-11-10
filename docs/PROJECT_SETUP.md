@@ -116,10 +116,12 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 | API | 설명 |
 | --- | --- |
 | `POST /api/v1/queues/{ipoId}/entries` | 대기열 진입. 새로 진입 201, 이미 줄에 있거나 입장 허가 상태면 200 (순번 유지) |
+| `GET /api/v1/queues/{ipoId}/entries/me` | 순서 조회. 줄에도 없고 허가도 없으면 404 `RESOURCE_NOT_FOUND` (화면은 다시 진입) |
 
 - 인증은 다른 API와 같이 JWT. 대기열 주인은 토큰의 `sub`
 - 응답: `status`(`WAITING`, `ADMITTED`), `position`, `waitingCount`, `estimatedWaitSeconds`, `enteredAt`, `admissionExpiresAt`, `pollIntervalMillis`. 시각은 KST
 - 화면은 `pollIntervalMillis`마다 순서를 조회한다. 간격 = max(1초, 대기 인원 ÷ `queue.poll-budget`)라서 대기자가 많아도 초당 조회 수가 예산을 넘지 않는다
+- 조회가 받은 간격의 `queue.dropout-factor`배(3배) 동안 끊기면 입장 스케줄러가 줄에서 뺀다 (이탈). 진입, 조회할 때마다 기한이 늘어난다
 - 입장 스케줄러가 1초마다 `queue.admit-rate`명(전체 공모주 합, 기본 433)에게 앞에서부터 허가를 준다. 허가는 `queue.admission-ttl`(5분) 동안 유효
 - 공모주가 실제로 있는지, 청약 중인지는 확인하지 않는다 (접속이 몰리는 경로에 서비스 호출을 넣지 않음)
 - Redis에 접속할 수 없으면 503 `SERVICE_UNAVAILABLE` (대기열 없이 통과시키지 않음)

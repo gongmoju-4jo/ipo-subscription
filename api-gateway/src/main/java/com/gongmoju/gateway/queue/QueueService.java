@@ -51,6 +51,19 @@ public class QueueService {
     }
 
     /**
+     * 내 순서를 조회한다. 줄에 있으면 이탈 기한을 이번에 알려주는 간격 × 이탈 배수만큼 늘린다.
+     * 줄에도 없고 허가도 없으면(이탈 처리됨, 허가 만료, 진입 전) {@link QueueEntryNotFoundException}.
+     */
+    public Mono<QueueView> find(UUID ipoId, UUID userId) {
+        Instant now = clock.instant();
+        return repository.waitingCount(ipoId).flatMap(count -> {
+            Duration interval = pollInterval(count);
+            return repository.find(ipoId, userId, now.plus(interval.multipliedBy(properties.dropoutFactor())))
+                    .map(state -> view(ipoId, state, now, interval));
+        }).switchIfEmpty(Mono.error(QueueEntryNotFoundException::new));
+    }
+
+    /**
      * 순서 조회 간격 = max(1초, 대기 인원 ÷ 조회 예산).
      */
     Duration pollInterval(long waitingCount) {

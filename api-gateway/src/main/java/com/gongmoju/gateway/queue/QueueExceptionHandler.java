@@ -33,6 +33,13 @@ class QueueExceptionHandler {
                 .body(ApiResponse.failure("UNAUTHORIZED", "로그인이 필요합니다.", null));
     }
 
+    // 줄에도 없고 허가도 없음 (진입 전, 이탈 처리됨, 허가 만료)
+    @ExceptionHandler(QueueEntryNotFoundException.class)
+    ResponseEntity<ApiResponse<Void>> notFound(QueueEntryNotFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.failure("RESOURCE_NOT_FOUND", e.getMessage(), null));
+    }
+
     // Redis 연결 실패, 응답 시간 초과. 대기열 없이 통과시키지 않고 막는다 (Redis 장애 시 차단)
     @ExceptionHandler(DataAccessException.class)
     ResponseEntity<ApiResponse<Void>> redisUnavailable(DataAccessException e) {

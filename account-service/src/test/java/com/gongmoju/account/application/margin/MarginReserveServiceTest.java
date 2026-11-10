@@ -337,6 +337,25 @@ class MarginReserveServiceTest {
         assertMismatchRolledBack();
     }
 
+    // #106에서 margin 저장이 인출(잔고 변경)보다 먼저가 되어, 인출이 실패하면 이미 저장한 margin도 함께 롤백되어야 한다
+    @Test
+    void margin_저장_후_인출이_실패하면_margin과_처리_기록이_모두_롤백된다() {
+        // 예수금은 충분하지만 청약증거금에 더하면 long 범위를 초과하는 계좌 (Math.addExact에서 ArithmeticException 발생)
+        jdbcTemplate.update("UPDATE account SET margin_balance = ? WHERE account_id = ?", Long.MAX_VALUE - 1, accountId);
+
+        assertThatThrownBy(() -> marginReserveService.reserve(command(UUID.randomUUID(), 15_000)))
+                .isInstanceOf(ArithmeticException.class);
+
+        Map<String, Object> account = jdbcTemplate.queryForMap(
+                "SELECT cash_balance, margin_balance FROM account WHERE account_id = ?", accountId);
+        assertThat(account.get("cash_balance")).isEqualTo(20_000L);
+        assertThat(account.get("margin_balance")).isEqualTo(Long.MAX_VALUE - 1);
+        assertThat(count("margin")).isZero();
+        assertThat(count("ledger_entry")).isZero();
+        assertThat(count("outbox")).isZero();
+        assertThat(count("processed_event")).isZero();
+    }
+
     // 불일치: 첫 인출만 남고 두 번째 요청은 처리 기록까지 롤백된다 (재시도 후 DLT 대상)
     private void assertMismatchRolledBack() {
         assertReservedOnce(15_000);

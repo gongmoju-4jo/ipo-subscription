@@ -9,6 +9,7 @@
 #          K6_CPUS, K6_MEMORY(컨테이너 실행 시 k6 컨테이너의 CPU, 메모리 상한. 예: 1.0, 512m. 서비스와 같은 머신이면 k6도 CPU를 쓴다)
 #          K6_LABEL(컨테이너 실행 시 loadtest.batch 라벨. official.sh가 중단될 때 자기가 띄운 k6만 골라 멈추는 데 쓴다)
 #          K6_NAME(컨테이너 실행 시 컨테이너 이름. official.sh는 k6-<run_id>로 줘서 docker stats에서 실행별 k6를 구분한다)
+#          REDIS_CONTAINER, ADMIT_TTL_MS(k6 실행 전에 넣는 입장 허가. seed/admit.sh)
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -26,6 +27,19 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$IPO" ] && [ -n "$RUN_ID" ] || { echo "--ipo, --run-id가 필요합니다" >&2; exit 1; }
 OUT="$DIR/results/$RUN_ID"; mkdir -p "$OUT"
+
+# 게이트웨이는 입장 허가가 있는 청약 신청만 서비스로 보낸다. 회원 CSV 전원 x 공모주(--ipo, -e IPO_IDS)의 허가를 Redis에 미리 넣는다 (seed/admit.sh)
+ADMIT_IPOS="$IPO"
+for e in ${EXTRA[@]+"${EXTRA[@]}"}; do
+  case "$e" in IPO_IDS=*) ADMIT_IPOS="$ADMIT_IPOS,${e#IPO_IDS=}" ;; esac
+done
+# k6가 끝나면(실패, 임계값 위반, Ctrl+C 포함) 지운다. 지우기에 실패해도 경고만 하고 k6 종료 코드(99 등)는 그대로 돌려준다
+# (남은 키는 ADMIT_TTL_MS가 지나면 사라진다). 넣기 전에 걸어 둬서, 넣다가 중간에 실패해도 일부 들어간 허가를 지운다
+revoke_admissions() {
+  bash "$DIR/seed/admit.sh" --users "$DIR/$USERS" --ipos "$ADMIT_IPOS" --revoke || echo "경고: 입장 허가를 지우지 못했습니다" >&2
+}
+trap revoke_admissions EXIT
+bash "$DIR/seed/admit.sh" --users "$DIR/$USERS" --ipos "$ADMIT_IPOS"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:1.3.0}"
 
 MODE="${K6_MODE:-auto}"

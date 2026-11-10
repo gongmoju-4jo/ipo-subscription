@@ -1,5 +1,7 @@
 # 모든 알림을 Slack 연락처(slack-incident)로 보낸다
-# - group_by: 같은 규칙, 같은 서비스의 알림은 한 메시지로 묶는다
+# - group_by: 같은 규칙, 같은 서비스, 같은 사유의 알림은 한 메시지로 묶는다
+#   reason은 QueueAdmissionDown의 실패 사유 라벨이다. 빼면 사유가 다른 알림이 한 묶음이 되어, 새 사유의 장애 메시지에
+#   이미 해제된 다른 사유가 "복구된 장애"로 섞여 나온다. 다른 규칙에는 reason 라벨이 없어 영향이 없다
 # - group_wait: 처음 발생한 뒤 30초 동안 같은 묶음의 알림을 모아 한 번에 보낸다
 # - group_interval: 이미 보낸 묶음에 바뀐 것(새 알림, 복구)이 있으면 1분 간격으로 보낸다 (복구 메시지가 늦어도 1분 안에 나가게)
 # - repeat_interval: 복구되지 않으면 1시간마다 다시 보낸다
@@ -7,7 +9,7 @@ apiVersion: 1
 policies:
   - orgId: 1
     receiver: slack-incident
-    group_by: ['grafana_folder', 'alertname', 'job']
+    group_by: ['grafana_folder', 'alertname', 'job', 'reason']
     group_wait: 30s
     group_interval: 1m
     repeat_interval: 1h

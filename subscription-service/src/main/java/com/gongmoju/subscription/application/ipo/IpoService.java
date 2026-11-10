@@ -4,12 +4,14 @@ import com.gongmoju.common.exception.BusinessException;
 import com.gongmoju.common.exception.CommonErrorCode;
 import com.gongmoju.common.util.PageableUtils;
 import com.gongmoju.subscription.domain.ipo.IpoRepository;
+import com.gongmoju.subscription.domain.ipo.IpoStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -34,6 +36,18 @@ public class IpoService {
     public Page<IpoResult> list(Pageable pageable) {
         return ipoRepository.findAll(PageableUtils.toStablePageable(pageable, LIST_SORTABLE_FIELDS))
                 .map(IpoResult::from);
+    }
+
+    /**
+     * 상태가 같은 공모주를 모두 조회한다. 게이트웨이가 청약 중 공모주 목록을 주기적으로 받아 가는 내부 API(4.4)용이다.
+     * OPEN 공모주는 동시에 몇 개뿐이라 페이지로 나누지 않는다.
+     *
+     * @param status 공모주 상태
+     * @return 공모주 목록. 없으면 빈 목록. 순서는 의미 없음
+     */
+    @Transactional(readOnly = true)
+    public List<IpoResult> listByStatus(IpoStatus status) {
+        return ipoRepository.findByStatus(status).stream().map(IpoResult::from).toList();
     }
 
     /**

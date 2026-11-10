@@ -10,4 +10,10 @@ dependencies {
 	// JWT 검증 (HS256, Nimbus). WebFlux 보안 필터 체인 (버전은 Boot BOM)
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 	implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+
+	// 접속 대기열 상태 저장소 (WebFlux라 reactive 클라이언트)
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
+
+	// 대기열 Redis 스크립트 테스트 (redis:7 컨테이너)
+	testImplementation 'org.testcontainers:junit-jupiter'
 }

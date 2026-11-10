@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 청약 흐름 확인: 가입 → 로그인 → 계좌 개설 → 입금 → 청약 202 → CONFIRMED (정상), 잔액 부족, 이중청약 → REJECTED (거절)
+# 청약 흐름 확인: 가입 → 로그인 → 계좌 개설 → 입금 → 대기열 진입 → 입장 허가 → 청약 202 → CONFIRMED (정상), 잔액 부족, 이중청약 → REJECTED (거절)
+# 입장 허가 없는 청약 신청은 게이트웨이가 403(QUEUE_ADMISSION_REQUIRED)으로 막는 것도 확인한다
 set -euo pipefail
 GW=${GW:-http://localhost:8080}
 IPO=8b2d0000-0000-4000-8000-000000000001   # 테스트 공모주 A, 공모가 15,000, 최소 10주
@@ -21,6 +22,20 @@ wait_status() {
   echo "$R"; echo "→ ${i}초 후 status=$S"
   RR=$(echo "$R" | j 'd.get("data",{}).get("rejectReason")' 2>/dev/null || echo -)
   [ "$S" = "$want" ] && [ "$RR" = "$reason" ] || fail "기대 $want/$reason, 실제 $S/$RR"
+}
+# 대기열에 진입하고 입장 허가(ADMITTED)를 받을 때까지 최대 30초 순번을 조회한다
+admit() {
+  local ipo=$1 i R S
+  R=$(curl -s -m 5 -w '\nHTTP %{http_code}' -X POST "$GW/api/v1/queues/$ipo/entries" -H "$AUTH")
+  echo "$R" | head -1
+  case "$(echo "$R" | tail -1)" in "HTTP 201"|"HTTP 200") ;; *) fail "대기열 진입 응답이 201, 200이 아님" ;; esac
+  for i in $(seq 1 30); do
+    R=$(curl -s -m 5 "$GW/api/v1/queues/$ipo/entries/me" -H "$AUTH" || true)
+    S=$(echo "$R" | j 'd.get("data",{}).get("status","-")' 2>/dev/null || echo -)
+    [ "$S" = ADMITTED ] && break; sleep 1
+  done
+  echo "$R"; echo "→ ${i}초 후 status=$S"
+  [ "$S" = ADMITTED ] || fail "입장 허가를 받지 못함"
 }
 # 계좌 잔고가 기대한 예수금, 청약증거금인지 확인한다
 check_balance() {
@@ -51,6 +66,18 @@ step "4. 입금 200,000원"
 curl -s -X POST $GW/api/v1/accounts/$ACC/deposits -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"requestId\":\"$(uuid)\",\"amount\":200000}"; echo
 
+step "5-1. 입장 허가 없이 청약 신청 → 403 QUEUE_ADMISSION_REQUIRED (서비스로 가지 않음)"
+NOADM_RES=$(curl -s -w '\nHTTP %{http_code}' -X POST "$GW/api/v1/subscriptions" -H "$AUTH" -H 'Content-Type: application/json' \
+  -d "{\"requestId\":\"$(uuid)\",\"ipoId\":\"$IPO\",\"accountId\":\"$ACC\",\"requestedQuantity\":10}")
+echo "$NOADM_RES"
+NOADM_CODE=$(echo "$NOADM_RES" | head -1 | j 'd["error"]["code"]' 2>/dev/null || echo -)
+if [ "$(echo "$NOADM_RES" | tail -1)" != "HTTP 403" ] || [ "$NOADM_CODE" != QUEUE_ADMISSION_REQUIRED ]; then
+  fail "입장 허가 없는 청약이 403 QUEUE_ADMISSION_REQUIRED가 아님"
+fi
+
+step "5-2. 공모주 A 대기열 진입 → 입장 허가"
+admit "$IPO"
+
 step "5. 청약 신청 10주 (150,000원) → 202"
 SUB_RES=$(curl -s -w '\nHTTP %{http_code}' -X POST $GW/api/v1/subscriptions -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"requestId\":\"$(uuid)\",\"ipoId\":\"$IPO\",\"accountId\":\"$ACC\",\"requestedQuantity\":10}")
@@ -65,13 +92,14 @@ check_balance 50000 150000
 
 step "8. 잔액 부족 청약 공모주 B ${Q2:-50000}주 (예수금 50,000보다 큼) → REJECTED 예상"
 IPO2=8b2d0000-0000-4000-8000-000000000002   # 공모주 B (같은 종목 이중청약을 피하려고 다른 종목)
+admit "$IPO2"   # 공모주 B의 입장 허가 (A의 허가로는 B를 신청할 수 없다)
 SUB2_RES=$(curl -s -w '\nHTTP %{http_code}' -X POST $GW/api/v1/subscriptions -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"requestId\":\"$(uuid)\",\"ipoId\":\"$IPO2\",\"accountId\":\"$ACC\",\"requestedQuantity\":${Q2:-50000}}")
 echo "$SUB2_RES"
 SUB2=$(sub_id "$SUB2_RES")
 wait_status $SUB2 REJECTED INSUFFICIENT_BALANCE
 
-step "9. 이중청약: 공모주 A에 requestId만 바꿔 다시 10주 → REJECTED(ALREADY_SUBSCRIBED) 예상"
+step "9. 이중청약: 공모주 A에 requestId만 바꿔 다시 10주 → REJECTED(ALREADY_SUBSCRIBED) 예상 (5-2의 입장 허가가 아직 유효)"
 SUB3_RES=$(curl -s -w '\nHTTP %{http_code}' -X POST $GW/api/v1/subscriptions -H "$AUTH" -H 'Content-Type: application/json' \
   -d "{\"requestId\":\"$(uuid)\",\"ipoId\":\"$IPO\",\"accountId\":\"$ACC\",\"requestedQuantity\":10}")
 echo "$SUB3_RES"

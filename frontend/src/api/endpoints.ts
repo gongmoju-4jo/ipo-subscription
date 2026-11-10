@@ -10,6 +10,7 @@ import type {
   LoginRequest,
   LoginResponse,
   PageResponse,
+  QueueEntryResponse,
   SignUpRequest,
   SignUpResponse,
   SubscriptionAcceptedResponse,
@@ -45,6 +46,16 @@ export const subscriptionApi = {
   create: (body: SubscriptionCreateRequest) => api.post<SubscriptionAcceptedResponse>('/api/v1/subscriptions', body),
   list: () => api.get<PageResponse<SubscriptionSummaryResponse>>('/api/v1/subscriptions?size=50'),
   get: (subscriptionId: string) => api.get<SubscriptionResponse>(`/api/v1/subscriptions/${subscriptionId}`),
+};
+
+// 접속 대기열 (게이트웨이가 직접 응답). 청약 신청은 입장 허가가 있어야 서비스로 간다 (없으면 403 QUEUE_ADMISSION_REQUIRED)
+export const queueApi = {
+  // 새로 진입 201, 이미 대기 중이거나 허가 상태면 200 (처음 순번 유지)
+  enter: (ipoId: string) => api.post<QueueEntryResponse>(`/api/v1/queues/${ipoId}/entries`),
+  // 대기 중도 아니고 허가도 없으면 404 (이탈 처리됐거나 허가가 만료됨)
+  me: (ipoId: string) => api.get<QueueEntryResponse>(`/api/v1/queues/${ipoId}/entries/me`),
+  // 대기열 이탈: 대기 순번과 허가를 모두 지운다. 없어도 200
+  leave: (ipoId: string, options?: { keepalive?: boolean }) => api.delete<void>(`/api/v1/queues/${ipoId}/entries/me`, options),
 };
 
 export const allocationApi = {

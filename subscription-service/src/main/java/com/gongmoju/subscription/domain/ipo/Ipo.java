@@ -122,7 +122,7 @@ public class Ipo extends BaseEntity {
     }
 
     /**
-     * 청약을 마감한다 (OPEN → CLOSED, D-16). 마감 조건(대기 시간, 랙 0, 진행 중 SAGA 0건)은 호출하는 쪽에서 확인한다.
+     * 청약을 마감한다 (OPEN → CLOSED, D-16). 마감 조건(대기 시간, 진행 중 SAGA 0건)은 호출하는 쪽에서 확인한다.
      *
      * @throws BusinessException OPEN이 아니면 INVALID_STATUS_TRANSITION(409)
      */

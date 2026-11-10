@@ -79,7 +79,7 @@ ipo:
   close:  # 공모주 마감 스케줄러 (F-13, D-16)
     enabled: true         # false면 스케줄 실행을 끈다
     interval: PT5S        # 이전 실행이 끝난 뒤 다시 확인하기까지 쉬는 시간
-    grace-period: PT20S   # 마감 시각 뒤 대기 시간. 마감 전에 받은 요청의 발행이 끝나기를 기다린다 (max.block.ms 5초 + delivery.timeout.ms 10초 + 여유)
+    grace-period: PT20S   # 마감 시각 뒤 대기 시간. 마감 직전에 게이트웨이에 도착해 아직 처리 중인 접수가 거절되지 않게 기다린다 (마감 보장은 공모주 행 잠금이 맡음, D-29)
     alert-after: PT5M     # 대기 시간 뒤 이 시간 동안 마감하지 못하면 ERROR 로그. 이후 같은 간격으로 반복하고, 강제로 마감하지는 않는다
 
 saga:

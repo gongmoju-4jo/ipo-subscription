@@ -2,6 +2,7 @@ package com.gongmoju.allocation.infrastructure.persistence;
 
 import com.gongmoju.allocation.domain.allocation.Allocation;
 import com.gongmoju.allocation.domain.allocation.AllocationRepository;
+import com.gongmoju.allocation.domain.allocation.AllocationRound;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
@@ -23,5 +24,10 @@ class AllocationRepositoryAdapter implements AllocationRepository {
     @Override
     public Optional<Allocation> findBySubscriptionIdAndUserId(UUID subscriptionId, UUID userId) {
         return jpaRepository.findBySubscriptionIdAndUserId(subscriptionId, userId);
+    }
+
+    @Override
+    public List<Allocation> findAllByAllocationRound(AllocationRound allocationRound) {
+        return jpaRepository.findAllByAllocationRound(allocationRound);
     }
 }

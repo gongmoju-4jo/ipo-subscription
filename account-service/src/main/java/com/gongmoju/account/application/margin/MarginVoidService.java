@@ -41,7 +41,7 @@ public class MarginVoidService {
     @Transactional
     public void voidMargin(VoidMarginCommand command) {
 
-        // 1. processed_event: 같은 eventId 재수신이면 처리 없이 종료한다 (인출과 같은 방식)
+        // 1. processed_event: 같은 eventId 재수신이면 처리 없이 종료한다 (인출과 동일한 방식)
         if (!processedEventRepository.insertIfAbsent(command.eventId(), CONSUMER_NAME, TOPIC)) {
             log.info("[증거금 반환] 중복 수신, 건너뜀. eventId={}, subscriptionId={}",
                     command.eventId(), command.subscriptionId());
@@ -51,12 +51,12 @@ public class MarginVoidService {
         log.debug("[증거금 반환] 시작. eventId={}, subscriptionId={}, accountId={}, reason={}",
                 command.eventId(), command.subscriptionId(), command.accountId(), command.reason());
 
-        // 2. 계좌 락: margin 조회보다 먼저 걸어서, 같은 계좌의 인출, 반환이 순서대로 처리된다.
+        // 2. 계좌 락: margin 조회보다 먼저 획득해서, 같은 계좌의 인출, 반환이 순서대로 처리된다.
         //   - 계좌가 없는 경우 (E-20): 모든 요청을 DLT로 보내면 청약이 COMPENSATING에 잔류해 공모주 마감이 중단됨
         //     - margin이 있으면: 요청 계좌와 margin의 계좌가 다른 데이터 불일치라 DLT
         //     - margin이 없으면: 0원으로 반환 완료를 응답해 청약이 CANCELLED로 종료되도록 한다.
         //       인출, 반환 요청 모두 청약의 account_id를 사용하므로, 존재하지 않는 계좌로 요청된 인출은
-        //       ACCOUNT_NOT_FOUND로 거절돼 금전 이동이 발생하지 않는다.
+        //       ACCOUNT_NOT_FOUND로 거절되어 예수금 차감이 발생하지 않는다.
         //       계좌가 없으면 FK 제약으로 반환 기록(margin_void_intent)은 생략한다.
         Account account = accountRepository.findByIdForUpdate(command.accountId()).orElse(null);
         if (account == null) {
@@ -77,7 +77,7 @@ public class MarginVoidService {
         // 3. margin 조회: 응답 금액은 margin 상태로 결정한다
         Optional<Margin> found = marginRepository.findBySubscriptionId(command.subscriptionId());
 
-        // 3-1. 다른 계좌의 margin이면 요청이 잘못된 것이라 DLT (예외로 롤백, processed_event도 남지 않음)
+        // 3-1. margin 계좌와 요청 계좌가 불일치하면 DLT (예외로 롤백, processed_event도 저장되지 않음)
         if (found.isPresent() && !found.get().getAccount().getId().equals(command.accountId())) {
             log.error("[증거금 반환] margin 계좌와 요청 계좌가 달라 DLT 대상. eventId={}, subscriptionId={}, marginId={}, "
                             + "margin accountId={}, 요청 accountId={}",
@@ -106,7 +106,7 @@ public class MarginVoidService {
         switch (margin.getStatus()) {
             case PENDING -> voidPending(command, account, margin);
             case VOIDED -> {
-                // 5-3. 이미 반환됨: 잔고 변경 없이 처음 응답과 같은 금액으로 재발행한다 (eventId는 새로 생성)
+                // 5-3. 이미 반환됨: 잔고 변경 없이 처음 응답과 동일한 금액으로 재발행한다 (eventId는 새로 생성)
                 log.info("[증거금 반환] 재요청, margin.voided 재발행. eventId={}, subscriptionId={}, marginId={}, amount={}",
                         command.eventId(), command.subscriptionId(), margin.getId(), margin.getAmount());
                 marginEventPublisher.publishVoided(voided(margin));
@@ -129,7 +129,7 @@ public class MarginVoidService {
         }
     }
 
-    // 5-2. PENDING: 청약증거금 → 예수금, margin VOIDED, 원장, 응답 Outbox
+    // 5-2. PENDING: 청약증거금 차감, 예수금 증가 (MARGIN_VOID 원장), margin VOIDED, 응답 Outbox 저장
     private void voidPending(VoidMarginCommand command, Account account, Margin margin) {
         // 원장은 거래 후 잔고를 계좌에서 조회하므로 잔고 변경 후에 만든다 (계좌가 잔고를 변경한 후 원장을 만들어 반환한다)
         ledgerEntryRepository.save(account.voidMargin(margin.getAmount(), margin));

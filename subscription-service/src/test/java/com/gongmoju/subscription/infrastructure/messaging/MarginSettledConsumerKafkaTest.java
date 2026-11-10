@@ -104,7 +104,7 @@ class MarginSettledConsumerKafkaTest {
     private UUID subscriptionId;
 
     /**
-     * 공모주, 청약 생성 메서드가 없으므로(시드 데이터와 접수 Consumer만 사용) SQL로 직접 저장함.
+     * 공모주, 청약 생성 메서드가 없으므로(시드 데이터와 청약 API만 사용) SQL로 직접 저장함.
      * 마감된 공모주(공모가 15,000원)의 청약 100주(증거금 1,500,000원)를 3주(45,000원) 배정받은 {@code ALLOCATED} 상태로 시작함.
      */
     @BeforeEach

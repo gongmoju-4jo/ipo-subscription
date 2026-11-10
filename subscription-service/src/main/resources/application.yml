@@ -60,8 +60,7 @@ spring:
         request.timeout.ms: 5000
         delivery.timeout.ms: 10000
     consumer:
-      group-id: subscription-requested  # 접수 Consumer 이름과 같은 값 (이벤트 명세 3-2)
-      auto-offset-reset: earliest       # 그룹이 처음 생길 때 이미 202를 응답한 메시지를 놓치지 않도록 처음부터 읽음
+      auto-offset-reset: earliest       # 그룹이 처음 생길 때 이미 쌓인 메시지(인출, 배정, 정산 결과 등)를 놓치지 않도록 처음부터 읽음
       enable-auto-commit: false         # 처리가 끝난 레코드만 커밋함 (리스너 ack-mode: record)
     listener:
       ack-mode: record

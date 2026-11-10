@@ -10,7 +10,7 @@ class SubscriptionIdGeneratorTest {
 
     @Test
     void 이벤트_명세_예시와_같은_청약_ID를_만든다() {
-        // 이벤트 명세 2-1 subscription.requested 예시 (결정 11: "{userId}:{requestId}"의 UUID v3)
+        // 이벤트 명세 결정 11 예시 ("{userId}:{requestId}"의 UUID v3)
         UUID userId = UUID.fromString("0192a000-3333-7eee-8fff-000000000003");
         UUID requestId = UUID.fromString("0192c1a0-7b3e-7c11-9a20-5f3d2e1b4c88");
 

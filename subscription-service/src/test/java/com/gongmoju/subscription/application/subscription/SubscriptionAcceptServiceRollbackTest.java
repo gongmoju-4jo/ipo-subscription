@@ -1,8 +1,6 @@
 package com.gongmoju.subscription.application.subscription;
 
 import com.gongmoju.subscription.domain.subscription.MarginReserveRequestRecorder;
-import com.gongmoju.subscription.domain.subscription.SubscriptionIdGenerator;
-import com.gongmoju.subscription.domain.subscription.SubscriptionRequested;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -26,7 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 
 /**
- * 증거금 확보 요청 기록이 실패하면 청약 저장도 함께 롤백되는지 검증함 (같은 트랜잭션). 기록기를 실패하도록 대체하므로 별도 클래스로 분리함. Docker 필요.
+ * 증거금 인출 요청 기록이 실패하면 청약 저장도 함께 롤백되는지 검증함 (같은 트랜잭션). 기록기를 실패하도록 대체하므로 별도 클래스로 분리함. Docker 필요.
  */
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
@@ -71,17 +69,15 @@ class SubscriptionAcceptServiceRollbackTest {
     }
 
     @Test
-    @DisplayName("증거금 확보 요청 기록이 실패하면 예외가 전파되고 PENDING 청약도 저장되지 않는다")
+    @DisplayName("증거금 인출 요청 기록이 실패하면 예외가 전파되고 PENDING 청약도 저장되지 않는다")
     void accept_rollsBackSubscription_whenRecordingFails() {
         // given
-        UUID userId = UUID.randomUUID();
-        UUID requestId = UUID.randomUUID();
-        SubscriptionRequested event = new SubscriptionRequested(requestId, SubscriptionIdGenerator.generate(userId, requestId),
-                userId, UUID.randomUUID(), ipoId, 100, Instant.now().truncatedTo(ChronoUnit.MILLIS).minusSeconds(60));
+        SubscribeCommand command = new SubscribeCommand(UUID.randomUUID(), ipoId, UUID.randomUUID(), 100);
+        Instant receivedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS).minusSeconds(60);
         doThrow(new IllegalStateException("기록 실패")).when(marginReserveRequestRecorder).record(any());
 
         // when, then
-        assertThatThrownBy(() -> acceptService.accept(event))
+        assertThatThrownBy(() -> acceptService.accept(UUID.randomUUID(), receivedAt, command))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("기록 실패");
         Integer saved = jdbcTemplate.queryForObject("SELECT count(*) FROM subscription WHERE ipo_id = ?", Integer.class, ipoId);

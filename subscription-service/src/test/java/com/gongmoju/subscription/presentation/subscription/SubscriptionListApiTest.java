@@ -20,7 +20,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// 내 청약 목록 API. 청약은 접수 Consumer가 저장하므로 공모주와 청약을 DB에 직접 넣는다 (H2 메모리 DB)
+// 내 청약 목록 API. 청약은 청약 API가 저장하므로 공모주와 청약을 DB에 직접 넣는다 (H2 메모리 DB)
 @SpringBootTest(properties = {
         "eureka.client.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:subscription-list-api;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",

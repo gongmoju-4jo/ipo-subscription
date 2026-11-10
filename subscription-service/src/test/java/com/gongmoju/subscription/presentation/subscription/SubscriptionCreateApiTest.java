@@ -16,11 +16,18 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
@@ -58,6 +65,9 @@ class SubscriptionCreateApiTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private DataSource dataSource;
 
     @BeforeEach
     void setUp() {
@@ -142,6 +152,46 @@ class SubscriptionCreateApiTest {
         assertThat(jdbcTemplate.queryForObject("SELECT requested_quantity FROM subscription.subscription WHERE request_id = ?",
                 Long.class, REQUEST_ID)).isEqualTo(100L);
         assertThat(subscriptionCount()).isEqualTo(1);
+    }
+
+    @Test
+    void 같은_회원이_다른_requestId로_동시에_청약하면_늦은_쪽도_202이고_이중청약으로_거절된다() throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Connection first = dataSource.getConnection()) {
+            // given: 같은 회원, 같은 공모주의 앞 요청이 PENDING을 저장하고 아직 커밋하지 않음
+            first.setAutoCommit(false);
+            try (PreparedStatement insert = first.prepareStatement("""
+                    INSERT INTO subscription.subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,
+                                                           margin_amount, status, attempts, last_requested_at, received_at,
+                                                           version, created_at, created_by, updated_at, updated_by)
+                    VALUES (?, ?, ?, ?, ?, 100, 1500000, 'PENDING', 1, now(), now(), 0, now(), 'test', now(), 'test')""")) {
+                UUID firstRequestId = UUID.randomUUID();
+                insert.setObject(1, SubscriptionIdGenerator.generate(USER_ID, firstRequestId));
+                insert.setObject(2, firstRequestId);
+                insert.setObject(3, IPO_ID);
+                insert.setObject(4, USER_ID);
+                insert.setObject(5, ACCOUNT_ID);
+                insert.executeUpdate();
+            }
+
+            // when: 늦은 요청은 앞 요청을 보지 못하고 저장하다가 유효 청약 유일 인덱스에서 앞 요청의 커밋을 기다림
+            Future<ResultActions> late = executor.submit(() -> subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 50), USER_ID.toString(), DURING_UTC));
+            Thread.sleep(1000);
+            assertThat(late).isNotDone();
+            first.commit();
+
+            // then: 제약 위반 뒤 다시 실행해 이중청약으로 저장하고 202
+            late.get(10, TimeUnit.SECONDS)
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.data.subscriptionId").value(SubscriptionIdGenerator.generate(USER_ID, REQUEST_ID).toString()));
+            Map<String, Object> rejected = jdbcTemplate.queryForMap(
+                    "SELECT status, reject_reason FROM subscription.subscription WHERE request_id = ?", REQUEST_ID);
+            assertThat(rejected.get("status")).isEqualTo("REJECTED");
+            assertThat(rejected.get("reject_reason")).isEqualTo("ALREADY_SUBSCRIBED");
+            assertThat(outboxCount()).isZero();
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test

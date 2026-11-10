@@ -117,8 +117,9 @@ class MarginVoidServiceTest {
         assertThat(count("margin")).isZero();
     }
 
+    // E-20 (11/9 재변경): 계좌도 margin도 없으면 옮긴 돈이 없어 0원으로 응답한다 (청약이 CANCELLED로 끝나 마감을 막지 않게)
     @Test
-    void 계좌가_없으면_amount_0으로_응답하고_반환_기록은_남기지_않는다() {
+    void 계좌가_없고_margin도_없으면_amount_0으로_응답하고_반환_기록은_남기지_않는다() {
         UUID subscriptionId = UUID.randomUUID();
         UUID unknownAccountId = UUID.randomUUID();
 

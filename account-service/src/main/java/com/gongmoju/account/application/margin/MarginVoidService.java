@@ -54,28 +54,28 @@ public class MarginVoidService {
                 command.eventId(), command.subscriptionId(), command.accountId(), command.reason());
 
         // 2. 계좌 락: margin 조회보다 먼저 걸어서, 같은 계좌의 인출, 반환이 순서대로 처리된다.
-        //   - 계좌가 없으면 옮긴 돈도 없어서 amount 0으로 응답한다 (E-20). FK 때문에 반환 기록도 남길 수 없다
+        //   - 계좌가 없는 경우 (E-20): 모든 요청을 DLT로 보내면 청약이 COMPENSATING에 남아 공모주 마감이 멈춤
+        //     - margin이 있으면: 요청 계좌와 margin의 계좌가 다른 데이터 불일치라 DLT
+        //     - margin이 없으면: 0원으로 반환 완료를 응답해 청약이 CANCELLED로 종료되도록 한다.
+        //       인출, 반환 요청 모두 청약의 account_id를 사용하므로, 존재하지 않는 계좌로 요청된 인출은
+        //       ACCOUNT_NOT_FOUND로 거절돼 금전 이동이 발생하지 않는다.
+        //       계좌가 없으면 FK 제약으로 반환 기록(margin_void_intent)은 생략한다.
         Account account = accountRepository.findByIdForUpdate(command.accountId()).orElse(null);
         if (account == null) {
-
-            // 요청 계좌는 없는데 margin이 있으면, margin의 계좌와 다른 것이므로 계좌 불일치가 우선, DLT로 전송 (E-20)
-            //   - 락을 걸 계좌가 없어서, 처리 중인 다른 계좌의 인출과 충돌 가능
             if (marginRepository.findBySubscriptionId(command.subscriptionId()).isPresent()) {
-
                 log.error("[증거금 반환] 요청 계좌는 없는데 margin이 있어 DLT 대상. eventId={}, subscriptionId={}, accountId={}",
                         command.eventId(), command.subscriptionId(), command.accountId());
-
-                throw new InvalidEventException(
-                        "증거금 계좌와 요청 계좌가 다릅니다. subscriptionId=" + command.subscriptionId()
-                );
+                throw new InvalidEventException("증거금 계좌와 요청 계좌가 다릅니다. subscriptionId=" + command.subscriptionId());
             }
             log.warn("[증거금 반환] 계좌 없음, amount 0으로 응답. eventId={}, subscriptionId={}, accountId={}",
                     command.eventId(), command.subscriptionId(), command.accountId());
-
-            marginEventPublisher.publishVoided( // 0원으로 이벤트 발행
+            marginEventPublisher.publishVoided(
                     new MarginVoided(
-                            command.subscriptionId(), null, command.accountId(), 0
-                    ));
+                            command.subscriptionId(),
+                            null,
+                            command.accountId(), 0
+                    )
+            );
             return;
         }
 

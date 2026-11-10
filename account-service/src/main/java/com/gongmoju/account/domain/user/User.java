@@ -32,7 +32,7 @@ public class User extends BaseEntity {
     @Column(nullable = false, unique = true, length = 20)
     private String loginId;
 
-    // BCrypt 해시. 원문은 저장, 응답, 로그 어디에도 남기지 않음
+    // BCrypt 해시. 원문은 저장, 응답, 로그 어디에도 기록하지 않음
     @Column(nullable = false, length = 100)
     private String passwordHash;
 

@@ -217,6 +217,18 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 | `HttpServerErrorRateHigh` | 서비스별 5xx 응답 비율 5% 초과 (`/actuator/**` 제외) | 2분 |
 | `HikariConnectionPending` | DB 커넥션을 기다리는 요청이 있음 (`hikaricp_connections_pending > 0`) | 1분 |
 | `JvmHeapUsageHigh` | 힙 사용률 90% 초과 | 5분 |
+| `QueueAdmissionDown` | 게이트웨이 대기열 입장 처리 실패 (`queue_admission_failing{reason} > 0`). 사유별로 따로 뜨고 메시지에 사유가 나온다 (아래 표). 입장 허가가 나가지 않아 청약 신청이 모두 막힌다 | 1분 |
+
+- `QueueAdmissionDown`은 입장 스케줄러가 요청이 없어도 1초마다 Redis를 쓰는 결과라 트래픽이 없는 시간의 Redis 장애도 잡는다. 게이트웨이가 내려가 지표가 없을 때는 울리지 않는다 (`ServiceDown`이 잡는다)
+- 사유 (`reason` 라벨, 게이트웨이 `AdmissionFailureReason`이 예외로 판단)
+
+| `reason` | 메시지 내용 | 판단 기준 |
+| --- | --- | --- |
+| `redis_timeout` | Redis 응답 없음 (연결 끊김 또는 응답 지연으로 시간 초과) | 명령 시간 초과(2초), 입장 처리 5초 초과. **Redis 컨테이너가 멈춘 경우도 여기로 온다** (클라이언트가 재연결을 기다리다 시간 초과로 끝나서 "느림"과 "멈춤"을 구분할 수 없다) |
+| `redis_connection` | Redis 연결 실패 (연결 거부 또는 주소를 찾을 수 없음) | 새 연결을 맺지 못함. 게이트웨이가 Redis 없이 기동했을 때 등 |
+| `redis_oom` | Redis 메모리 상한 도달 (쓰기 거부) | `OOM command not allowed` (`maxmemory`, `noeviction`). 대기자가 있을 때 입장 허가를 쓰다가 거부된 경우라, 대기자가 없으면 이 사유로는 뜨지 않는다 (그때는 진입 API가 503) |
+| `redis_error` | Redis 오류 (키 자료형 불일치, 스크립트 오류 등) | 위에 해당하지 않는 Redis 오류 |
+| `other` | 게이트웨이 내부 오류 (Redis 외 원인) | Redis와 무관한 오류 (코드 오류 등) |
 
 - DB 커넥션 대기, 힙 기준값은 정식 부하 측정(S1 600건/초)에서 울리지 않는 값이다 (대기가 이어진 최장 시간 약 25초, 힙 최대 76%)
 - 설정 파일은 `docker/grafana/provisioning/alerting/`: `rules.yml`(규칙), `contact-points.yml`(Slack 연락처, 메시지 형식), `policies.yml`(묶어 보내기, 반복 주기)
@@ -244,6 +256,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 1. `docker-compose up -d grafana` 후 로그에 `finished to provision alerting`이 있는지 본다 (`docker-compose logs grafana`)
 2. `docker-compose stop allocation-service` → 약 1분 30초 뒤 `[local] 🚨 장애 발생 ServiceDown`
 3. `docker-compose start allocation-service` → 서비스가 뜨고 1~2분 안에 `[local] ✅ 복구 ServiceDown`
+4. `docker-compose stop redis` → 약 2분 뒤 `[local] 🚨 장애 발생 QueueAdmissionDown` (내용: Redis 응답 없음) / `docker-compose start redis` → 1~2분 안에 `[local] ✅ 복구 QueueAdmissionDown`
 
 #### IntelliJ 실행과 Docker 실행의 차이
 

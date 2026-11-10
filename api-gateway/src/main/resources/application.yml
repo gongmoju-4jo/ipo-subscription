@@ -12,7 +12,8 @@ management:
   health:
     redis:
       # Redis 상태를 게이트웨이 헬스체크에 넣지 않는다. 넣으면 Redis가 잠깐 끊겨도 게이트웨이 컨테이너가 unhealthy가 된다
-      # Redis 자체는 redis 컨테이너 헬스체크가 보고, 장애 중 대기열 API와 청약 신청의 503은 5xx 비율 알림(HttpServerErrorRateHigh)에 잡힌다
+      # Redis 장애는 입장 처리 지표(queue_admission_up, 알림 QueueAdmissionDown)로 잡는다. 입장 스케줄러가 요청이 없어도 1초마다 Redis를 쓰므로
+      # 트래픽이 없는 시간에도 잡히고, 장애 중 대기열 API와 청약 신청의 503은 5xx 비율 알림(HttpServerErrorRateHigh)에도 잡힌다
       enabled: false
   metrics:
     distribution:

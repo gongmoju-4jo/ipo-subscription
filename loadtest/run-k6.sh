@@ -33,13 +33,13 @@ ADMIT_IPOS="$IPO"
 for e in ${EXTRA[@]+"${EXTRA[@]}"}; do
   case "$e" in IPO_IDS=*) ADMIT_IPOS="$ADMIT_IPOS,${e#IPO_IDS=}" ;; esac
 done
-bash "$DIR/seed/admit.sh" --users "$DIR/$USERS" --ipos "$ADMIT_IPOS"
 # k6가 끝나면(실패, 임계값 위반, Ctrl+C 포함) 지운다. 지우기에 실패해도 경고만 하고 k6 종료 코드(99 등)는 그대로 돌려준다
-# (남은 키는 ADMIT_TTL_MS가 지나면 사라진다)
+# (남은 키는 ADMIT_TTL_MS가 지나면 사라진다). 넣기 전에 걸어 둬서, 넣다가 중간에 실패해도 일부 들어간 허가를 지운다
 revoke_admissions() {
   bash "$DIR/seed/admit.sh" --users "$DIR/$USERS" --ipos "$ADMIT_IPOS" --revoke || echo "경고: 입장 허가를 지우지 못했습니다" >&2
 }
 trap revoke_admissions EXIT
+bash "$DIR/seed/admit.sh" --users "$DIR/$USERS" --ipos "$ADMIT_IPOS"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:1.3.0}"
 
 MODE="${K6_MODE:-auto}"

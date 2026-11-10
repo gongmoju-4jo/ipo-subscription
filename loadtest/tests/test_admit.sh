@@ -124,7 +124,8 @@ for k6rc in 0 99; do
 done
 : > "$T/calls"
 ( FAKE_LOG="$T/calls" FAKE_ERRORS=1 K6_MODE=local PATH="$T/bin:$PATH" bash "$LT/run-k6.sh" s0 --ipo "$I1" --run-id t-e ) > /dev/null 2>&1; RC=$?
-[ "$RC" != 0 ] && ! grep -q K6 "$T/calls" && ok "run-k6.sh: 허가를 넣지 못하면 k6를 실행하지 않고 실패" || bad "run-k6.sh 넣기 실패" "rc=$RC 순서=$(tr '\n' ' ' < "$T/calls")"
+[ "$RC" != 0 ] && ! grep -q K6 "$T/calls" && [ "$(tr '\n' ' ' < "$T/calls")" = "SET DEL " ] \
+  && ok "run-k6.sh: 허가를 넣지 못하면 k6를 실행하지 않고 실패, 일부 들어갔을 허가도 지움" || bad "run-k6.sh 넣기 실패" "rc=$RC 순서=$(tr '\n' ' ' < "$T/calls")"
 
 echo
 echo "통과 $PASS, 실패 $FAIL"

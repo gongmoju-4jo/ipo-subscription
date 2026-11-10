@@ -39,10 +39,12 @@ class AccountTest {
         Account account = account(0, 0);
         UUID requestId = UUID.randomUUID();
 
+        Margin margin = margin(account);
+
         LedgerEntry deposit = account.deposit(1_000, requestId);
-        LedgerEntry reserve = account.reserveMargin(700, margin(account));
-        LedgerEntry post = account.postMargin(450, margin(account));
-        LedgerEntry refund = account.refundMargin(250, margin(account));
+        LedgerEntry reserve = account.reserveMargin(700, margin);
+        LedgerEntry post = account.postMargin(450, margin);
+        LedgerEntry refund = account.refundMargin(250, margin);
 
         assertThat(deposit.getType()).isEqualTo(LedgerEntryType.DEPOSIT);
         assertThat(deposit.getRequestId()).isEqualTo(requestId);
@@ -56,18 +58,26 @@ class AccountTest {
         assertThat(refund.getType()).isEqualTo(LedgerEntryType.REFUND);
         assertThat(refund.getCashBalanceAfter()).isEqualTo(550);
         assertThat(refund.getMarginBalanceAfter()).isZero();
+        // 증거금 거래 원장은 전달한 margin과 연결된다
+        assertThat(deposit.getMargin()).isNull();
+        assertThat(reserve.getMargin()).isSameAs(margin);
+        assertThat(post.getMargin()).isSameAs(margin);
+        assertThat(refund.getMargin()).isSameAs(margin);
     }
 
     @Test
     void 반환은_MARGIN_VOID_원장을_돌려준다() {
         Account account = account(300, 700);
 
-        LedgerEntry voided = account.voidMargin(700, margin(account));
+        Margin margin = margin(account);
+
+        LedgerEntry voided = account.voidMargin(700, margin);
 
         assertThat(voided.getType()).isEqualTo(LedgerEntryType.MARGIN_VOID);
         assertThat(voided.getAmount()).isEqualTo(700);
         assertThat(voided.getCashBalanceAfter()).isEqualTo(1_000);
         assertThat(voided.getMarginBalanceAfter()).isZero();
+        assertThat(voided.getMargin()).isSameAs(margin);
     }
 
     @Test

@@ -90,6 +90,13 @@ public class QueueRedisRepository {
     }
 
     /**
+     * 이 공모주의 대기 인원. 순서 조회 간격을 정할 때 쓴다.
+     */
+    public Mono<Long> waitingCount(UUID ipoId) {
+        return redis.opsForZSet().size(waitingKey(ipoId));
+    }
+
+    /**
      * 대기자가 있는 공모주 목록.
      */
     public Flux<UUID> activeIpoIds() {

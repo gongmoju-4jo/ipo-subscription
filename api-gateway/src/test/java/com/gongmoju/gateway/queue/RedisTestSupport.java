@@ -25,6 +25,12 @@ abstract class RedisTestSupport {
         TEMPLATE = new ReactiveStringRedisTemplate(factory);
     }
 
+    // 게이트웨이 전체를 띄우는 테스트가 이 컨테이너에 붙도록 접속 주소를 넘긴다
+    protected static void redisProperties(org.springframework.test.context.DynamicPropertyRegistry registry) {
+        registry.add("spring.data.redis.host", REDIS::getHost);
+        registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
+    }
+
     protected static void flushAll() {
         TEMPLATE.execute(connection -> connection.serverCommands().flushAll()).blockLast();
     }

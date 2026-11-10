@@ -13,7 +13,7 @@ import java.util.Base64;
 import java.util.Date;
 
 // 테스트에서 account-service가 발급하는 것과 같은 규격(HS256, sub/role/iss/iat/exp)의 토큰을 만든다
-final class JwtTestTokens {
+public final class JwtTestTokens {
 
     private static final String ISSUER = "account-service";
 
@@ -21,13 +21,13 @@ final class JwtTestTokens {
     }
 
     // 지금부터 1시간 동안 유효한 토큰
-    static String valid(String secretBase64, String subject, String role) throws JOSEException {
+    public static String valid(String secretBase64, String subject, String role) throws JOSEException {
         Instant now = Instant.now();
         return custom(secretBase64, ISSUER, subject, role, now, now.plus(1, ChronoUnit.HOURS));
     }
 
     // 이미 만료된 토큰
-    static String expired(String secretBase64, String subject, String role) throws JOSEException {
+    public static String expired(String secretBase64, String subject, String role) throws JOSEException {
         Instant issuedAt = Instant.now().minus(2, ChronoUnit.HOURS);
         return custom(secretBase64, ISSUER, subject, role, issuedAt, issuedAt.plus(1, ChronoUnit.HOURS));
     }

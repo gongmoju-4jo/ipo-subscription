@@ -31,6 +31,9 @@ spring:
       # 접속 대기열 저장소. IntelliJ는 localhost(.env의 REDIS_PORT, 기본 6379), Docker는 compose가 REDIS_HOST=redis를 넣는다
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Redis가 응답하지 않을 때 오래 붙잡지 않고 503으로 끝낸다 (기본값은 응답 대기 60초, 연결 10초)
+      timeout: 2s
+      connect-timeout: 1s
   cloud:
     gateway:
       server:

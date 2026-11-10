@@ -91,6 +91,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 - 새 외부 경로 → `api-gateway/.../application.yml`에 추가
 - `/internal/**`은 라우팅 X (Feign 전용, 외부 접근 불가)
+- `/api/v1/queues/**`는 라우팅 X. 게이트웨이가 직접 응답한다 (접속 대기열, [아래](#접속-대기열))
 
 ### 📌 게이트웨이 인증
 
@@ -107,6 +108,21 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
 - 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
+
+### 접속 대기열
+
+청약이 몰릴 때 게이트웨이가 공모주별 줄을 세우고(Redis), 차례가 온 사람에게만 입장 허가를 준다. 코드는 `api-gateway/.../queue/`
+
+| API | 설명 |
+| --- | --- |
+| `POST /api/v1/queues/{ipoId}/entries` | 대기열 진입. 새로 진입 201, 이미 줄에 있거나 입장 허가 상태면 200 (순번 유지) |
+
+- 인증은 다른 API와 같이 JWT. 대기열 주인은 토큰의 `sub`
+- 응답: `status`(`WAITING`, `ADMITTED`), `position`, `waitingCount`, `estimatedWaitSeconds`, `enteredAt`, `admissionExpiresAt`, `pollIntervalMillis`. 시각은 KST
+- 화면은 `pollIntervalMillis`마다 순서를 조회한다. 간격 = max(1초, 대기 인원 ÷ `queue.poll-budget`)라서 대기자가 많아도 초당 조회 수가 예산을 넘지 않는다
+- 입장 스케줄러가 1초마다 `queue.admit-rate`명(전체 공모주 합, 기본 433)에게 앞에서부터 허가를 준다. 허가는 `queue.admission-ttl`(5분) 동안 유효
+- 공모주가 실제로 있는지, 청약 중인지는 확인하지 않는다 (접속이 몰리는 경로에 서비스 호출을 넣지 않음)
+- Redis에 접속할 수 없으면 503 `SERVICE_UNAVAILABLE` (대기열 없이 통과시키지 않음)
 
 ---
 

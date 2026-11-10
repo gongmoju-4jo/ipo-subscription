@@ -100,7 +100,7 @@ queue:
   admission-ttl: ${QUEUE_ADMISSION_TTL:PT5M}
   # 받은 조회 간격의 3배 동안 조회가 없으면 이탈 (창을 닫은 사람에게 허가를 주지 않게)
   dropout-factor: 3
-  # 초당 순서 조회 예산. 조회 간격 = max(1초, 대기 인원 ÷ 이 값). 대기열 효과 측정 전 임시값
+  # 초당 순번 조회 예산. 조회 간격 = max(1초, 대기 인원 ÷ 이 값). 대기열 효과 측정 전 임시값
   poll-budget: 500
   # 입장 처리 한 번에 정리할 이탈자 상한
   dropout-batch-size: 1000

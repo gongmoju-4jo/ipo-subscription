@@ -18,8 +18,8 @@ import java.util.UUID;
  *
  * <p>키 (ipoId, userId는 UUID 소문자 문자열. 대문자로 받은 값도 UUID로 바꿔 넘겨야 같은 키가 된다)
  * <ul>
- *   <li>{@code queue:{ipoId}:waiting} Sorted Set: member = userId, score = 진입 시각(ms). 줄 순서</li>
- *   <li>{@code queue:{ipoId}:heartbeat} Sorted Set: member = userId, score = 이탈 기한(ms). 지나면 입장 처리 때 줄에서 빠진다</li>
+ *   <li>{@code queue:{ipoId}:waiting} Sorted Set: member = userId, score = 진입 시각(ms). 대기 순번</li>
+ *   <li>{@code queue:{ipoId}:heartbeat} Sorted Set: member = userId, score = 이탈 기한(ms). 지나면 입장 처리 때 이탈 처리된다</li>
  *   <li>{@code queue:{ipoId}:admitted:{userId}} String + TTL: 입장 허가. 값은 진입 시각(ms)</li>
  *   <li>{@code queue:active} Set: 대기자가 있는 ipoId. 입장 스케줄러가 돌 대상</li>
  * </ul>
@@ -47,9 +47,9 @@ public class QueueRedisRepository {
     }
 
     /**
-     * 대기열에 진입한다. 이미 줄에 있으면 처음 순번을 유지하고, 이미 허가를 받았으면 허가 상태를 돌려준다.
+     * 대기열에 진입한다. 이미 대기 중이면 처음 순번을 유지하고, 이미 허가를 받았으면 허가 상태를 돌려준다.
      *
-     * @param deadline 이탈 기한. 이 시각까지 순서 조회가 없으면 입장 처리 때 줄에서 빠진다
+     * @param deadline 이탈 기한. 이 시각까지 순번 조회가 없으면 입장 처리 때 이탈 처리된다
      */
     public Mono<QueueState> enter(UUID ipoId, UUID userId, Instant now, Instant deadline) {
         List<String> keys = List.of(waitingKey(ipoId), heartbeatKey(ipoId), ACTIVE_KEY, admittedKey(ipoId, userId));
@@ -59,7 +59,7 @@ public class QueueRedisRepository {
     }
 
     /**
-     * 내 상태를 조회한다. 줄에 있으면 이탈 기한을 늘린다. 줄에도 없고 허가도 없으면 비어 있다.
+     * 내 상태를 조회한다. 대기 중이면 이탈 기한을 늘린다. 대기 중도 아니고 허가도 없으면 비어 있다.
      */
     public Mono<QueueState> find(UUID ipoId, UUID userId, Instant deadline) {
         List<String> keys = List.of(waitingKey(ipoId), heartbeatKey(ipoId), admittedKey(ipoId, userId));
@@ -70,7 +70,7 @@ public class QueueRedisRepository {
     }
 
     /**
-     * 줄과 입장 허가를 모두 지운다. 없어도 성공한다.
+     * 대기 순번과 입장 허가를 모두 지운다. 없어도 성공한다.
      */
     public Mono<Void> leave(UUID ipoId, UUID userId) {
         List<String> keys = List.of(waitingKey(ipoId), heartbeatKey(ipoId), admittedKey(ipoId, userId));
@@ -97,7 +97,7 @@ public class QueueRedisRepository {
     }
 
     /**
-     * 이 공모주의 대기 인원. 순서 조회 간격을 정할 때 쓴다.
+     * 이 공모주의 대기 인원. 순번 조회 간격을 정할 때 쓴다.
      */
     public Mono<Long> waitingCount(UUID ipoId) {
         return redis.opsForZSet().size(waitingKey(ipoId));

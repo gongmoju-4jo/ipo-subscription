@@ -186,7 +186,7 @@ class AdmissionSchedulerTest extends RedisTestSupport {
     }
 
     @Test
-    void Redis_메모리_상한에_닿으면_사유가_redis_oom이고_대기자는_줄에_그대로_남는다() {
+    void Redis_메모리_상한에_닿으면_사유가_redis_oom이고_대기자는_대기열에_그대로_남는다() {
         UUID ipoId = UUID.randomUUID();
         enterUsers(ipoId, 3);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -201,7 +201,7 @@ class AdmissionSchedulerTest extends RedisTestSupport {
 
         assertThat(up(registry)).isZero();
         assertThat(failingReasons(registry)).containsExactly("redis_oom");
-        // 허가를 쓰지 못한 사람은 줄에서 빠지지 않는다 (허가 없이 줄에서 사라지면 안 된다)
+        // 허가를 쓰지 못한 사람은 대기열에서 빠지지 않는다 (허가 없이 대기열에서 사라지면 안 된다)
         assertThat(waitingCount(ipoId)).isEqualTo(3);
 
         scheduler.run();

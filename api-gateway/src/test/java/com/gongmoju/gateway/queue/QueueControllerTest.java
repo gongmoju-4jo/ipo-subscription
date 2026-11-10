@@ -99,7 +99,7 @@ class QueueControllerTest extends RedisTestSupport {
     }
 
     @Test
-    void 대문자_ipoId로_진입해도_같은_줄이다() throws Exception {
+    void 대문자_ipoId로_진입해도_같은_대기열이다() throws Exception {
         enter(ipoId.toString(), token(userId)).expectStatus().isCreated();
 
         enter(ipoId.toString().toUpperCase(), token(userId)).expectStatus().isOk();
@@ -169,7 +169,7 @@ class QueueControllerTest extends RedisTestSupport {
     }
 
     @Test
-    void 줄에_없으면_조회는_404() throws Exception {
+    void 대기_중이_아니면_조회는_404() throws Exception {
         find(ipoId.toString(), token(userId))
                 .expectStatus().isNotFound()
                 .expectBody()
@@ -178,7 +178,7 @@ class QueueControllerTest extends RedisTestSupport {
     }
 
     @Test
-    void 다른_공모주_줄에_있어도_이_공모주_조회는_404() throws Exception {
+    void 다른_공모주_대기열에_있어도_이_공모주_조회는_404() throws Exception {
         enter(UUID.randomUUID().toString(), token(userId)).expectStatus().isCreated();
 
         find(ipoId.toString(), token(userId)).expectStatus().isNotFound();
@@ -210,7 +210,7 @@ class QueueControllerTest extends RedisTestSupport {
     }
 
     @Test
-    void 이탈하면_200이고_줄에서_빠져_뒷사람_순번이_당겨진다() throws Exception {
+    void 이탈하면_200이고_대기열에서_빠져_뒷사람_순번이_당겨진다() throws Exception {
         UUID next = UUID.randomUUID();
         enter(ipoId.toString(), token(userId)).expectStatus().isCreated();
         enter(ipoId.toString(), token(next)).expectStatus().isCreated();
@@ -243,7 +243,7 @@ class QueueControllerTest extends RedisTestSupport {
     }
 
     @Test
-    void 이탈한_뒤_다시_진입하면_줄_맨_뒤에_201로_선다() throws Exception {
+    void 이탈한_뒤_다시_진입하면_대기열_맨_뒤에_201로_진입한다() throws Exception {
         enter(ipoId.toString(), token(userId)).expectStatus().isCreated();
         enter(ipoId.toString(), token(UUID.randomUUID())).expectStatus().isCreated();
         leave(ipoId.toString(), token(userId)).expectStatus().isOk();
@@ -254,7 +254,7 @@ class QueueControllerTest extends RedisTestSupport {
     }
 
     @Test
-    void 줄에_없어도_이탈은_여러_번_200() throws Exception {
+    void 대기_중이_아니어도_이탈은_여러_번_200() throws Exception {
         leave(ipoId.toString(), token(userId)).expectStatus().isOk();
         leave(ipoId.toString(), token(userId)).expectStatus().isOk();
     }

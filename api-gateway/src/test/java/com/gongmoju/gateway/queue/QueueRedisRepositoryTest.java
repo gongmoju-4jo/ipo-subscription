@@ -60,12 +60,12 @@ class QueueRedisRepositoryTest extends RedisTestSupport {
     }
 
     @Test
-    void 줄에_없으면_조회_결과가_없다() {
+    void 대기_중이_아니면_조회_결과가_없다() {
         assertThat(repository.find(ipoId, UUID.randomUUID(), ALIVE).blockOptional()).isEmpty();
     }
 
     @Test
-    void 공모주마다_줄이_따로다() {
+    void 공모주마다_대기열이_따로다() {
         UUID userId = UUID.randomUUID();
         enter(userId, NOW);
 
@@ -105,7 +105,7 @@ class QueueRedisRepositoryTest extends RedisTestSupport {
     }
 
     @Test
-    void 허가받은_사람이_다시_진입하면_줄에_다시_서지_않고_허가_상태를_돌려준다() {
+    void 허가받은_사람이_다시_진입하면_대기열에_다시_넣지_않고_허가_상태를_돌려준다() {
         UUID userId = UUID.randomUUID();
         enter(userId, NOW);
         repository.admit(ipoId, NOW, 1, TTL, 1000).block();
@@ -129,7 +129,7 @@ class QueueRedisRepositoryTest extends RedisTestSupport {
     }
 
     @Test
-    void 허가가_만료된_뒤_다시_진입하면_줄_맨_뒤에_선다() throws InterruptedException {
+    void 허가가_만료된_뒤_다시_진입하면_대기열_맨_뒤로_간다() throws InterruptedException {
         UUID userId = UUID.randomUUID();
         enter(userId, NOW);
         repository.admit(ipoId, NOW, 1, Duration.ofMillis(200), 1000).block();
@@ -144,7 +144,7 @@ class QueueRedisRepositoryTest extends RedisTestSupport {
     }
 
     @Test
-    void 이탈_기한이_지난_사람은_허가받지_않고_줄에서_빠진다() {
+    void 이탈_기한이_지난_사람은_허가받지_않고_이탈_처리된다() {
         UUID gone = UUID.randomUUID();
         UUID alive = UUID.randomUUID();
         repository.enter(ipoId, gone, NOW, NOW.minusMillis(1)).block();
@@ -183,7 +183,7 @@ class QueueRedisRepositoryTest extends RedisTestSupport {
     }
 
     @Test
-    void 대기_중에_이탈하면_줄에서_빠진다() {
+    void 대기_중에_이탈하면_대기열에서_빠진다() {
         UUID userId = UUID.randomUUID();
         enter(userId, NOW);
         UUID next = UUID.randomUUID();
@@ -207,7 +207,7 @@ class QueueRedisRepositoryTest extends RedisTestSupport {
     }
 
     @Test
-    void 줄에_없는데_이탈해도_성공한다() {
+    void 대기_중이_아닌데_이탈해도_성공한다() {
         repository.leave(ipoId, UUID.randomUUID()).block();
     }
 

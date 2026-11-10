@@ -11,9 +11,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 /**
- * 대기열 진입, 순서 조회, 이탈.
+ * 대기열 진입, 순번 조회, 이탈.
  *
- * <p>순서 조회 간격은 대기 인원에 비례해 늘린다: 간격 = max(1초, 대기 인원 ÷ 조회 예산).
+ * <p>순번 조회 간격은 대기 인원에 비례해 늘린다: 간격 = max(1초, 대기 인원 ÷ 조회 예산).
  * 대기자 전원이 이 간격으로 조회하면 초당 조회 수가 조회 예산을 넘지 않는다 (예: 대기 1만 명, 예산 500 → 20초 간격).
  * 이탈 기한은 이번에 알려준 간격 × 이탈 배수다. 간격이 길어져도 정상 대기자를 이탈로 처리하지 않게 고정 시간을 쓰지 않는다.
  */
@@ -58,8 +58,8 @@ public class QueueService {
     }
 
     /**
-     * 내 순서를 조회한다. 줄에 있으면 이탈 기한을 이번에 알려주는 간격 × 이탈 배수만큼 늘린다.
-     * 줄에도 없고 허가도 없으면(이탈 처리됨, 허가 만료, 진입 전) {@link QueueEntryNotFoundException}.
+     * 내 순번을 조회한다. 대기 중이면 이탈 기한을 이번에 알려주는 간격 × 이탈 배수만큼 늘린다.
+     * 대기 중도 아니고 허가도 없으면(이탈 처리됨, 허가 만료, 진입 전) {@link QueueEntryNotFoundException}.
      */
     public Mono<QueueView> find(UUID ipoId, UUID userId) {
         Instant now = clock.instant();
@@ -71,14 +71,14 @@ public class QueueService {
     }
 
     /**
-     * 대기열에서 나간다. 줄과 입장 허가를 모두 지운다. 줄에 없어도 성공한다 (여러 번 눌러도 같은 결과).
+     * 대기열에서 이탈한다. 대기 순번과 입장 허가를 모두 지운다. 대기 중이 아니어도 성공한다 (여러 번 눌러도 같은 결과).
      */
     public Mono<Void> leave(UUID ipoId, UUID userId) {
         return repository.leave(ipoId, userId);
     }
 
     /**
-     * 순서 조회 간격 = max(1초, 대기 인원 ÷ 조회 예산).
+     * 순번 조회 간격 = max(1초, 대기 인원 ÷ 조회 예산).
      */
     Duration pollInterval(long waitingCount) {
         long millis = Math.ceilDiv(waitingCount * 1000, properties.pollBudget());

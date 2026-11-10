@@ -12,7 +12,7 @@ class QueueServiceTest {
             new QueueProperties(Duration.ofSeconds(1), 433, Duration.ofMinutes(5), 3, 500, 1000), null);
 
     @Test
-    void 순서_조회_간격은_대기_인원을_조회_예산으로_나눈_값이고_최소_1초다() {
+    void 순번_조회_간격은_대기_인원을_조회_예산으로_나눈_값이고_최소_1초다() {
         assertThat(service.pollInterval(1)).isEqualTo(Duration.ofSeconds(1));
         assertThat(service.pollInterval(500)).isEqualTo(Duration.ofSeconds(1));
         assertThat(service.pollInterval(501)).isEqualTo(Duration.ofMillis(1002));

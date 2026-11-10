@@ -13,8 +13,8 @@ for _, user in ipairs(stale) do
 end
 
 -- 허가 키 값은 진입 시각 (허가 상태에서도 진입 시각을 돌려줄 수 있게)
--- 허가를 먼저 쓰고 그다음 줄에서 뺀다. Redis가 메모리 상한(noeviction)에 닿으면 SET만 거부되고 스크립트는 되돌려지지 않으므로,
--- 줄에서 먼저 빼면(ZPOPMIN) 허가 없이 줄에서 사라지는 사람이 생긴다. 이 순서면 SET이 거부된 사람부터는 줄에 그대로 남는다
+-- 허가를 먼저 쓰고 그다음 대기열에서 뺀다. Redis가 메모리 상한(noeviction)에 닿으면 SET만 거부되고 스크립트는 되돌려지지 않으므로,
+-- 대기열에서 먼저 빼면(ZPOPMIN) 허가 없이 대기열에서 사라지는 사람이 생긴다. 이 순서면 SET이 거부된 사람부터는 대기열에 그대로 남는다
 local admitted = 0
 local count = tonumber(ARGV[3])
 if count > 0 then

@@ -96,7 +96,7 @@ services:
         condition: service_healthy
 
   # 접속 대기열 상태 저장소 (api-gateway만 쓴다). 호스트(IntelliJ로 띄운 게이트웨이)는 localhost:6379(REDIS_PORT로 변경 가능), 컨테이너는 redis:6379로 접속한다
-  # 메모리가 차도 키를 지우지 않는다(noeviction). 지우면 줄 선 사람이 조용히 사라지고, 차면 쓰기가 오류로 드러난다
+  # 메모리가 차도 키를 지우지 않는다(noeviction). 지우면 대기 중인 사람이 조용히 사라지고, 차면 쓰기가 오류로 드러난다
   # 디스크에 저장하지 않는다(RDB, AOF 끔). 대기열은 화면용 임시 상태라 재시작하면 비고, 투자자는 다시 진입한다 (청약, 돈 데이터와 무관)
   redis:
     image: redis:7

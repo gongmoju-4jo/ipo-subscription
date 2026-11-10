@@ -23,7 +23,7 @@ wait_status() {
   RR=$(echo "$R" | j 'd.get("data",{}).get("rejectReason")' 2>/dev/null || echo -)
   [ "$S" = "$want" ] && [ "$RR" = "$reason" ] || fail "기대 $want/$reason, 실제 $S/$RR"
 }
-# 대기열에 진입하고 입장 허가(ADMITTED)를 받을 때까지 최대 30초 순서를 조회한다
+# 대기열에 진입하고 입장 허가(ADMITTED)를 받을 때까지 최대 30초 순번을 조회한다
 admit() {
   local ipo=$1 i R S
   R=$(curl -s -m 5 -w '\nHTTP %{http_code}' -X POST "$GW/api/v1/queues/$ipo/entries" -H "$AUTH")

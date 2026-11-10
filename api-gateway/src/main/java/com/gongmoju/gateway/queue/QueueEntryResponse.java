@@ -7,7 +7,7 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
- * 대기열 진입, 순서 조회 응답. 시각은 KST(+09:00)로 내려준다 (서비스 응답과 같은 규칙).
+ * 대기열 진입, 순번 조회 응답. 시각은 KST(+09:00)로 내려준다 (서비스 응답과 같은 규칙).
  */
 public record QueueEntryResponse(
         @Schema(description = "공모주 ID", example = "8b2d0000-0000-4000-8000-000000000001")
@@ -25,7 +25,7 @@ public record QueueEntryResponse(
         @Schema(description = "ADMITTED일 때 이 시각까지 청약 신청해야 함 (KST). WAITING이면 null",
                 example = "2026-11-09T16:00:00.123+09:00", nullable = true)
         OffsetDateTime admissionExpiresAt,
-        @Schema(description = "다음 순서 조회까지 기다릴 시간(ms)", example = "10420")
+        @Schema(description = "다음 순번 조회까지 기다릴 시간(ms)", example = "10420")
         long pollIntervalMillis
 ) {
 

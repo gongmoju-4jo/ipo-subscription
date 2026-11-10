@@ -652,7 +652,7 @@ throw new BusinessException(AccountErrorCode.INSUFFICIENT_BALANCE);
 ### Feign(내부 API) 호출 규칙
 
 > 서비스 간 통신은 기본이 Kafka입니다. Feign은 **배정 → 청약 확정 목록 조회** 하나에만 씁니다.
-> 게이트웨이 → 청약 중 공모주 목록(`GET /internal/ipos?status=OPEN`, 접속 대기열 진입 확인용)도 동기 호출이지만, 게이트웨이는 WebFlux라 Feign 대신 WebClient(`lb://` 대신 로드밸런서 필터 + 서비스 이름)로 5초마다 부르고, 사용자 요청 경로에서는 부르지 않습니다. 게이트웨이는 `common`을 쓰지 않아 아래 Feign 공통 설정이 적용되지 않습니다.
+> 게이트웨이 → 청약 중 공모주 목록(`GET /internal/ipos?status=OPEN`, 접속 대기열 진입 확인용)도 동기 호출이지만, 게이트웨이는 WebFlux라 Feign 대신 WebClient로 Eureka 서비스 이름(`subscription-service`)을 5초마다 부르고, 사용자 요청 경로에서는 부르지 않습니다. 게이트웨이는 `common`을 쓰지 않아 아래 Feign 공통 설정이 적용되지 않습니다.
 
 - 경로 `/internal/**`, 게이트웨이 등록 ❌ / `@FeignClient(name = "subscription-service")`처럼 Eureka 서비스 이름
 - `X-User-Id`, `X-User-Role`은 common `FeignHeaderInterceptor`가 자동 전달 (직접 넣기 ❌)

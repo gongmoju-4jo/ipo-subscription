@@ -101,7 +101,7 @@ export interface QueueEntryResponse {
   enteredAt: string;
   /** 입장 허가 상태일 때 이 시각까지 청약해야 한다. 대기 중이면 null */
   admissionExpiresAt: string | null;
-  /** 다음 순서 조회까지 기다릴 시간 */
+  /** 다음 순번 조회까지 기다릴 시간 */
   pollIntervalMillis: number;
 }
 

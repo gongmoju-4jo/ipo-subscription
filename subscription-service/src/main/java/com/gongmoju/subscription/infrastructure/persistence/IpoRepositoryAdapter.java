@@ -35,6 +35,11 @@ class IpoRepositoryAdapter implements IpoRepository {
     }
 
     @Override
+    public Optional<Ipo> findByIdForShare(UUID ipoId) {
+        return jpaRepository.findByIdForShare(ipoId);
+    }
+
+    @Override
     public List<Ipo> findByStatusAndSubscriptionEndAtLessThanEqual(IpoStatus status, Instant endAt) {
         return jpaRepository.findByStatusAndSubscriptionEndAtLessThanEqual(status, endAt);
     }

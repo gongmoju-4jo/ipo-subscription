@@ -20,4 +20,8 @@ interface IpoJpaRepository extends JpaRepository<Ipo, UUID> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select i from Ipo i where i.id = :id")
     Optional<Ipo> findByIdForUpdate(@Param("id") UUID id);
+
+    @Lock(LockModeType.PESSIMISTIC_READ)
+    @Query("select i from Ipo i where i.id = :id")
+    Optional<Ipo> findByIdForShare(@Param("id") UUID id);
 }

@@ -1,7 +1,7 @@
 package com.gongmoju.subscription.application.subscription;
 
 /**
- * 접수 Consumer의 처리 결과. 로그와 테스트 단언에 사용함.
+ * 접수 처리 결과 (청약 API, 접수 Consumer). 세 결과 모두 API는 202로 응답함. 로그와 테스트 단언에 사용함.
  */
 public enum AcceptResult {
     // `PENDING`으로 저장하고 증거금 확보 요청을 기록함

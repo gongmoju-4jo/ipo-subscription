@@ -120,17 +120,20 @@ public class Subscription extends BaseEntity {
     }
 
     /**
-     * 같은 {@code requestId}로 재전송된 요청이 최초 저장된 청약과 동일한 내용인지 검증함 (이벤트 명세 2-1의 재전송 내용 비교).
-     * {@code eventId}, {@code occurredAt}, {@code receivedAt}은 재전송마다 달라지므로 비교 대상에서 제외함.
+     * 같은 {@code requestId}로 다시 온 요청이 최초 저장된 청약과 동일한 내용인지 검증함 (재전송 내용 비교).
+     * {@code receivedAt}은 재전송마다 달라지므로 비교 대상에서 제외함.
      *
-     * @param event 재전송된 요청
+     * @param userId            다시 온 요청의 회원 ID
+     * @param accountId         다시 온 요청의 계좌 ID
+     * @param ipoId             다시 온 요청의 종목 ID
+     * @param requestedQuantity 다시 온 요청의 청약 수량
      * @return 회원, 계좌, 종목, 수량이 모두 같으면 {@code true}
      */
-    public boolean isSameRequest(SubscriptionRequested event) {
-        return userId.equals(event.userId())
-                && accountId.equals(event.accountId())
-                && ipo.getId().equals(event.ipoId())
-                && requestedQuantity == event.requestedQuantity();
+    public boolean isSameRequest(UUID userId, UUID accountId, UUID ipoId, long requestedQuantity) {
+        return this.userId.equals(userId)
+                && this.accountId.equals(accountId)
+                && ipo.getId().equals(ipoId)
+                && this.requestedQuantity == requestedQuantity;
     }
 
     /**

@@ -212,8 +212,10 @@ W=$(awk '$1=="W1"{print $2}' loadtest/data/g2-B-10k/ipo-ids.txt); M=$(awk '$1=="
 # 4. 청약: W는 앞 1,000명이 172주, M은 CSV 전원이 케이스 B 수량
 bash loadtest/run-k6.sh g2 --ipo "$W" --run-id g2-B-10k-W --users data/users-g2.csv -e CASE=A -e COUNT=1000
 bash loadtest/run-k6.sh g2 --ipo "$M" --run-id g2-B-10k-M --users data/users-g2.csv -e CASE=B
-# 5. 처리 중 청약이 0이 되면 저장
+# 5. 접수 토픽 랙이 0이고(LAG 열), 처리 중 청약이 0이고, W 1,000건, M N건이 모두 CONFIRMED이면 저장
+docker exec ipo-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:29092 --describe --group subscription-requested
 docker exec ipo-postgres psql -U postgres -d ipo -tAc "select status, count(*) from subscription.subscription group by 1"
+docker exec ipo-postgres psql -U postgres -d ipo -tAc "select ipo_id, status, count(*) from subscription.subscription where ipo_id in ('$W', '$M') group by 1, 2"
 ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/g2-B-10k bash loadtest/baseline.sh save
 ```
 
@@ -226,6 +228,7 @@ ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/g2-B-10k bash loadtest/baseline
 - 아래가 모두 0일 때만 저장합니다. 하나라도 있으면 종료 코드 2, 조회에 실패하면 종료 코드 4입니다
   - 처리 중 청약 (`PENDING`, `COMPENSATING`, `CANCEL_REQUESTED`)
   - 계좌, 청약, 배정 서비스 outbox의 미발행 메시지
+  - ⚠️ 접수 토픽(`subscription.requested`) 랙은 보지 않습니다. 청약 행은 접수 Consumer가 만들어서, 202를 받은 요청도 처리 전에는 행이 없어 위 조건을 통과합니다. 복원하면 Kafka를 비우므로 그 요청은 사라지고, `g2_run.sh`는 그때 DB의 확정 수를 기대 수로 쓰므로 건수가 모자란 채로 측정됩니다. 그래서 5번처럼 랙 0과 W, M 확정 수를 직접 확인합니다
   - 종료 시각이 지난 `OPEN` 공모주 (복원 직후 저절로 마감되지 않게. 측정할 공모주와 개발용 공모주의 종료 시각을 먼 미래로 두고, 측정할 때 종료 시각을 바꿔 마감시킵니다)
 - meta에는 청약 수가 든 상태 줄과 `allow_subscriptions` 줄이 남습니다. `restore`, `check`는 옵션 없이 meta의 상태(청약 수 포함)와 비교합니다
 - `ALLOW_SUBSCRIPTIONS`는 `1`일 때만 켜집니다. 다른 값이면 기본 `save`처럼 청약 있는 DB를 거부합니다
@@ -345,7 +348,7 @@ bash loadtest/g2_run.sh --batch g2-1k-0110 --session S-1 g2-A-1k g2-B-1k g2-B-1k
 | `status` | `VALID` | 아래 둘이 아님 |
 | | `INVALID` (시험이 잘못됨, 판정하지 않음) | 정산 수 또는 REFUNDED 수 ≠ 확정 수, DLT 증가, 측정 끝 outbox 미발행, 측정 중 W, M이 아닌 공모주 마감, 시작 점검 실패 |
 | | `UNMEASURABLE` (측정 불가) | 정산이 `STALL_S`초 동안 늘지 않음, `MAX_S`초 초과, 배정 FAILED, 컨테이너 재시작 또는 OOM, W 환불이 끝나지 않음 |
-| `integrity` | `PASS` / `FAIL` (시스템 결함) | `verify.sql` 2, 3, 5, 6, 8, 11 ~ 15번 위반(W는 5 ~ 15번), 0주 배정 수 ≠ `VOIDED` 수, `VOIDED` 수 ≠ `MARGIN_VOID` 원장 수, `POSTED` 수 ≠ `MARGIN_POST` 원장 수, 멱등성 FAIL. 측정 불가면 `-` |
+| `integrity` | `PASS` / `FAIL` (시스템 결함) | `verify.sql` 2, 3, 5, 6, 8, 11 ~ 15번 위반(W는 5, 6, 8, 11 ~ 15번), 0주 배정 수 ≠ `VOIDED` 수, `VOIDED` 수 ≠ `MARGIN_VOID` 원장 수, `POSTED` 수 ≠ `MARGIN_POST` 원장 수, 멱등성 FAIL. 측정 불가면 `-` |
 | `idempotency` | `PASS` / `FAIL` / `ERROR` / `-` | 위 7번. `ERROR`는 검사를 끝내지 못한 것(그룹이 비지 않음, 오프셋 되돌리기 실패, `IDEM_MAX_S`초 안에 랙이 0이 안 됨). `-`는 `--idempotency` 없음, 측정 불가 |
 
 결과: `loadtest/results/g2-<batch>/`

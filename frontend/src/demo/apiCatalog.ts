@@ -39,6 +39,18 @@ const CATALOG: { method: string; pattern: RegExp; desc: ApiDescription }[] = [
     desc: { title: '내 계좌 목록', service: 'Gateway → account-service' },
   },
   {
+    method: 'POST', pattern: new RegExp(`^/api/v1/queues/${UUID}/entries$`),
+    desc: { title: '대기열 진입', service: 'Gateway (Redis, 서비스로 보내지 않음)', point: '공모주별 대기열에 진입해요. 다시 진입해도 처음 순번이 그대로고, 이미 입장 허가를 받았으면 바로 허가 상태를 돌려줘요' },
+  },
+  {
+    method: 'GET', pattern: new RegExp(`^/api/v1/queues/${UUID}/entries/me$`),
+    desc: { title: '대기열 순번 조회', service: 'Gateway (Redis)', point: '알려준 간격마다 조회해요. 대기자가 많을수록 간격이 길어져 조회가 몰리지 않고, 조회가 간격의 3배 동안 끊기면 대기열에서 이탈 처리돼요' },
+  },
+  {
+    method: 'DELETE', pattern: new RegExp(`^/api/v1/queues/${UUID}/entries/me$`),
+    desc: { title: '대기열 이탈', service: 'Gateway (Redis)', point: '대기열과 입장 허가를 모두 지워요' },
+  },
+  {
     method: 'GET', pattern: new RegExp(`^/api/v1/ipos/${UUID}$`),
     desc: { title: '공모주 상세', service: 'Gateway → subscription-service' },
   },
@@ -48,7 +60,7 @@ const CATALOG: { method: string; pattern: RegExp; desc: ApiDescription }[] = [
   },
   {
     method: 'POST', pattern: /^\/api\/v1\/subscriptions$/,
-    desc: { title: '청약 신청', service: 'Gateway → subscription-service → Kafka', point: '요청을 Kafka 토픽에 넣고 바로 202(접수됨)로 응답해요. 실제 처리(증거금 인출, 확정)는 Consumer가 이어서 해요. 같은 requestId로 다시 보내도 청약은 1건이에요' },
+    desc: { title: '청약 신청', service: 'Gateway → subscription-service → Kafka', point: '게이트웨이가 먼저 그 공모주의 입장 허가를 확인해요(없으면 403). 요청을 Kafka 토픽에 넣고 바로 202(접수됨)로 응답해요. 실제 처리(증거금 인출, 확정)는 Consumer가 이어서 해요. 같은 requestId로 다시 보내도 청약은 1건이에요' },
   },
   {
     method: 'GET', pattern: new RegExp(`^/api/v1/subscriptions/${UUID}$`),

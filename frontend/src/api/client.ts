@@ -74,7 +74,8 @@ function redact(body: unknown): unknown {
   return body;
 }
 
-export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+// keepalive: 페이지를 닫는 중에도 요청을 끝까지 보낸다 (대기열 나가기처럼 떠나면서 보내는 요청)
+export async function request<T>(method: string, path: string, body?: unknown, options: { keepalive?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
@@ -83,7 +84,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   const started = performance.now();
   let res: Response;
   try {
-    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), keepalive: options.keepalive });
   } catch {
     remember({ at: new Date().toISOString(), method, path, status: 0, durationMs: Math.round(performance.now() - started), requestHeaders: shownHeaders, requestBody: redact(body) });
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: '서버에 연결할 수 없습니다. 서비스가 실행 중인지 확인해 주세요.' }, path);
@@ -111,6 +112,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
+  delete: <T>(path: string, options?: { keepalive?: boolean }) => request<T>('DELETE', path, undefined, options),
 };
 
 export function newRequestId(): string {

@@ -207,3 +207,61 @@ pre.code { background: #0f1720; color: #d6e2f0; padding: 12px; border-radius: 10
 @media (max-width: 860px) { .grid-narrow-left { grid-template-columns: 1fr; } }
 .kv-left { grid-template-columns: 80px auto; justify-content: start; }
 .kv-left dd { text-align: left; }
+
+/* 청약 화면 */
+.subscribe-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 860px) { .subscribe-layout { grid-template-columns: 1fr; } }
+.btn-go { transition: background 0.15s, transform 0.15s, box-shadow 0.2s; }
+.btn-go svg { transition: transform 0.2s; }
+.btn-go:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(47, 111, 237, 0.28); }
+.btn-go:hover svg { transform: translateX(3px); }
+.btn:active:not(:disabled) { transform: scale(0.98); }
+.m-DELETE { background: #fdecec; color: #e5484d; }
+
+/* 대기열 창: 넓은 화면은 가운데 창, 좁은 화면은 아래에서 올라오는 시트 */
+.queue-overlay { position: fixed; inset: 0; z-index: 40; background: rgba(17, 24, 39, 0.38); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 20px; animation: queue-fade 0.22s ease-out; }
+.queue-sheet { width: min(440px, 100%); background: var(--surface); border-radius: 24px; padding: 26px 26px 24px; box-shadow: 0 24px 64px rgba(17, 24, 39, 0.24); display: flex; flex-direction: column; gap: 20px; animation: queue-pop 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+.queue-grip { display: none; }
+.queue-eyebrow { font-size: 13px; font-weight: 700; color: var(--text-3); }
+.queue-title { margin: 4px 0 0; font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+.queue-close { width: 36px; height: 36px; border: none; border-radius: 12px; background: var(--surface-2); color: var(--text-2); display: grid; place-items: center; cursor: pointer; flex-shrink: 0; transition: background 0.15s, transform 0.15s, color 0.15s; }
+.queue-close:hover { background: #eceef2; color: var(--text); transform: rotate(90deg); }
+.queue-close:active { transform: rotate(90deg) scale(0.92); }
+.queue-hero { text-align: center; padding: 10px 0 2px; }
+.queue-label { font-size: 14px; color: var(--text-3); font-weight: 600; }
+.queue-number { font-size: 56px; font-weight: 800; letter-spacing: -0.04em; line-height: 1.1; margin-top: 4px; }
+.queue-number span { font-size: 22px; font-weight: 700; margin-left: 4px; color: var(--text-2); }
+.queue-bar { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.queue-bar-fill { height: 100%; background: linear-gradient(90deg, #6ea0ff, var(--blue)); border-radius: inherit; transform-origin: left; transition: transform 0.8s cubic-bezier(0.2, 0.8, 0.2, 1); position: relative; overflow: hidden; }
+.queue-bar-fill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent); animation: queue-shine 1.6s ease-in-out infinite; }
+.queue-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0; }
+.queue-stats div { background: var(--surface-2); border-radius: 16px; padding: 14px 16px; }
+.queue-stats dt { font-size: 13px; color: var(--text-3); }
+.queue-stats dd { margin: 4px 0 0; font-size: 17px; font-weight: 700; }
+.queue-note { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; line-height: 1.55; color: var(--text-3); }
+.queue-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); margin-top: 6px; flex-shrink: 0; animation: queue-ping 1.4s ease-out infinite; }
+.queue-desc { margin: 0; color: var(--text-2); line-height: 1.6; }
+.queue-actions { display: flex; gap: 10px; }
+.queue-actions .btn { flex: 1; }
+@keyframes queue-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes queue-pop { from { opacity: 0; transform: translateY(12px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes queue-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes queue-shine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@keyframes queue-ping { 0% { box-shadow: 0 0 0 0 rgba(47, 111, 237, 0.5); } 100% { box-shadow: 0 0 0 10px rgba(47, 111, 237, 0); } }
+@media (max-width: 640px) {
+  .queue-overlay { place-items: end stretch; padding: 0; }
+  .queue-sheet { width: 100%; border-radius: 24px 24px 0 0; padding: 12px 20px calc(24px + env(safe-area-inset-bottom)); animation: queue-up 0.34s cubic-bezier(0.2, 0.9, 0.3, 1); }
+  .queue-grip { display: block; width: 40px; height: 5px; border-radius: 999px; background: var(--line); margin: 0 auto 4px; }
+  .queue-number { font-size: 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .queue-overlay, .queue-sheet, .queue-bar-fill::after, .queue-pulse { animation: none; }
+  .queue-bar-fill, .queue-close, .btn-go, .btn-go svg { transition: none; }
+}
+
+/* 청약 가능 시간 (남은 시간 한 줄) */
+.admit-timer { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); font-size: 14px; color: var(--text-2); }
+.admit-timer strong { font-size: 17px; font-weight: 800; color: var(--text); }
+.admit-timer strong.admit-timer-soon { color: var(--amber); }
+.admit-timer-hint { margin-left: auto; font-size: 13px; color: var(--text-3); }
+.admit-expired { animation: queue-pop 0.3s ease-out; }

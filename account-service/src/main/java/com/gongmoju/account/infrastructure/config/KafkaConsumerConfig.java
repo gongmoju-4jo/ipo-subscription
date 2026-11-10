@@ -22,7 +22,7 @@ class KafkaConsumerConfig {
     private static final long MAX_INTERVAL_MS = 4_000;
     private static final String DLT_SUFFIX = ".DLT";
 
-    // 블로킹 재시도라 같은 파티션(같은 계좌)의 순서가 유지된다. 재시도를 다 쓰면 {원본 토픽}.DLT의 같은 파티션 번호로 보낸다
+    // 블로킹 재시도라 같은 파티션(같은 계좌)의 순서가 유지된다. 재시도 횟수를 모두 소진하면 {원본 토픽}.DLT의 같은 파티션 번호로 전송한다
     // DLT 전송은 문자열 값 KafkaTemplate이라 원본 JSON이 그대로 쌓인다 (원 토픽으로 재발행하면 같은 eventId로 다시 처리됨)
     @Bean
     DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, String> kafkaTemplate) {
@@ -35,8 +35,8 @@ class KafkaConsumerConfig {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
                 (record, exception) -> new TopicPartition(record.topic() + DLT_SUFFIX, record.partition()));
         DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
-        // 다시 처리해도 결과가 같은 실패는 재시도 없이 바로 DLT로 보낸다
-        // IllegalArgumentException은 도메인 생성 가드(금액 1 이상 등)의 최후 방어. 메시지 검증을 통과하면 생기지 않는다
+        // 다시 처리해도 결과가 같은 실패는 재시도 없이 바로 DLT로 전송한다
+        // IllegalArgumentException은 도메인 생성 가드(금액 1 이상 등)의 최후 방어. 메시지 검증에 성공하면 발생하지 않는다
         handler.addNotRetryableExceptions(InvalidEventException.class, IllegalArgumentException.class);
         return handler;
     }

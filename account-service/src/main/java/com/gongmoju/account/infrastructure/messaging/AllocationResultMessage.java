@@ -60,7 +60,7 @@ record AllocationResultMessage(
             throw new InvalidEventException("allocatedQuantity가 균등 + 비례 수량과 다릅니다: "
                     + equal + " + " + proportional + " != " + quantity);
         }
-        // 공모가는 0보다 크므로 0주와 대금 0은 같이 와야 한다
+        // 공모가는 0보다 크므로 0주와 대금 0은 함께 수신되어야 한다
         if ((quantity == 0) != (amount == 0)) {
             throw new InvalidEventException("allocatedQuantity와 allocatedAmount가 맞지 않습니다: "
                     + "allocatedQuantity=" + quantity + ", allocatedAmount=" + amount);

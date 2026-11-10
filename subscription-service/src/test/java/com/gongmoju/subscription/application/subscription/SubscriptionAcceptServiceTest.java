@@ -126,6 +126,28 @@ class SubscriptionAcceptServiceTest {
         assertThat(payload.get("amount").asLong()).isEqualTo(100 * OFFER_PRICE);
     }
 
+    /**
+     * 현행 동작 기록: 접수 Consumer는 receivedAt이 마감 시각 전인지만 보고 공모주 상태는 보지 않는다.
+     * 마감 전에 받은 요청의 메시지가 마감 뒤에 처리되면 마감된 공모주에 PENDING 청약이 생겨 마감 때 센 확정 수에서 빠진다
+     * (이벤트 명세 4장 위험 4). 고칠 대상을 기록하는 테스트이고, 접수 Outbox(D-29)에서 접수 Consumer와 함께 지운다.
+     */
+    @Test
+    @DisplayName("현행 동작 기록: 공모주가 이미 CLOSED여도 receivedAt이 마감 전이면 PENDING으로 저장하고 인출 요청을 기록한다")
+    void accept_savesPending_evenWhenIpoAlreadyClosed() {
+        // given: 마감 시각(지금 - 10초)이 지나 CLOSED로 바뀐 공모주, 마감 전(지금 - 60초)에 게이트웨이에 도착한 요청
+        jdbcTemplate.update("UPDATE ipo SET status = 'CLOSED', subscription_end_at = now() - interval '10 seconds' WHERE ipo_id = ?", ipoId);
+        SubscriptionRequested event = event(UUID.randomUUID(), userId, 100);
+
+        // when
+        AcceptResult result = acceptService.accept(event);
+
+        // then
+        assertThat(result).isEqualTo(AcceptResult.ACCEPTED);
+        assertThat(subscriptionCount("PENDING")).isEqualTo(1);
+        assertThat(outboxCount()).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM ipo WHERE ipo_id = ?", String.class, ipoId)).isEqualTo("CLOSED");
+    }
+
     @Test
     @DisplayName("같은 requestId로 같은 내용이 다시 오면 아무것도 저장하지 않고 무시하며, 처음 receivedAt이 유지된다")
     void accept_ignores_whenSameRequestIsResent() {

@@ -1,6 +1,5 @@
 package com.gongmoju.account.infrastructure.messaging;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gongmoju.account.application.margin.MarginVoidService;
 import com.gongmoju.account.application.margin.VoidMarginCommand;
@@ -44,17 +43,6 @@ class MarginVoidRequestedConsumer {
     }
 
     private MarginVoidRequestedMessage parse(String payload) {
-        if (payload == null || payload.isBlank()) {
-            throw new InvalidEventException("메시지 본문이 비어 있습니다.");
-        }
-        try {
-            MarginVoidRequestedMessage message = objectMapper.readValue(payload, MarginVoidRequestedMessage.class);
-            if (message == null) {
-                throw new InvalidEventException("메시지 본문이 JSON 객체가 아닙니다.");
-            }
-            return message;
-        } catch (JsonProcessingException e) {
-            throw new InvalidEventException("메시지 JSON을 읽을 수 없습니다: " + e.getOriginalMessage());
-        }
+        return KafkaMessageParser.parse(payload, objectMapper.readerFor(MarginVoidRequestedMessage.class));
     }
 }

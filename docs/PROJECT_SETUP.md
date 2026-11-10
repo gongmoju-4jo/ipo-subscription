@@ -115,19 +115,22 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 | API | 설명 |
 | --- | --- |
-| `POST /api/v1/queues/{ipoId}/entries` | 대기열 진입. 새로 진입 201, 이미 대기 중이거나 입장 허가 상태면 200 (순번 유지) |
+| `POST /api/v1/queues/{ipoId}/entries` | 대기열 진입. 새로 진입 201, 이미 대기 중이거나 입장 허가 상태면 200 (순번 유지). 청약 중인 공모주가 아니면 422 `BUSINESS_RULE_VIOLATION` |
 | `GET /api/v1/queues/{ipoId}/entries/me` | 순번 조회. 대기 중도 아니고 허가도 없으면 404 `RESOURCE_NOT_FOUND` (화면은 다시 진입) |
 | `DELETE /api/v1/queues/{ipoId}/entries/me` | 이탈. 대기 순번과 입장 허가를 모두 지운다. 대기 중이 아니어도 200 |
 
 - 인증은 다른 API와 같이 JWT. 대기열 주인은 토큰의 `sub`
 - 응답: `status`(`WAITING`, `ADMITTED`), `position`, `waitingCount`, `estimatedWaitSeconds`, `enteredAt`, `admissionExpiresAt`, `pollIntervalMillis`. 시각은 KST
-- 화면은 `pollIntervalMillis`마다 순서를 조회한다. 간격 = max(1초, 대기 인원 ÷ `queue.poll-budget`)라서 대기자가 많아도 초당 조회 수가 예산을 넘지 않는다
+- 화면은 `pollIntervalMillis`마다 순번을 조회한다. 간격 = max(1초, 대기 인원 ÷ `queue.poll-budget`)라서 대기자가 많아도 초당 조회 수가 예산을 넘지 않는다
 - 조회가 받은 간격의 `queue.dropout-factor`배(3배) 동안 끊기면 입장 스케줄러가 대기열에서 이탈 처리한다. 진입, 조회할 때마다 기한이 늘어난다
 - 입장 스케줄러가 1초마다 `queue.admit-rate`명(전체 공모주 합, 기본 433)에게 앞에서부터 허가를 준다. 허가는 `queue.admission-ttl`(5분) 동안 유효
 - 공모주가 여러 개면 입장 인원을 대기자가 있는 공모주에 똑같이 나누되, 대기자가 몫보다 적은 공모주는 있는 만큼만 받고 남는 자리는 대기자가 많은 공모주로 넘긴다
   - 예 (433명): 대기 5만 명 + 3명 → 430명, 3명 / 5만 명 + 5만 명 → 217명, 216명
   - 대기자가 적은 공모주는 기다리지 않고 바로 입장한다
-- 공모주가 실제로 있는지, 청약 중인지는 확인하지 않는다 (접속이 몰리는 경로에 서비스 호출을 넣지 않음)
+- 진입 때 **청약 중인 공모주인지** 확인한다 (청약 중 공모주 목록에 있고, 지금이 청약 시작 시각 이상 마감 시각 미만). 아니면 422 "청약 중인 공모주가 아닙니다" (없는 번호, 시작 전, 마감을 구분하지 않음)
+  - 목록은 게이트웨이가 청약 서비스 내부 API(`GET /internal/ipos?status=OPEN`)에서 켜지자마자 받고 5초마다 갱신해 메모리에 둔다 (`queue.open-ipos.*`). 진입마다 청약 서비스를 부르지 않는다
+  - 갱신에 실패하면 마지막 목록을 쓴다. 한 번도 받지 못했거나 30초(`stale-after`) 동안 갱신하지 못하면 확인 없이 진입을 허용한다 (이 확인 하나 때문에 대기열이 멈추지 않게. 청약 신청의 입장 허가 확인은 그대로)
+  - 새로 등록된 공모주는 다음 갱신(최대 5초) 뒤부터 진입할 수 있다
 - Redis에 접속할 수 없으면 503 `SERVICE_UNAVAILABLE` (대기열 없이 통과시키지 않음)
 
 📌 청약 신청(`POST /api/v1/subscriptions`)은 그 공모주의 **입장 허가가 있어야** 서비스로 간다 (`AdmissionCheckFilter`)
@@ -649,6 +652,7 @@ throw new BusinessException(AccountErrorCode.INSUFFICIENT_BALANCE);
 ### Feign(내부 API) 호출 규칙
 
 > 서비스 간 통신은 기본이 Kafka입니다. Feign은 **배정 → 청약 확정 목록 조회** 하나에만 씁니다.
+> 게이트웨이 → 청약 중 공모주 목록(`GET /internal/ipos?status=OPEN`, 접속 대기열 진입 확인용)도 동기 호출이지만, 게이트웨이는 WebFlux라 Feign 대신 WebClient(`lb://` 대신 로드밸런서 필터 + 서비스 이름)로 5초마다 부르고, 사용자 요청 경로에서는 부르지 않습니다. 게이트웨이는 `common`을 쓰지 않아 아래 Feign 공통 설정이 적용되지 않습니다.
 
 - 경로 `/internal/**`, 게이트웨이 등록 ❌ / `@FeignClient(name = "subscription-service")`처럼 Eureka 서비스 이름
 - `X-User-Id`, `X-User-Role`은 common `FeignHeaderInterceptor`가 자동 전달 (직접 넣기 ❌)

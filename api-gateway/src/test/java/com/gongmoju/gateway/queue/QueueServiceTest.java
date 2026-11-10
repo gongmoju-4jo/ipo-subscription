@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class QueueServiceTest {
 
     private final QueueService service = new QueueService(null,
-            new QueueProperties(Duration.ofSeconds(1), 433, Duration.ofMinutes(5), 3, 500, 1000));
+            new QueueProperties(Duration.ofSeconds(1), 433, Duration.ofMinutes(5), 3, 500, 1000), null);
 
     @Test
     void 순서_조회_간격은_대기_인원을_조회_예산으로_나눈_값이고_최소_1초다() {

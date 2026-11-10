@@ -132,7 +132,7 @@ class QueueControllerTest extends RedisTestSupport {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.success").isEqualTo(true)
-                .jsonPath("$.message").isEqualTo("대기열 순서를 조회했습니다.")
+                .jsonPath("$.message").isEqualTo("대기열 순번을 조회했습니다.")
                 .jsonPath("$.data.status").isEqualTo("WAITING")
                 .jsonPath("$.data.position").isEqualTo(2)
                 .jsonPath("$.data.waitingCount").isEqualTo(2)
@@ -219,7 +219,7 @@ class QueueControllerTest extends RedisTestSupport {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.success").isEqualTo(true)
-                .jsonPath("$.message").isEqualTo("대기열에서 나갔습니다.")
+                .jsonPath("$.message").isEqualTo("대기열에서 이탈했습니다.")
                 .jsonPath("$.data").doesNotExist();
 
         find(ipoId.toString(), token(userId)).expectStatus().isNotFound();

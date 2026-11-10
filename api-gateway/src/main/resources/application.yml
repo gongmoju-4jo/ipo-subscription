@@ -107,6 +107,17 @@ queue:
   scheduler:
     # 테스트에서 스케줄러를 끄기 위한 값 (대기열을 끄는 설정 아님)
     enabled: true
+  # 청약 중 공모주 목록 (OpenIpoProperties). 대기열 진입 때 청약 중인 공모주인지 확인하려고 청약 서비스 내부 API(API 명세 4.4)에서 받아 둔다
+  # 진입마다 청약 서비스를 부르지 않는다. 목록을 받지 못했거나 stale-after 동안 갱신하지 못하면 확인 없이 진입을 허용한다
+  open-ipos:
+    # Eureka 서비스 이름으로 부른다 (load-balanced)
+    base-url: http://subscription-service
+    load-balanced: true
+    # 받지 못했거나 실패했을 때 다시 시도하는 주기 / 받은 뒤 갱신 주기 (게이트웨이 1대 기준 5초에 1번 호출)
+    check-interval: PT1S
+    refresh-interval: PT5S
+    timeout: PT2S
+    stale-after: PT30S
 
 jwt:
   # 서명 키. .env의 JWT_SECRET (account-service와 같은 값). 비어 있거나 짧으면 기동할 때 실패한다

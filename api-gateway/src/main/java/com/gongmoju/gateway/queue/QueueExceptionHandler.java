@@ -33,11 +33,18 @@ class QueueExceptionHandler {
                 .body(ApiResponse.failure("UNAUTHORIZED", "로그인이 필요합니다.", null));
     }
 
-    // 줄에도 없고 허가도 없음 (진입 전, 이탈 처리됨, 허가 만료)
+    // 대기 중도 아니고 허가도 없음 (진입 전, 이탈 처리됨, 허가 만료)
     @ExceptionHandler(QueueEntryNotFoundException.class)
     ResponseEntity<ApiResponse<Void>> notFound(QueueEntryNotFoundException e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ApiResponse.failure("RESOURCE_NOT_FOUND", e.getMessage(), null));
+    }
+
+    // 청약 중인 공모주가 아님 (대기열 진입). 청약 서비스의 기간 밖 청약 신청(422)과 같은 업무 규칙 위반으로 본다
+    @ExceptionHandler(NotOpenIpoException.class)
+    ResponseEntity<ApiResponse<Void>> notOpen(NotOpenIpoException e) {
+        return ResponseEntity.unprocessableEntity()
+                .body(ApiResponse.failure("BUSINESS_RULE_VIOLATION", e.getMessage(), List.of(new ApiResponse.Detail("ipoId", e.getMessage()))));
     }
 
     // Redis 연결 실패, 응답 시간 초과. 대기열 없이 통과시키지 않고 막는다 (Redis 장애 시 차단)

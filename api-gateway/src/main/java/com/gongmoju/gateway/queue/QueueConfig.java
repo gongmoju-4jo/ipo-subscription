@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @Configuration
-@EnableConfigurationProperties(QueueProperties.class)
+@EnableConfigurationProperties({QueueProperties.class, OpenIpoProperties.class})
 class QueueConfig {
 
     /**

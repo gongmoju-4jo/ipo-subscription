@@ -24,25 +24,32 @@ public class QueueService {
 
     private final QueueRedisRepository repository;
     private final QueueProperties properties;
+    private final OpenIpoCatalog openIpos;
     private final Clock clock;
 
     @Autowired
-    public QueueService(QueueRedisRepository repository, QueueProperties properties) {
-        this(repository, properties, Clock.systemUTC());
+    public QueueService(QueueRedisRepository repository, QueueProperties properties, OpenIpoCatalog openIpos) {
+        this(repository, properties, openIpos, Clock.systemUTC());
     }
 
-    QueueService(QueueRedisRepository repository, QueueProperties properties, Clock clock) {
+    QueueService(QueueRedisRepository repository, QueueProperties properties, OpenIpoCatalog openIpos, Clock clock) {
         this.repository = repository;
         this.properties = properties;
+        this.openIpos = openIpos;
         this.clock = clock;
     }
 
     /**
-     * 대기열에 진입한다. 이미 줄에 있으면 처음 순번을 유지하고, 이미 입장 허가를 받았으면 허가 상태를 돌려준다.
+     * 대기열에 진입한다. 이미 대기 중이면 처음 순번을 유지하고, 이미 입장 허가를 받았으면 허가 상태를 돌려준다.
+     * 청약 중인 공모주가 아니면(목록에 없음, 청약 기간 밖) {@link NotOpenIpoException}. 목록을 아직 받지 못했으면 확인 없이 진입한다
+     * ({@link OpenIpoCatalog}).
      */
     public Mono<QueueView> enter(UUID ipoId, UUID userId) {
         Instant now = clock.instant();
-        // 간격은 나를 포함한 인원으로 정한다 (새로 줄에 서는 경우)
+        if (openIpos.check(ipoId, now) == OpenIpoCatalog.Check.NOT_OPEN) {
+            return Mono.error(new NotOpenIpoException());
+        }
+        // 간격은 나를 포함한 인원으로 정한다 (새로 진입하는 경우)
         return repository.waitingCount(ipoId).flatMap(count -> {
             Duration interval = pollInterval(count + 1);
             return repository.enter(ipoId, userId, now, now.plus(interval.multipliedBy(properties.dropoutFactor())))

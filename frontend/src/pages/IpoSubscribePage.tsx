@@ -124,6 +124,12 @@ export function IpoSubscribePage() {
             <div className="notice info">
               청약하려면 계좌가 필요해요. <Link to="/account" style={{ fontWeight: 700 }}>계좌 만들기 →</Link>
             </div>
+          ) : admission.error instanceof ApiError && admission.error.status === 422 ? (
+            // 게이트웨이가 청약 중인 공모주가 아니라고 판단 (화면을 여는 사이 마감됐거나 아직 시작 전)
+            <div className="stack">
+              <div className="notice gray">지금은 청약할 수 없는 공모주예요</div>
+              <button className="btn btn-ghost" onClick={toDetail}>공모주로 돌아가기</button>
+            </div>
           ) : admission.error !== null ? (
             <div className="stack">
               <ErrorBox error={admission.error} title="대기열에 들어가지 못했어요" />

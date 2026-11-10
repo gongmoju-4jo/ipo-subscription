@@ -32,7 +32,7 @@ class QueueController {
         this.queueService = queueService;
     }
 
-    @Operation(summary = "대기열 진입", description = "새로 진입하면 201, 이미 줄에 있거나 입장 허가 상태면 200 (순번 유지)")
+    @Operation(summary = "대기열 진입", description = "새로 진입하면 201, 이미 대기 중이거나 입장 허가 상태면 200 (순번 유지). 청약 중인 공모주가 아니면 422")
     @PostMapping
     Mono<ResponseEntity<ApiResponse<QueueEntryResponse>>> enter(@PathVariable UUID ipoId,
                                                                @AuthenticationPrincipal Jwt jwt) {
@@ -41,19 +41,19 @@ class QueueController {
                 .body(ApiResponse.success(QueueEntryResponse.from(view), "대기열에 진입했습니다.")));
     }
 
-    @Operation(summary = "대기열 순서 조회",
-            description = "pollIntervalMillis마다 조회한다. 조회가 간격의 몇 배 동안 끊기면 줄에서 빠진다. 줄에 없으면 404 (다시 진입)")
+    @Operation(summary = "대기열 순번 조회",
+            description = "pollIntervalMillis마다 조회한다. 조회가 간격의 3배 동안 끊기면 대기열에서 이탈 처리된다. 대기 중도 아니고 허가도 없으면 404 (다시 진입)")
     @GetMapping("/me")
     Mono<ApiResponse<QueueEntryResponse>> find(@PathVariable UUID ipoId, @AuthenticationPrincipal Jwt jwt) {
         return queueService.find(ipoId, userId(jwt))
-                .map(view -> ApiResponse.success(QueueEntryResponse.from(view), "대기열 순서를 조회했습니다."));
+                .map(view -> ApiResponse.success(QueueEntryResponse.from(view), "대기열 순번을 조회했습니다."));
     }
 
-    @Operation(summary = "대기열 이탈", description = "줄과 입장 허가를 모두 지운다. 줄에 없어도 200")
+    @Operation(summary = "대기열 이탈", description = "대기 순번과 입장 허가를 모두 지운다. 대기 중이 아니어도 200")
     @DeleteMapping("/me")
     Mono<ApiResponse<Void>> leave(@PathVariable UUID ipoId, @AuthenticationPrincipal Jwt jwt) {
         return queueService.leave(ipoId, userId(jwt))
-                .then(Mono.fromSupplier(() -> ApiResponse.<Void>success(null, "대기열에서 나갔습니다.")));
+                .then(Mono.fromSupplier(() -> ApiResponse.<Void>success(null, "대기열에서 이탈했습니다.")));
     }
 
     private static UUID userId(Jwt jwt) {

@@ -53,7 +53,7 @@ public class MarginSettleService {
         Account account = accountRepository.findByIdForUpdate(command.accountId())
                 .orElseThrow(() -> invalid(command, "계좌가 없습니다."));
 
-        // 3. margin 확인: 없음, 계좌, 공모주 불일치, 음수나 증거금보다 큰 배정 대금은 돈을 옮기지 않고 DLT
+        // 3. margin 확인: 없음, 계좌, 공모주 불일치, 음수나 증거금보다 큰 배정 대금은 잔고 변경 없이 DLT
         Margin margin = marginRepository.findBySubscriptionId(command.subscriptionId())
                 .orElseThrow(() -> invalid(command, "증거금이 없습니다."));
 
@@ -73,7 +73,7 @@ public class MarginSettleService {
         // 4. margin 상태로 분기
         switch (margin.getStatus()) {
             case PENDING -> {
-                // 4-0. 계좌 청약증거금이 이 margin보다 적으면 잔고와 margin이 어긋난 것이라 재시도해도 같으므로 DLT
+                // 4-0. 계좌 청약증거금이 해당 margin보다 적으면 잔고와 margin 불일치가 발생한 것이라 재시도해도 결과가 같으므로 DLT
                 if (account.getMarginBalance() < margin.getAmount()) {
                     throw invalid(command, "계좌 청약증거금이 증거금보다 적습니다. marginBalance=" + account.getMarginBalance());
                 }
@@ -84,7 +84,7 @@ public class MarginSettleService {
                 }
             }
             case POSTED -> {
-                // 4-3. 이미 정산됨: 같은 배정 대금이면 돈은 안 옮기고 처음 응답을 다시 보낸다
+                // 4-3. 이미 정산됨: 같은 배정 대금이면 잔고 변경 없이 처음 응답을 재발행한다
                 if (!Objects.equals(margin.getPostedAmount(), command.allocatedAmount())) {
                     throw invalid(command, "이미 다른 배정 대금으로 정산됐습니다. postedAmount=" + margin.getPostedAmount());
                 }
@@ -93,7 +93,7 @@ public class MarginSettleService {
                 marginEventPublisher.publishSettled(settled(margin, margin.getPostedAmount()));
             }
             case VOIDED -> {
-                // 4-4. 이미 반환됨: 0주 재요청이면 처음 응답을 다시 보내고, 배정이 있으면 돈이 없으므로 DLT
+                // 4-4. 이미 반환됨: 0주 재요청이면 처음 응답을 재발행하고, 배정이 있으면 차감할 청약증거금이 없으므로 DLT
                 if (command.allocatedAmount() != 0) {
                     throw invalid(command, "이미 반환된 증거금에 배정 대금이 있습니다.");
                 }
@@ -102,7 +102,7 @@ public class MarginSettleService {
                 marginEventPublisher.publishSettled(settled(margin, 0));
             }
 
-            // margin이 존재하지 않는 상태값인 경우도, DLT 처리한다. (분기를 타지 않고 processed_event만 남기 때문)
+            // margin이 존재하지 않는 상태값인 경우도, DLT 처리한다. (분기에 해당하지 않으면 processed_event만 저장되기 때문)
             default -> throw invalid(command,
                     "처리할 수 없는 증거금 상태입니다. status=" + margin.getStatus());
         }
@@ -119,12 +119,12 @@ public class MarginSettleService {
                 command.eventId(), command.subscriptionId(), account.getId(), margin.getId(), margin.getAmount());
     }
 
-    // 4-2. 배정 있음: 배정 대금 차감(MARGIN_POST), 나머지 환불(REFUND). 환불액이 0이면 환불 원장은 남기지 않는다
+    // 4-2. 배정 있음: 배정 대금 차감(MARGIN_POST), 나머지 환불(REFUND). 환불액이 0이면 환불 원장은 저장하지 않는다
     private void post(SettleMarginCommand command, Account account, Margin margin) {
         long postedAmount = command.allocatedAmount();
         long refundAmount = margin.getAmount() - postedAmount;
 
-        // 원장은 거래 후 잔액을 계좌에서 읽으므로 잔고 이동마다 바로 만든다 (계좌가 잔고를 옮긴 뒤 원장을 만들어 돌려준다)
+        // 원장은 거래 후 잔고를 계좌에서 조회하므로 잔고 변경마다 바로 만든다 (계좌가 잔고를 변경한 후 원장을 만들어 반환한다)
         ledgerEntryRepository.save(account.postMargin(postedAmount, margin));
         margin.postPending(postedAmount);
 

@@ -32,7 +32,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 class OutboxMarginEventPublisher implements MarginEventPublisher {
 
-    // TODO: aggregateType은 공통 Outbox 규격이 정해지면 enum으로 바꿀지 결정 (서비스별 enum 제안 중)
+    // TODO: aggregateType은 공통 Outbox 규격이 확정되면 enum으로 변경할지 결정 (서비스별 enum 제안 중)
     static final String AGGREGATE_TYPE = "MARGIN";
     static final String MARGIN_RESERVED = "margin.reserved";
     static final String MARGIN_RESERVE_FAILED = "margin.reserve-failed";

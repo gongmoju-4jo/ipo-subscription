@@ -36,7 +36,7 @@ class KafkaConsumerConfig {
                 (record, exception) -> new TopicPartition(record.topic() + DLT_SUFFIX, record.partition()));
         DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
         // 다시 처리해도 결과가 같은 실패는 재시도 없이 바로 DLT로 보낸다
-        // IllegalArgumentException은 도메인 생성 가드(금액 1 이상 등)의 최후 방어. 메시지 검증을 통과하면 생기지 않는다
+        // IllegalArgumentException은 도메인 생성 가드(금액 1 이상 등)의 최후 방어. 메시지 검증에 성공하면 발생하지 않는다
         handler.addNotRetryableExceptions(InvalidEventException.class, IllegalArgumentException.class);
         return handler;
     }

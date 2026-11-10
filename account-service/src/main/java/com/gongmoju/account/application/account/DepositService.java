@@ -37,7 +37,7 @@ public class DepositService {
      */
     @Transactional
     public DepositResult deposit(UUID accountId, UUID userId, long amount, UUID requestId) {
-        // requestId가 null이면 findByRequestId가 request_id IS NULL인 증거금 원장을 찾을 수 있어서 먼저 막는다
+        // requestId가 null이면 findByRequestId가 request_id IS NULL인 증거금 원장을 조회할 수 있어서 먼저 거부한다
         if (requestId == null) {
             throw new IllegalArgumentException("입금은 requestId가 필요합니다.");
         }
@@ -45,7 +45,7 @@ public class DepositService {
         log.debug("[입금] 시작. accountId={}, userId={}, amount={}, requestId={}", accountId, userId, amount, requestId);
 
         // 잔고 변경 전 락을 먼저 건다.
-        // 이미 조회한 엔티티는 JPA 캐시에 남아 있을 수 있으므로 잠금 조회를 먼저 수행
+        // 이미 조회한 엔티티는 JPA 1차 캐시에 저장되어 있을 수 있으므로 잠금 조회를 먼저 수행
         Account account = accountRepository.findByIdForUpdate(accountId)
                 .filter(
                         found -> found.isOwnedBy(userId)
@@ -65,8 +65,8 @@ public class DepositService {
 
         // 입금: 예수금 잔고 증가.
         //   - 입금 후 예수금이 long 범위(약 922경 원)를 넘으면 500이 아니라 400으로 거절한다
-        //   - 실제 돈이라면 닿을 수 없는 값이지만, 가상 입금은 사용자가 금액을 직접 정하므로 서버 오류로 새지 않게 막는다
-        //   - (1회 상한이 정해지지 않아 @Max를 두지 않았고, 잔고를 알아야 알 수 있어서 요청 검증 다음 단계인 여기서 막는다)
+        //   - 실제 돈이라면 닿을 수 없는 값이지만, 가상 입금은 사용자가 금액을 직접 입력하므로 500 서버 오류로 응답되지 않게 400으로 거부한다
+        //   - (1회 상한이 확정되지 않아 @Max를 두지 않았고, 현재 잔고를 조회해야 판단할 수 있어서 요청 검증 다음 단계인 이곳에서 거부한다)
         LedgerEntry depositEntry;
         try {
             depositEntry = account.deposit(amount, requestId);
@@ -80,7 +80,7 @@ public class DepositService {
         // 변경된 잔고 기준으로 계좌가 만든 입금 원장을 저장
         LedgerEntry entry = ledgerEntryRepository.save(depositEntry);
 
-        // 트랜잭션 커밋 전 로그. 커밋이 실패하면 예외 응답과 에러 로그가 따로 남는다
+        // 트랜잭션 커밋 전 로그. 커밋이 실패하면 예외 응답과 에러 로그가 별도로 기록된다
         log.info("[입금] 원장 저장 (커밋 전). accountId={}, amount={}, cashBalanceAfter={}, requestId={}",
                 accountId, amount, entry.getCashBalanceAfter(), requestId);
 

@@ -23,7 +23,7 @@ import lombok.NoArgsConstructor;
 import java.util.UUID;
 
 /**
- * 투자자의 예수금과 청약증거금 잔액을 관리하는 계좌 엔티티.
+ * 투자자의 예수금과 청약증거금 잔고를 관리하는 계좌 엔티티.
  * <p>
  * 잔고 변경과 원장(LedgerEntry) 기록은 호출하는 서비스의 동일한 DB 트랜잭션에서 처리한다.
  * DB에서도 음수 잔고를 방지하도록 schema.sql에 CHECK 제약조건을 정의한다.
@@ -51,11 +51,11 @@ public class Account extends BaseEntity {
     @Column(nullable = false, unique = true, length = 20)
     private String accountNumber;
 
-    // 투자자가 입금하거나 청약에 사용할 수 있는 예수금 잔액 (원)
+    // 투자자가 입금하거나 청약에 사용할 수 있는 예수금 잔고 (원)
     @Column(nullable = false)
     private long cashBalance;
 
-    // 청약을 위해 인출했으며, 아직 정산 또는 환불되지 않은 증거금 잔액 (원)
+    // 청약을 위해 인출했으며, 아직 정산 또는 환불되지 않은 청약증거금 잔고 (원)
     @Column(nullable = false)
     private long marginBalance;
 
@@ -75,11 +75,11 @@ public class Account extends BaseEntity {
         return account;
     }
 
-    // 잔고 변경 메서드는 원장 type 하나에 하나씩. 잔고를 바꾼 뒤 그 거래의 LedgerEntry를 만들어 돌려준다 (#106)
-    //   - 잔고만 바꾸고 원장을 빠뜨리는 코드를 만들 수 없게 하려고 (팀 규칙: 잔고 변경과 원장 기록은 정해진 메서드 하나로만)
+    // 잔고 변경 메서드는 원장 type 하나에 하나씩. 잔고를 변경한 후, 해당 거래의 LedgerEntry를 만들어 반환한다 (#106)
+    //   - 잔고만 변경하고 원장이 누락되는 코드를 작성할 수 없게 하기 위함 (팀 규칙: 잔고 변경과 원장 기록은 정해진 메서드 하나로만)
     //   - 원장은 거래 후 잔고를 이 계좌에서 읽으므로 잔고를 바꾼 다음에 만든다
     //   - 저장은 호출한 서비스가 같은 트랜잭션에서 한다 (도메인은 Repository를 모름)
-    // 금액 검증(1 이상)은 API, Consumer가 먼저 하고 여기서 한 번 더 막는다. 덧셈 넘침은 Math.addExact로 예외
+    // 금액 검증(1 이상)은 API, Consumer가 먼저 하고 이곳에서 한 번 더 거부한다. 덧셈 오버플로는 Math.addExact로 예외를 발생시킨다
 
     // DEPOSIT: 입금; 예수금 증가
     //   Math.addExact로 long 범위를 초과하는 금액이 계산되지 않도록 검사
@@ -105,7 +105,7 @@ public class Account extends BaseEntity {
      * <p>
      * 예수금 감소 -> 청약증거금 증가
      * 예수금이 부족하면 INSUFFICIENT_BALANCE 예외를 발생시켜 인출 차단
-     * 이동 전후의 계좌 전체 잔액은 동일
+     * 인출 전후의 계좌 전체 잔고(예수금 + 청약증거금)는 동일
      *
      * @param amount 인출할 증거금 금액 (원)
      * @param margin 이번 인출로 만든 증거금
@@ -147,7 +147,7 @@ public class Account extends BaseEntity {
     }
 
     // 증거금 인출
-    //   청약증거금 잔액보다 큰 금액을 차감하려는 경우, 데이터 정합성 오류로 판단
+    //   청약증거금 잔고보다 큰 금액을 차감하려는 경우, 데이터 정합성 오류로 판단
     //   ex) 증거금 100만원인데, postMargin(1500000) 호출 ->
     private void withdrawMargin(long amount) {
         requirePositive(amount);

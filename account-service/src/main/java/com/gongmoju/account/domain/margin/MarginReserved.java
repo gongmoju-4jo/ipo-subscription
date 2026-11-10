@@ -25,7 +25,7 @@ public record MarginReserved(
 ) {
 
     public MarginReserved {
-        // margin을 저장(persist)한 뒤에 만들어야 marginId, reservedAt(created_at)이 채워져 있다
+        // margin을 저장(persist)한 후에 만들어야 marginId, reservedAt(created_at)이 할당되어 있다
         Objects.requireNonNull(marginId, "marginId는 margin 저장 후에 정해집니다.");
         Objects.requireNonNull(reservedAt, "reservedAt은 margin 저장 후에 정해집니다.");
     }

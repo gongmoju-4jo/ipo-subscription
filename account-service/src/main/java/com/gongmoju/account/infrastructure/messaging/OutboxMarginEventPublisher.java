@@ -32,8 +32,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 class OutboxMarginEventPublisher implements MarginEventPublisher {
 
-    // TODO: aggregateType은 공통 Outbox 규격이 확정되면 enum으로 변경할지 결정 (서비스별 enum 제안 중)
-    static final String AGGREGATE_TYPE = "MARGIN";
     static final String MARGIN_RESERVED = "margin.reserved";
     static final String MARGIN_RESERVE_FAILED = "margin.reserve-failed";
     static final String MARGIN_VOIDED = "margin.voided";
@@ -47,7 +45,7 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
     private final ObjectMapper objectMapper;
 
     /**
-     * 인출 성공 결과를 이벤트 명세에 맞게 변환하고 Outbox에 저장한다.
+     * 인출 성공 결과를 이벤트 명세 형식으로 변환하고 Outbox에 저장한다.
      *
      * @param event 도메인에서 만들어진 인출 성공 결과 객체
      */
@@ -117,7 +115,7 @@ class OutboxMarginEventPublisher implements MarginEventPublisher {
      */
     private void save(String topic, UUID aggregateId, UUID accountId, Object payload) {
         outboxRepository.save(Outbox.of(
-                AGGREGATE_TYPE, aggregateId, topic, accountId.toString(), toJson(payload)
+                OutboxAggregateType.MARGIN.name(), aggregateId, topic, accountId.toString(), toJson(payload)
         ));
         log.debug("[Outbox] 저장. topic={}, aggregateId={}, key={}, payload={}", topic, aggregateId, accountId, payload);
     }

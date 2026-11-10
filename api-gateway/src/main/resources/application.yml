@@ -93,9 +93,10 @@ queue:
   # 1초마다 입장 처리
   admit-interval: PT1S
   # 초당 입장 인원, 전체 공모주 합. 서비스가 계속 받아도 밀리지 않는 처리량(S1 정식 측정 433건/초)
-  # 부하 측정에서 서비스 한계를 잴 때만 QUEUE_ADMIT_RATE로 크게 준다 (대기열을 끄는 설정은 없다)
+  # QUEUE_ADMIT_RATE는 대기열 효과 측정(입장 속도만 바꿔 비교)에서만 바꾼다. 서비스 처리량 부하 테스트는 run-k6.sh가 허가를 Redis에 직접 넣으므로 바꾸지 않는다
+  # (대기열을 끄는 설정은 없다)
   admit-rate: ${QUEUE_ADMIT_RATE:433}
-  # 입장 허가 유효 시간 (허가 후 입력 화면에서 청약 신청까지). 부하 측정 때는 QUEUE_ADMISSION_TTL로 측정 시간보다 길게
+  # 입장 허가 유효 시간 (허가 후 입력 화면에서 청약 신청까지)
   admission-ttl: ${QUEUE_ADMISSION_TTL:PT5M}
   # 받은 조회 간격의 3배 동안 조회가 없으면 이탈 (창을 닫은 사람에게 허가를 주지 않게)
   dropout-factor: 3

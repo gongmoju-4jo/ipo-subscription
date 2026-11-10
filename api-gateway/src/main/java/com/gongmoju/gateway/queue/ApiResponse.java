@@ -12,18 +12,19 @@ import java.util.List;
  * </ul>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record ApiResponse<T>(boolean success, T data, String message, Error error) {
+public record ApiResponse<T>(boolean success, T data, String message, ErrorBody error) {
 
     public static <T> ApiResponse<T> success(T data, String message) {
         return new ApiResponse<>(true, data, message, null);
     }
 
     public static ApiResponse<Void> failure(String code, String message, List<Detail> details) {
-        return new ApiResponse<>(false, null, null, new Error(code, message, details == null || details.isEmpty() ? null : details));
+        return new ApiResponse<>(false, null, null, new ErrorBody(code, message, details == null || details.isEmpty() ? null : details));
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Error(String code, String message, List<Detail> details) {
+    // 이름이 java.lang.Error와 겹치지 않게 ErrorBody로 둔다 (JSON 필드 이름은 레코드 구성요소 이름 error 그대로)
+    public record ErrorBody(String code, String message, List<Detail> details) {
     }
 
     public record Detail(String field, String reason) {

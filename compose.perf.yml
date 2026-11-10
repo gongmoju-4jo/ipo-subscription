@@ -17,7 +17,8 @@
 # | redis | 0.5 | 256m | - (`--maxmemory 200mb`) |
 #
 # redis는 컨테이너 상한보다 작은 --maxmemory를 둔다. 상한에 먼저 닿으면 컨테이너가 강제 종료되어 대기열이 통째로 사라지고,
-# --maxmemory에 먼저 닿으면 noeviction이라 쓰기만 오류가 나서 드러난다. 대기자 10만 명이어도 수십 MB로 추정한다 (측정 전)
+# --maxmemory에 먼저 닿으면 noeviction이라 쓰기만 오류가 나서 드러난다 (게이트웨이 알림 QueueAdmissionDown의 redis_oom).
+# 입장 허가 키는 1개에 약 180바이트다 (redis:7, 10만 개 약 18MB 실측). 부하 테스트는 run-k6.sh가 끝나면 넣은 허가를 지운다
 #
 # JVM은 CPU 상한을 보고 가용 프로세서 수(스레드 풀, GC 스레드)를 정한다. 상한을 바꾸면 그 영향도 같이 바뀐다.
 # PostgreSQL은 pg_stat_statements와 슬로우 쿼리 로그(100ms 이상)를 켠다 (loadtest/sql/slow-queries.sql).

@@ -85,6 +85,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 | 경로 | 서비스 |
 | --- | --- |
 | `/api/v1/auth/**`, `/api/v1/users/**`, `/api/v1/accounts/**` | account |
+| `/api/v1/admin/allocations/**` | allocation (아래 `/api/v1/admin/**`보다 먼저 맞춘다) |
 | `/api/v1/ipos/**`, `/api/v1/subscriptions/**`, `/api/v1/admin/**` | subscription |
 | `/api/v1/allocations/**` | allocation |
 

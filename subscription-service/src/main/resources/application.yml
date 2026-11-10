@@ -53,10 +53,10 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
     producer:
-      acks: all                         # 브로커 저장 확인(acks=all) 후에만 202를 준다 (D-13). 재전송 중복은 idempotence로 막는다
+      acks: all                         # Outbox 발행기는 브로커 저장 확인(acks=all) 뒤에만 발행 완료로 기록한다. 재전송 중복은 idempotence로 막는다
       properties:
         enable.idempotence: true
-        max.block.ms: 5000              # 브로커가 없거나 느리면 오래 기다리지 않고 500으로 응답한다 (메타데이터 대기 5초, 전송 전체 10초)
+        max.block.ms: 5000              # 브로커가 없거나 느리면 오래 기다리지 않고 발행 실패로 처리한다 (메타데이터 대기 5초, 전송 전체 10초). Outbox 발행기가 다음 주기에 다시 보낸다
         request.timeout.ms: 5000
         delivery.timeout.ms: 10000
     consumer:
@@ -73,7 +73,7 @@ outbox:  # Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks
     interval: PT1S                # 이전 실행이 끝난 뒤 다시 실행하기까지 쉬는 시간 (ISO-8601, @Scheduled가 읽는다)
     batch-size: 100
     alert-threshold: 5            # 이 횟수 이상 연속 실패하면 알림 로그. Consumer 재시도(3회)와 별개이고, 넘어도 발행은 계속 시도한다
-    send-timeout: 10s             # Producer의 delivery.timeout.ms(10s, API 직접 발행과 같은 Producer를 씀) 이상으로 맞춘다. 발행기가 실패로 처리한 뒤 Producer가 재시도하지 않게 한다
+    send-timeout: 10s             # Producer의 delivery.timeout.ms(10s) 이상으로 맞춘다. 발행기가 실패로 처리한 뒤 Producer가 재시도하지 않게 한다
 
 ipo:
   close:  # 공모주 마감 스케줄러 (F-13, D-16)

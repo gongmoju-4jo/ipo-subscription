@@ -214,15 +214,14 @@ bash loadtest/run-k6.sh g2 --ipo "$W" --run-id g2-B-10k-W --users data/users-g2.
 bash loadtest/run-k6.sh g2 --ipo "$M" --run-id g2-B-10k-M --users data/users-g2.csv -e CASE=B
 # 5. 저장 전 확인 (아래 조건을 모두 만족할 때까지 다시 조회한다)
 docker exec ipo-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:29092 --describe --group subscription-requested
-docker exec ipo-postgres psql -U postgres -d ipo -tAc "select status, count(*) from subscription.subscription group by 1"
-docker exec ipo-postgres psql -U postgres -d ipo -tAc "select ipo_id, status, count(*) from subscription.subscription where ipo_id in ('$W', '$M') group by 1, 2"
+docker exec ipo-postgres psql -U postgres -d ipo -tAc "select ipo_id, status, count(*) from subscription.subscription group by 1, 2"
 ```
 
 5번 조회 결과가 아래를 모두 만족할 때만 저장합니다. 하나라도 아니면 잠시 뒤 5번을 다시 조회합니다. 처리 중 요청이 남아 있는데 저장하면 복원할 때 그 요청이 사라집니다.
 
 - 접수 Consumer 그룹의 `LAG` 열이 모두 0
 - 처리 중 청약(`PENDING`, `COMPENSATING`, `CANCEL_REQUESTED`)이 없음
-- W는 1,000건, M은 N건(예시는 10,000건)이 모두 `CONFIRMED`
+- `ipo-ids.txt`의 W마다(`--warmups 2`면 W1, W2 모두) 1,000건, M은 N건(예시는 10,000건)이 모두 `CONFIRMED`
 
 ```bash
 # 6. 저장 (5번 조건을 확인한 뒤에만)

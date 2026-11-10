@@ -8,7 +8,8 @@
 - 회차 유효성 (k6 로그와 요약을 본다): 밀린 요청이 없고, k6 응답 검사 실패가 없고, 401이 없고, 대상은 202, 422, 409만, 배경은 202만 있고,
   대상 요청에 202(마감 전 도착)와 422(마감 후 도착)가 모두 있고, 대상 공모주가 마감(ipo.closed)됐어야 한다
 - 측정값: verify.sql 20~22번 결과 행 수(sql_result.txt), 202를 받았는데 청약 행이 없는 요청 수(k6 로그와 DB 대조)
-- 입력 확인: k6가 보낸 요청 수(http_reqs.count)와 읽은 로그 행 수가 모두 계획한 전체 요청 수와 같고, 모든 행의 stage가 target, bg여야 판정한다
+- 입력 확인: 읽은 로그 행 수가 k6가 보낸 요청 수(http_reqs.count)와 같고, 밀린 요청이 없으면 k6 요청 수가 계획한 전체 요청 수와 같고,
+  모든 행의 stage가 target, bg여야 판정한다 (밀린 요청이 있으면 요청 수가 적은 것이 정상이고 회차 무효가 된다)
   (읽지 못한 행이나 일찍 끝난 실행을 0건으로 넘기지 않는다)
 - 종료 코드: 0 유효, 3 무효(이유를 출력), 1 입력을 읽지 못함(요청 수 불일치, sql_result.txt에 20~22번이 없거나 건너뜀 등)
 """
@@ -54,13 +55,18 @@ def judge(requests_log, summary_path, sql_result, ipo, end_ms, expect_requests):
     rows = load_rows(requests_log)
     with open(summary_path, encoding="utf-8") as f:
         metrics = json.load(f)["metrics"]
-    # 로그에서 읽지 못한 행(예: 202를 받은 대상 요청)은 아래 대조에서 빠져 0건처럼 보인다. k6가 계획보다 일찍 끝나도 밀린 요청으로 잡히지 않는다
-    # 그래서 k6 요청 수와 읽은 로그 행 수가 모두 계획한 전체 요청 수와 같을 때만 판정한다
+    # s2.js가 dropped_iterations에 임계값을 걸어 요약에 늘 남는다. 없으면 0으로 넘기지 않고 입력 오류
+    if "count" not in metrics.get("dropped_iterations", {}):
+        raise ValueError("summary.json에 dropped_iterations.count가 없음 (s2.js의 밀린 요청 수)")
+    dropped = int(metrics["dropped_iterations"]["count"])
+    # 로그에서 읽지 못한 행(예: 202를 받은 대상 요청)은 아래 대조에서 빠져 0건처럼 보인다. 그래서 로그 행 수는 늘 k6 요청 수와 같아야 한다.
+    # k6 요청 수는 밀린 요청이 없을 때만 계획 수와 비교한다 (k6가 계획보다 일찍 끝난 경우). 밀린 요청은 k6가 보내지 않아 적은 것이 정상이고,
+    # 그 회차는 아래에서 밀린 요청으로 무효가 된다 (밀린 수를 더해도 k6가 반복을 1회 더 잡을 수 있어 계획 수와 꼭 같지는 않다)
     if "count" not in metrics.get("http_reqs", {}):
         raise ValueError("summary.json에 http_reqs.count가 없음 (k6가 보낸 요청 수)")
     sent = int(metrics["http_reqs"]["count"])
-    if sent != expect_requests or len(rows) != expect_requests:
-        raise ValueError(f"요청 수가 계획과 다름: 계획 {expect_requests}건, k6 요청 {sent}건, 읽은 로그 행 {len(rows)}건")
+    if len(rows) != sent or (dropped == 0 and sent != expect_requests):
+        raise ValueError(f"요청 수가 맞지 않음: 계획 {expect_requests}건, k6 요청 {sent}건, 밀린 요청 {dropped}건, 읽은 로그 행 {len(rows)}건")
     unknown = sum(1 for r in rows if r.get("stage") not in ("target", "bg"))
     if unknown:
         raise ValueError(f"stage가 target, bg가 아닌 로그 행 {unknown}건 (판정에서 빠지는 요청)")
@@ -87,10 +93,6 @@ def judge(requests_log, summary_path, sql_result, ipo, end_ms, expect_requests):
 
     reasons = []
     # 요청 순번으로 대상 구간을 정하므로(k6 iterationInTest는 보낸 요청만 센다), 밀린 요청이 있으면 대상 구간이 그만큼 뒤로 밀린다
-    # s2.js가 dropped_iterations에 임계값을 걸어 요약에 늘 남는다. 없으면 0으로 넘기지 않고 입력 오류
-    if "count" not in metrics.get("dropped_iterations", {}):
-        raise ValueError("summary.json에 dropped_iterations.count가 없음 (s2.js의 밀린 요청 수)")
-    dropped = int(metrics["dropped_iterations"]["count"])
     if dropped:
         reasons.append(f"밀린 요청 {dropped}건 (대상 구간이 계획보다 늦어짐)")
     # k6 응답 검사(상태 코드와 오류 코드, 예: 대상 422가 SUBSCRIPTION_CLOSED인지)가 하나라도 실패하면 무효.

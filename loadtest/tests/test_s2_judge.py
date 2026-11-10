@@ -156,8 +156,25 @@ class S2JudgeTest(unittest.TestCase):
                 c.expect, c.http_reqs = expect, http
                 rc, out, err = c.run()
                 self.assertEqual(rc, 1)
-                self.assertIn(f"요청 수가 계획과 다름: 계획 {expect}건, k6 요청 {http}건, 읽은 로그 행 5건", err)
+                self.assertIn(f"요청 수가 맞지 않음: 계획 {expect}건, k6 요청 {http}건, 밀린 요청 0건, 읽은 로그 행 5건", err)
                 self.assertEqual(out, "")
+
+    def test_fewer_requests_with_dropped_iterations_is_an_invalid_run(self):
+        # 밀린 요청은 k6가 보내지 않아 요청 수가 계획보다 적은 것이 정상이다. 입력 오류가 아니라 밀린 요청으로 회차 무효 (다시 실행)
+        c = Case().normal()
+        c.expect, c.dropped = 8, 2
+        rc, out, err = c.run()
+        self.assertEqual(rc, 3)
+        self.assertIn("밀린 요청 2건", out)
+        self.assertEqual(err, "")
+
+    def test_log_rows_short_of_k6_requests_is_an_input_error_even_with_dropped(self):
+        c = Case().normal()
+        c.expect, c.dropped, c.http_reqs = 8, 2, 6
+        rc, out, err = c.run()
+        self.assertEqual(rc, 1)
+        self.assertIn("요청 수가 맞지 않음: 계획 8건, k6 요청 6건, 밀린 요청 2건, 읽은 로그 행 5건", err)
+        self.assertEqual(out, "")
 
     def test_missing_http_reqs_count_is_an_input_error(self):
         c = Case().normal()

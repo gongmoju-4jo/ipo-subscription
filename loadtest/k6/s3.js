@@ -1,7 +1,7 @@
 // S3: 재전송과 다른 계좌 청약이 섞인 시나리오. 요청 구성은 Synthetic Data 행동 CSV(loadtest/synthetic/s3-behavior.csv)를 따른다.
 //   i번째 행 = i번째 요청 (VU i/10+1의 i%10번째). 열: vuser(회원 CSV의 행 번호), persona, action
 //   NORMAL: 첫 청약 / RESEND: 같은 투자자의 NORMAL과 같은 requestId로 재전송 (응답의 subscriptionId가 같아야 한다)
-//   SECOND_ACCOUNT: 같은 투자자가 두 번째 계좌(accountId2)로 같은 종목을 다시 청약. 늦게 처리된 쪽이 ALREADY_SUBSCRIBED로 거절 (Consumer가 판정, HTTP는 202)
+//   SECOND_ACCOUNT: 같은 투자자가 두 번째 계좌(accountId2)로 같은 종목을 다시 청약. 늦게 처리된 쪽이 ALREADY_SUBSCRIBED로 거절 (청약 API가 접수 트랜잭션에서 판정, HTTP는 202)
 // 회원 CSV는 SECOND_ACCOUNT 투자자에게 두 번째 계좌가 있어야 한다 (seed_users.py --behavior ../synthetic/s3-behavior.csv)
 // 요청 수(VUS x ITERATIONS)는 행동 CSV 행 수와 같아야 한다. 다르면 시작 전에 멈춘다
 import { normal, loadBehavior, uuidFromSeed, RUN_ID } from './lib.js';

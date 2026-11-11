@@ -10,7 +10,6 @@ PARTITIONS="${KAFKA_TOPIC_PARTITIONS:-6}"
 REPLICATION_FACTOR=1
 
 TOPICS=(
-  subscription.requested
   margin.reserve-requested
   margin.reserved
   margin.reserve-failed

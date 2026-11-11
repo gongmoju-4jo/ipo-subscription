@@ -62,7 +62,7 @@ expect_out "parse_offsets 합계 5" 0 5 parse_offsets subscription.requested.DLT
 expect_out "parse_offsets 다른 토픽 → 실패" 1 "" parse_offsets margin.voided.DLT < "$T.7"
 expect_out "parse_offsets 빈 출력 → 실패" 1 "" parse_offsets subscription.requested.DLT < "$T.3"
 topics_n="$(kafka_topics | wc -l | tr -d ' ')"
-[ "$topics_n" = 10 ] && ok "kafka_topics: create-topics.sh에서 토픽 10개" || bad "kafka_topics" "${topics_n}개"
+[ "$topics_n" = 9 ] && ok "kafka_topics: create-topics.sh에서 토픽 9개" || bad "kafka_topics" "${topics_n}개"
 # kafka_dlt_total은 아래 "DLT 토픽을 한 번에 조회"에서 확인한다
 
 # ---- sql_in, is_uuid, ceil_div ----
@@ -257,7 +257,7 @@ unset -f docker
 TOPS="$(kafka_topics)"; NT="$(printf '%s\n' "$TOPS" | grep -c .)"
 docker() { echo "$*" > "$ST/dlt-args"; printf '%s\n' "$TOPS" | awk '{ print $1 ".DLT:0:1"; print $1 ".DLT:1:2\r" }'; }
 expect_out "kafka_dlt_total: 토픽 ${NT}개 x (1+2) = $((NT * 3))" 0 "$((NT * 3))" kafka_dlt_total
-[ "$(grep -o 'kafka-get-offsets' "$ST/dlt-args" | wc -l | tr -d ' ')" = 1 ] && grep -q 'subscription\\\.requested' "$ST/dlt-args" && ok "kafka_dlt_total: 한 번 호출, 점은 정규식에서 이스케이프" || bad "kafka_dlt_total 인자" "$(cat "$ST/dlt-args")"
+[ "$(grep -o 'kafka-get-offsets' "$ST/dlt-args" | wc -l | tr -d ' ')" = 1 ] && grep -q 'margin\\\.reserve-requested' "$ST/dlt-args" && ok "kafka_dlt_total: 한 번 호출, 점은 정규식에서 이스케이프" || bad "kafka_dlt_total 인자" "$(cat "$ST/dlt-args")"
 docker() { printf '%s\n' "$TOPS" | sed 1d | awk '{ print $1 ".DLT:0:1" }'; }
 expect_out "kafka_dlt_total: 한 토픽의 행이 없으면 실패 (0으로 넘기지 않음)" 1 "" kafka_dlt_total
 docker() { echo "Error: timeout" >&2; return 1; }

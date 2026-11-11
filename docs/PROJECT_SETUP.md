@@ -288,7 +288,8 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 - Kafka-UI: http://localhost:8989 (토픽, 컨슈머 그룹 확인)
 - 토픽 생성: 토픽 **자동 생성은 꺼져 있고**, `kafka-init`이 Kafka 기동 후 한 번 만들고 종료한다 (`docker/kafka/create-topics.sh`, 종료 상태가 정상)
   - 토픽 목록, 파티션 수는 `docker/kafka/create-topics.sh` **한 곳에서 관리**한다
-  - 토픽 10개 + `{토픽}.DLT` 10개 = 20개: `subscription.requested`, `margin.reserve-requested`, `margin.reserved`, `margin.reserve-failed`, `margin.void-requested`, `margin.voided`, `ipo.closed`, `allocation.result`, `margin.settled`, `allocation.finished`
+  - 토픽 9개 + `{토픽}.DLT` 9개 = 18개: `margin.reserve-requested`, `margin.reserved`, `margin.reserve-failed`, `margin.void-requested`, `margin.voided`, `ipo.closed`, `allocation.result`, `margin.settled`, `allocation.finished`
+    - 청약 접수 토픽(`subscription.requested`)은 접수 Outbox(D-29)로 쓰지 않게 되어 뺐다. 이미 만든 Kafka에는 남아 있어도 동작에 영향이 없고, 새로 만들 때만 빠진다
   - 파티션 수 기본 6 (`.env`의 `KAFKA_TOPIC_PARTITIONS`로 바꿀 수 있음), 복제 1 (단일 브로커)
   - 📌 파티션 수는 계좌, 청약, 배정 서비스의 Consumer 수(`application.yml`의 `spring.kafka.listener.concurrency`, 6)와 같게 둔다. 바꾸면 청약 서비스 테스트의 `KafkaTestSupport.PARTITIONS`도 같이 바꾼다
     - Consumer가 파티션보다 많으면 남는 Consumer는 일하지 않고, 적으면 동시 처리 수가 Consumer 수에 묶인다

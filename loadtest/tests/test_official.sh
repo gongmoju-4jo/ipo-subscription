@@ -542,5 +542,12 @@ expect_out "bash 3.2 검사기: 변수 바로 뒤 한글, 화살표는 잡고 �
 NA="$(na_scan "$REPO")"; rc=$?
 [ "$rc" = 0 ] && [ -z "$NA" ] && ok "bash 3.2: 셸 스크립트에 변수 바로 뒤 비ASCII 문자 없음 (\${VAR}로 감쌈)" || bad "bash 3.2 변수 경계" "rc=$rc $NA"
 
+# ---- 필수 Consumer 그룹 기본값: official.sh와 s2.sh가 같고, 접수 Outbox로 없어진 접수 그룹(subscription-requested)이 없다 ----
+# (없는 그룹이 있으면 Kafka를 비우고 시작한 측정이 필수 그룹 확인에서 종료 코드 9로 멈춘다)
+req_default() { grep -o 'REQUIRED_GROUPS="${REQUIRED_GROUPS:-[^}]*}' "$1" | head -1 | sed 's/.*:-//; s/}$//'; }
+RG_OFF="$(req_default "$HERE/../official.sh")"; RG_S2="$(req_default "$HERE/../s2.sh")"
+[ -n "$RG_OFF" ] && [ "$RG_OFF" = "$RG_S2" ] && ok "필수 그룹 기본값: official.sh와 s2.sh가 같음" || bad "필수 그룹 기본값" "official.sh='$RG_OFF' s2.sh='$RG_S2'"
+case " $RG_OFF " in *" subscription-requested "*) bad "필수 그룹 기본값" "official.sh에 subscription-requested가 남아 있음" ;; *) ok "필수 그룹 기본값: subscription-requested 없음" ;; esac
+
 echo; echo "통과 $PASS, 실패 $FAIL"
 [ "$FAIL" -eq 0 ]

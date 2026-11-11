@@ -12,7 +12,7 @@
 #          CLOSE_TIMEOUT(300), DRAIN_TIMEOUT(600), K6_IMAGE, K6_CPUS(2), K6_MEMORY(1g),
 #          PRE_VUS(500), MAX_VUS(2000)(k6 가상 사용자, official.sh S1과 같음. 202가 DB 커밋을 기다려서 DB가 잠깐 멈추면 응답이 늦어지고,
 #                    가상 사용자가 모자라면 요청이 밀려 회차가 무효가 된다. 요청 속도는 RATE로 고정이라 서버 부하는 바뀌지 않는다),
-#          REQUIRED_GROUPS(소진 대기에서 모두 조회돼야 하는 Consumer 그룹. 접수 Outbox 뒤에는 접수 Consumer 그룹이 없어 official.sh 기본값에서 subscription-requested를 뺐다),
+#          REQUIRED_GROUPS(소진 대기에서 모두 조회돼야 하는 Consumer 그룹. official.sh와 같은 기본값),
 #          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다),
 #          SKIP_BUILD(0, 1이면 빌드, 배포를 건너뛴다. 서비스 5개의 로컬 jar와 컨테이너 jar sha256 비교는 그대로 하고 env.txt에 남는다.
 #                     둘 다 이전 커밋의 jar여도 비교를 통과하므로, 이 커밋으로 빌드, 배포한 것을 따로 확인했을 때만 쓴다)

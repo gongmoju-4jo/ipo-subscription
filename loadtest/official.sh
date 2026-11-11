@@ -45,7 +45,7 @@
 #   PRE_VUS=500 MAX_VUS=2000   S1 k6 가상 사용자
 #   P95_LIMIT=15 DRAIN_LIMIT=15  G2 합격 기준(초)
 #   DRAIN_TIMEOUT=2400  소진 대기 상한(초)
-#   REQUIRED_GROUPS="subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve"
+#   REQUIRED_GROUPS="subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve"   소진 대기에서 lag을 확인할 필수 Consumer 그룹 (s2.sh와 같은 기본값)
 #   SKIP_BUILD=1    빌드, 배포를 건너뛴다 (jar sha256 비교는 그대로 한다)
 #   ALLOW_DIRTY=1   커밋하지 않은 변경이 있어도 실행 (env.txt에 dirty로 남는다. 정식 결과에 쓰지 않는다)
 #   RESTORE=1       시작할 때 기준 스냅샷으로 DB와 Kafka를 되돌린다 (baseline.sh restore). 측정마다 같은 DB 크기, 같은 데이터에서 시작한다.
@@ -88,7 +88,7 @@ S0_PRICE="${S0_PRICE:-15000}"; S1_PRICE="${S1_PRICE:-1000}"; QUANTITY="${QUANTIT
 PRE_VUS="${PRE_VUS:-500}"; MAX_VUS="${MAX_VUS:-2000}"
 S0_VUS=100; S0_ITERS=10    # S0 = 100명 x 10회 = 1,000건 (발제 조건, 바꾸지 않는다). 판정은 요청 수가 이 값과 같아야 유효로 본다
 P95_LIMIT="${P95_LIMIT:-15}"; DRAIN_LIMIT="${DRAIN_LIMIT:-15}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-2400}"
-REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
+REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
 TOKEN_MAX_S=$((55 * 60))   # 토큰 만료 1시간보다 5분 일찍 끊는다
 STATS_INTERVAL="${STATS_INTERVAL:-5}"
 RESTORE="${RESTORE:-1}"; DB_DUMP="${DB_DUMP:-1}"

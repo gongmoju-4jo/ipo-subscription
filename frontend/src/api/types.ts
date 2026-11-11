@@ -88,6 +88,23 @@ export interface IpoResponse extends IpoSummaryResponse {
   refundDate: string;
 }
 
+// 접속 대기열 (api-gateway가 직접 응답)
+export type QueueStatus = 'WAITING' | 'ADMITTED';
+export interface QueueEntryResponse {
+  ipoId: string;
+  status: QueueStatus;
+  /** 내 앞 인원 + 1 (1부터). 입장 허가 상태면 0 */
+  position: number;
+  waitingCount: number;
+  /** 어림값 (초) */
+  estimatedWaitSeconds: number;
+  enteredAt: string;
+  /** 입장 허가 상태일 때 이 시각까지 청약해야 한다. 대기 중이면 null */
+  admissionExpiresAt: string | null;
+  /** 다음 순번 조회까지 기다릴 시간 */
+  pollIntervalMillis: number;
+}
+
 // 청약 (subscription-service)
 export type SubscriptionStatus =
   | 'PENDING'

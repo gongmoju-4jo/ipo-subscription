@@ -15,6 +15,8 @@ import java.util.UUID;
 
 interface IpoJpaRepository extends JpaRepository<Ipo, UUID> {
 
+    List<Ipo> findByStatus(IpoStatus status);
+
     List<Ipo> findByStatusAndSubscriptionEndAtLessThanEqual(IpoStatus status, Instant endAt);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

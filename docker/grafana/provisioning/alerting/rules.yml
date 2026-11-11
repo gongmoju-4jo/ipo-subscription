@@ -121,3 +121,41 @@ groups:
               expression: A
               conditions:
                 - evaluator: { type: gt, params: [0.9] }
+
+      # 대기열 입장 처리: 게이트웨이 입장 스케줄러가 1초마다 Redis로 입장 처리를 하고(대기자가 없어도 Redis를 조회), 실패하면 그 사유(reason)의 값만 1로 내보낸다.
+      # 실패가 이어지면 아무도 입장 허가를 받지 못해 모든 청약 신청이 막힌다. 요청이 없는 시간의 Redis 장애는 5xx 비율로 잡히지 않아 따로 본다.
+      # 사유는 api-gateway AdmissionFailureReason이 정한다 (redis_oom, redis_timeout, redis_connection, redis_error, other). 사유마다 따로 알림이 뜬다.
+      # Redis 컨테이너가 멈추면 연결이 끊긴 채 응답을 기다리다 시간 초과로 끝나서 redis_timeout으로 온다 ("느림"과 "멈춤"은 구분되지 않는다)
+      # 게이트웨이가 내려가 지표가 없으면 ServiceDown이 잡으므로 결과가 없으면 정상으로 본다
+      - uid: ipo-queue-admission-down
+        title: QueueAdmissionDown
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: >-
+            {{ $labels.job }} 대기열 입장 처리 1분 넘게 실패:
+            {{ if eq $labels.reason "redis_timeout" }}Redis 응답 없음 (연결 끊김 또는 응답 지연으로 시간 초과). redis 컨테이너가 떠 있는지, 느린 명령이 있는지 확인
+            {{- else if eq $labels.reason "redis_connection" }}Redis 연결 실패 (연결 거부 또는 주소를 찾을 수 없음). redis 컨테이너와 REDIS_HOST, REDIS_PORT 확인
+            {{- else if eq $labels.reason "redis_oom" }}Redis 메모리 상한 도달 (쓰기 거부). Redis 메모리 사용량과 maxmemory 확인
+            {{- else if eq $labels.reason "redis_error" }}Redis 오류 (키 자료형 불일치, 스크립트 오류 등). 게이트웨이 로그의 "대기열 입장 처리 실패" 확인
+            {{- else }}게이트웨이 내부 오류 (Redis 외 원인). 게이트웨이 로그의 "대기열 입장 처리 실패" 확인{{ end }}.
+            입장 허가가 나가지 않아 청약 신청이 막힘
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: max by (job, reason) (queue_admission_failing)
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }

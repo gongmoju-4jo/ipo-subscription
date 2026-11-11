@@ -22,8 +22,8 @@ WITH last AS (SELECT DISTINCT ON (account_id) account_id, cash_balance_after, ma
 \echo '== 4. 확정 청약 수 = 인출된 증거금 수 (기대: 두 값이 같음)'
 SELECT (SELECT count(*) FROM subscription.subscription WHERE ipo_id = :ipo AND status = 'CONFIRMED') AS confirmed, (SELECT count(*) FROM account.margin WHERE ipo_id = :ipo AND status = 'PENDING') AS pending_margin;
 
-\echo '== 5. 청약 금액 = 인출 금액, margin_id 일치 (기대: 0행)'
-SELECT s.subscription_id FROM subscription.subscription s JOIN account.margin m ON m.subscription_id = s.subscription_id WHERE s.ipo_id = :ipo AND (s.margin_amount <> m.amount OR s.margin_id IS DISTINCT FROM m.margin_id);
+\echo '== 5. 청약 금액 = 인출 금액, margin_id 일치 (기대: 0행. TIMEOUT 취소 후 증거금이 반환된 청약은 margin_id가 비어 있어 margin_id 비교에서만 제외)'
+SELECT s.subscription_id FROM subscription.subscription s JOIN account.margin m ON m.subscription_id = s.subscription_id WHERE s.ipo_id = :ipo AND (s.margin_amount <> m.amount OR (NOT (s.status = 'CANCELLED' AND m.status = 'VOIDED') AND s.margin_id IS DISTINCT FROM m.margin_id));
 
 \echo '== 6. 거절된 청약에 증거금 없음 (기대: 0행)'
 SELECT s.subscription_id FROM subscription.subscription s JOIN account.margin m ON m.subscription_id = s.subscription_id WHERE s.ipo_id = :ipo AND s.status = 'REJECTED';

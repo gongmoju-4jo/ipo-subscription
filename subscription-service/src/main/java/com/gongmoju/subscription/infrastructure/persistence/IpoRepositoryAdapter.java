@@ -33,6 +33,11 @@ class IpoRepositoryAdapter implements IpoRepository {
     }
 
     @Override
+    public List<Ipo> findByStatus(IpoStatus status) {
+        return jpaRepository.findByStatus(status);
+    }
+
+    @Override
     public Optional<Ipo> findByIdForUpdate(UUID ipoId) {
         return jpaRepository.findByIdForUpdate(ipoId);
     }

@@ -12,4 +12,7 @@ public interface AllocationRepository {
 
     // 본인 청약의 배정 결과. 남의 청약이면 없는 것과 같게 비어 있다 (API 명세 3.5)
     Optional<Allocation> findBySubscriptionIdAndUserId(UUID subscriptionId, UUID userId);
+
+    // 회차의 배정 결과 전체 (재현용)
+    List<Allocation> findAllByAllocationRound(AllocationRound allocationRound);
 }

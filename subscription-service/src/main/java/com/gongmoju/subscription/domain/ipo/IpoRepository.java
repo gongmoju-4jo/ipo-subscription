@@ -15,6 +15,9 @@ public interface IpoRepository {
 
     Optional<Ipo> findById(UUID ipoId);
 
+    // 상태가 같은 공모주 전체. 게이트웨이의 청약 중 공모주 목록(내부 API 4.4)용이라 OPEN처럼 몇 개뿐인 상태에만 쓴다
+    List<Ipo> findByStatus(IpoStatus status);
+
     // 마감용. 공모주 행을 잠가(FOR UPDATE) 같은 공모주 행을 잡은 다른 트랜잭션이 끝난 뒤에 읽는다 (D-29)
     Optional<Ipo> findByIdForUpdate(UUID ipoId);
 

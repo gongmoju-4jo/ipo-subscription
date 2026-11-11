@@ -30,14 +30,15 @@
 | `loadtest/verify/warmup.py` | 정식 측정 워밍업 판정 (시간 구간별 응답 시간 추세의 기울기) |
 | `loadtest/verify/docker_stats.py` | 정식 측정 중 기록한 docker stats를 CSV와 실행별 컨테이너 CPU, 메모리 표(`자원.md`)로 정리 |
 | `loadtest/verify/consumer_stats.py` | 정식 측정이 끝난 뒤 따로 실행. S1의 증거금 인출 Consumer 처리량, 랙 추이, 오류율, 병목 의심 단계 (`인출.md`, `인출.csv`, `인출-prometheus.json`). `python loadtest/verify/consumer_stats.py --batch <이름>` |
-| `loadtest/tests/` | `official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `g2-quantity.js`, `g2_estimate.py`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
+| `loadtest/tests/` | `official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `admit.sh`, `g2_ipo.sh`, `g2-quantity.js`, `g2_estimate.py`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/validate.py` 테스트 (Docker, DB 없이 실행). 9장 |
 | `loadtest/synthetic/` | S3, S4 Synthetic Data: LLM 프롬프트와 응답 원문, 행동 CSV, 생성 코드, 검증(`validate.py`). 6장, `loadtest/synthetic/README.md` |
 | `loadtest/seed/seed_users.py` | 회원, 계좌, 예수금, 로그인 토큰 CSV 생성 (`--behavior`로 S3 두 번째 계좌, S4 입금액을 행동 CSV에서 읽음) |
 | `loadtest/seed/seed_users_sql.sh` | 회원, 계좌, 예수금 입금을 SQL 한 트랜잭션으로 넣기 (회원이 많을 때. 토큰은 `seed_users.py --refresh-tokens`). 3-2절 |
 | `loadtest/seed/new_ipo.sh` | 회차용 새 공모주 삽입 (`--closed`는 마감된 공모주, `--far`는 종료 시각이 10년 뒤인 공모주, `--count N`은 N개를 SQL 한 번으로) |
+| `loadtest/seed/admit.sh` | 입장 허가를 Redis에 한꺼번에 넣기, 지우기(`--revoke`) (회원 CSV 전원 x 공모주). `run-k6.sh`가 k6 앞뒤로 자동으로 부른다. 아래 "입장 허가" |
 | `loadtest/seed/g2_ipo.sh` | 대량 환불 스냅샷용 워밍업 공모주 W, 측정 공모주 M 삽입 (건수, 케이스로 일반청약 물량 계산, 다른 OPEN 공모주 종료 시각을 먼 미래로). 3-4절 |
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
-| `loadtest/run-k6.sh` | 시나리오 실행, 원본 저장 |
+| `loadtest/run-k6.sh` | 입장 허가 넣기, 시나리오 실행, 원본 저장, 입장 허가 지우기 (`seed/admit.sh`) |
 | `loadtest/s2.sh` | S2 마감 경계 한 회차 실행 (워밍업, 공모주 준비, 대상 공모주 마감 시각 설정, 실행, 판정). 6장 |
 | `loadtest/verify/s2_judge.py` | S2 한 회차 판정 (회차 유효성, `verify.sql` 20~22번 결과, 202인데 청약 행이 없는 요청. `s2-judge.txt`) |
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js`, 대량 환불 스냅샷용 청약 시드 `g2.js`(수량은 `g2-quantity.js`) |
@@ -48,6 +49,17 @@
 | `loadtest/find-limit.sh` | S1 요청 속도를 정하기 위한 한계 탐색 (속도를 올려 가며 짧게 실행) |
 | `loadtest/sql/slow-queries.sql` | 슬로우 쿼리 확인 |
 | `loadtest/verify/autovacuum.py` | 정식 측정 실행별 autovacuum, autoanalyze 정리 (`autovacuum.md`) |
+
+### 입장 허가
+
+게이트웨이는 접속 대기열의 입장 허가가 있는 청약 신청만 서비스로 보냅니다 (없으면 403 `QUEUE_ADMISSION_REQUIRED`). 부하 테스트는 서비스 처리량을 재므로 대기열을 거치지 않습니다. `run-k6.sh`가 k6 실행 전에 **회원 CSV 전원 x 공모주(`--ipo`, `-e IPO_IDS`)**의 허가를 Redis(`ipo-redis`)에 직접 넣고, k6가 끝나면 지웁니다 (`seed/admit.sh`). 따로 할 일은 없습니다.
+
+- 측정 중에도 청약 신청마다 게이트웨이의 허가 확인(Redis 조회 1회)은 실제와 같이 일어납니다. 대기열 진입, 순번 조회, 입장 처리 비용은 측정에 들어가지 않습니다
+- 허가는 k6가 끝나면 지웁니다 (실패, 임계값 위반, Ctrl+C 포함). 스크립트가 강제 종료돼 지우지 못한 허가는 `ADMIT_TTL_MS`(기본 6시간) 뒤 사라집니다
+  - 지우는 이유: `compose.perf.yml`의 Redis는 `--maxmemory 200mb`(가득 차면 쓰기 오류)이고 허가 1개가 약 180바이트입니다 (redis:7에서 10만 개 약 18MB). 정식 측정 한 번에 수십만 개라 남겨 두면 다음 측정에서 쓰기가 실패할 수 있습니다
+- 게이트웨이의 `QUEUE_ADMIT_RATE`, `QUEUE_ADMISSION_TTL`은 바꾸지 않습니다 (허가 유효 시간은 `ADMIT_TTL_MS`로 정함)
+- Redis에 넣지 못하거나 응답 수가 회원 수 x 공모주 수와 다르면 k6를 실행하지 않고 멈춥니다
+- 대기열 자체의 효과(적용 전후 비교)는 이 방식으로 재지 않습니다. 진입 → 허가를 실제로 거치는 시나리오가 따로 필요합니다
 
 모니터링은 `docker-compose up`에 함께 올라옵니다: Prometheus `http://localhost:9090`, Grafana `http://localhost:3000` (계정 `admin`, 비밀번호는 `.env`의 `GRAFANA_ADMIN_PASSWORD`). Grafana에 "측정 대시보드"가 자동으로 등록됩니다.
 
@@ -585,19 +597,21 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `K6_LABEL` | 없음 | `run-k6.sh` (컨테이너 실행 시 `loadtest.batch` 라벨. `official.sh`가 중단될 때 자기가 띄운 k6만 멈추는 데 쓴다) |
 | `K6_NAME` | 없음 | `run-k6.sh` (컨테이너 실행 시 컨테이너 이름. `official.sh`는 `k6-<run_id>`로 줘서 docker stats에서 실행별 k6를 구분한다) |
 | `BASE_URL` | 로컬 `http://localhost:8080`(`seed_users.py`는 `http://127.0.0.1:8080`), 컨테이너 `http://api-gateway:8080` | `run-k6.sh`, `seed_users.py` (`seed_users.py`는 요청마다 새로 연결해서 `localhost`면 Windows에서 요청마다 약 2초가 더 걸린다. `PROMETHEUS_URL`과 같은 이유) |
+| `REDIS_CONTAINER`, `ADMIT_TTL_MS` | `ipo-redis`, `21600000` | `run-k6.sh` → `seed/admit.sh` (입장 허가를 넣을 Redis 컨테이너, 허가 유효 시간 ms. 기본 6시간은 `g2.js` 상한과 같다. 그보다 긴 실행이면 늘린다) |
 | `PG_DB` | `ipo` | `seed_users_sql.sh` (회원을 넣을 데이터베이스) |
 | `LOADTEST_PASSWORD` | `loadtest1234` | `seed_users.py`, `seed_users_sql.sh` (시드 회원의 비밀번호) |
 | `PROMETHEUS_URL` | `http://127.0.0.1:9090` | `report.py`, `official.sh`(워밍업 판정) (`--prometheus`로도 지정. Windows에서 `localhost`는 IPv6를 먼저 시도해 연결마다 약 2초가 더 걸려서 `127.0.0.1`을 쓴다) |
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `k6/g2-quantity.js`, `g2_estimate.py`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`, `s2.sh`, `s2_judge.py`를 고치면 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `admit.sh`, `k6/g2-quantity.js`, `g2_estimate.py`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`, `s2.sh`, `s2_judge.py`를 고치면 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_g2_run.sh        # 대량 환불 회차 실행기 (인자, ipo-ids.txt, 스냅샷 검사, 환불 대기의 정지·상한·실패, verify.sql 출력 읽기(실제 출력 고정 데이터 포함), 판정, manifest, 멱등성 검사의 Kafka 출력 읽기와 실패 처리)
 bash loadtest/tests/test_official.sh      # 셸 함수 (Kafka lag, DLT, git, 소진 대기, 토큰, 워밍업 실행 인자). 조회 실패를 0으로 넘기지 않는지 확인
 bash loadtest/tests/test_baseline.sh      # 기준 스냅샷 (저장 거부 조건, ALLOW_SUBSCRIPTIONS 저장 조건, sha256, 복원 순서, 복원 뒤 상태 비교, Kafka 볼륨 고르기)
 bash loadtest/tests/test_seed_users_sql.sh   # SQL 회원 시드 (옵션 검사, loginId 규칙, BCrypt 비용 확인, 넣기 실패 시 CSV 없음)
+bash loadtest/tests/test_admit.sh         # 입장 허가 넣기, 지우기 (키 형식이 게이트웨이와 같은지, RESP 형식, 잘못된 입력, Redis 응답 수, run-k6.sh의 넣기 → k6 → 지우기 순서와 종료 코드)
 bash loadtest/tests/test_g2_ipo.sh        # 대량 환불 공모주 (일반청약 물량 계산과 짝수, 옵션 검사, W와 M 물량, 실패 시 종료 코드, new_ipo.sh --far)
 node loadtest/tests/test_g2_quantity.mjs  # 대량 환불 청약 수량 (케이스 A 172주, 케이스 B 분포와 평균, 잘못된 입력). Node가 필요하다
 python loadtest/tests/test_warmup.py      # 워밍업 판정 (기울기 계산, 최소 시간, 연속 통과, 최대 시간, 조회 실패)

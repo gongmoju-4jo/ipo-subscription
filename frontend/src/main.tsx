@@ -8,6 +8,7 @@ import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { IposPage } from './pages/IposPage';
 import { IpoDetailPage } from './pages/IpoDetailPage';
+import { IpoSubscribePage } from './pages/IpoSubscribePage';
 import { SubscriptionsPage } from './pages/SubscriptionsPage';
 import { SubscriptionDetailPage } from './pages/SubscriptionDetailPage';
 import { AccountPage } from './pages/AccountPage';
@@ -42,6 +43,7 @@ createRoot(document.getElementById('root')!).render(
               <Route index element={<DashboardPage />} />
               <Route path="ipos" element={<IposPage />} />
               <Route path="ipos/:ipoId" element={<IpoDetailPage />} />
+              <Route path="ipos/:ipoId/subscribe" element={<IpoSubscribePage />} />
               <Route path="subscriptions" element={<SubscriptionsPage />} />
               <Route path="subscriptions/:subscriptionId" element={<SubscriptionDetailPage />} />
               <Route path="account" element={<AccountPage />} />

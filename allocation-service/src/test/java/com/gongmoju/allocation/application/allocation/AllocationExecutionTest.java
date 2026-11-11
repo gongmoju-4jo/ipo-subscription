@@ -77,6 +77,13 @@ class AllocationExecutionTest {
             assertThat(longValue(row, "ALLOCATED_AMOUNT")).isEqualTo(longValue(row, "ALLOCATED_QUANTITY") * OFFER_PRICE);
         });
         assertThat(allocations.stream().mapToLong(row -> longValue(row, "ALLOCATED_QUANTITY")).sum()).isEqualTo(100);
+        // 재현용 청약 수량: 배정 계산에 넣은 값 그대로 저장
+        for (ConfirmedSubscription subscription : subscriptions) {
+            Map<String, Object> row = allocations.stream()
+                    .filter(r -> r.get("SUBSCRIPTION_ID").equals(subscription.subscriptionId()))
+                    .findFirst().orElseThrow();
+            assertThat(longValue(row, "REQUESTED_QUANTITY")).isEqualTo(subscription.requestedQuantity());
+        }
 
         // allocation.result: 배정 결과 1건당 1개, 키 accountId, aggregate_id = allocation_id, payload는 저장한 배정 결과와 같다
         List<Map<String, Object>> results = outbox("allocation.result");

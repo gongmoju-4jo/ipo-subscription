@@ -120,6 +120,16 @@ class AuthorizationRulesTest {
         call(HttpMethod.POST, "/api/v1/admin/ipos", null).expectStatus().isUnauthorized();
     }
 
+    // 배정 관리자 경로(배정 서비스로 라우팅)도 같은 /api/v1/admin/** 규칙을 받는다: 일반 회원 403, 토큰 없음 401, 관리자 통과
+    @Test
+    void 배정_관리자_경로도_관리자_경로_규칙을_받는다() throws Exception {
+        String path = "/api/v1/admin/allocations/ipos/8b2d0000-0000-4000-8000-000000000001/replay";
+
+        call(HttpMethod.GET, path, JwtTestTokens.valid(secret, userId, "USER")).expectStatus().isForbidden();
+        call(HttpMethod.GET, path, null).expectStatus().isUnauthorized();
+        passes(call(HttpMethod.GET, path, JwtTestTokens.valid(secret, userId, "ADMIN")));
+    }
+
     private WebTestClient.ResponseSpec call(HttpMethod method, String path, String token) {
         WebTestClient.RequestHeadersSpec<?> request = webTestClient.method(method).uri(path);
         if (token != null) {

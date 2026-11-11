@@ -24,7 +24,7 @@
 git clone {레포 주소}
 cd ipo-subscription
 cp .env.example .env    # .env의 DB_PASSWORD, ACCOUNT_DB_PASSWORD, SUBSCRIPTION_DB_PASSWORD, ALLOCATION_DB_PASSWORD에 직접 정한 값을, JWT_SECRET에 팀 공용 키를 넣는다 (아래 "JWT 키")
-docker-compose up -d postgres kafka kafka-init kafka-ui
+docker-compose up -d postgres kafka kafka-init kafka-ui redis
 ```
 
 1. IntelliJ로 **루트 폴더** 열기 → Gradle 탭 🔄
@@ -33,7 +33,7 @@ docker-compose up -d postgres kafka kafka-init kafka-ui
 
 필요: **JDK 21**, Docker + Compose v2 이상, IntelliJ
 
-> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)이 있습니다.
+> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, Redis(접속 대기열), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)이 있습니다.
 
 ### 📌 Claude Code
 
@@ -53,7 +53,7 @@ ipo-subscription/
 ├── build.gradle            공통 버전, 의존성 (Boot 3.5.16, Cloud 2025.0.3, Java 21)
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
-├── docker-compose.yml      로컬 인프라(PostgreSQL, Kafka, Kafka-UI), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
+├── docker-compose.yml      로컬 인프라(PostgreSQL, Kafka, Kafka-UI, Redis), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
 ├── compose.perf.yml        부하 테스트용 자원 고정 ([부하 테스트 가이드](./LOADTEST.md)). 배포 환경도 같은 값을 쓴다
 ├── compose.prod.yml        배포 환경(EC2)용 (ECR 이미지, 게이트웨이 80번 공개, 자동 재시작)
 ├── deploy/                 서버 배포 스크립트, 배포 후 스모크 ([배포](#배포-aws))
@@ -75,6 +75,7 @@ ipo-subscription/
 | account / subscription / allocation | 8081 / 8082 / 8083 |
 | PostgreSQL | 5432 |
 | Kafka / Kafka-UI | 29092 / 8989 |
+| Redis | 6379 (접속 대기열. 게이트웨이만 사용) |
 | Prometheus / Grafana | 9090 / 3000 |
 | gateway 관리 포트 | 18090 (헬스체크, 지표 수집 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
 
@@ -85,11 +86,13 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 | 경로 | 서비스 |
 | --- | --- |
 | `/api/v1/auth/**`, `/api/v1/users/**`, `/api/v1/accounts/**` | account |
+| `/api/v1/admin/allocations/**` | allocation (아래 `/api/v1/admin/**`보다 먼저 맞춘다) |
 | `/api/v1/ipos/**`, `/api/v1/subscriptions/**`, `/api/v1/admin/**` | subscription |
 | `/api/v1/allocations/**` | allocation |
 
 - 새 외부 경로 → `api-gateway/.../application.yml`에 추가
 - `/internal/**`은 라우팅 X (Feign 전용, 외부 접근 불가)
+- `/api/v1/queues/**`는 라우팅 X. 게이트웨이가 직접 응답한다 (접속 대기열, [아래](#접속-대기열))
 
 ### 📌 게이트웨이 인증
 
@@ -107,6 +110,44 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
 - 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
 
+### 접속 대기열
+
+청약이 몰릴 때 게이트웨이가 공모주별 대기열(Redis)을 두고, 차례가 온 사람에게만 입장 허가를 준다. 코드는 `api-gateway/.../queue/`, 화면은 공모주 상세의 [청약 화면으로] → 대기 화면 → 청약 화면(청약 가능 시간 표시)
+
+| API | 설명 |
+| --- | --- |
+| `POST /api/v1/queues/{ipoId}/entries` | 대기열 진입. 새로 진입 201, 이미 대기 중이거나 입장 허가 상태면 200 (순번 유지). 청약 중인 공모주가 아니면 422 `BUSINESS_RULE_VIOLATION` |
+| `GET /api/v1/queues/{ipoId}/entries/me` | 순번 조회. 대기 중도 아니고 허가도 없으면 404 `RESOURCE_NOT_FOUND` (화면은 다시 진입) |
+| `DELETE /api/v1/queues/{ipoId}/entries/me` | 이탈. 대기 순번과 입장 허가를 모두 지운다. 대기 중이 아니어도 200 |
+
+- 인증은 다른 API와 같이 JWT. 대기열 주인은 토큰의 `sub`
+- 응답: `status`(`WAITING`, `ADMITTED`), `position`, `waitingCount`, `estimatedWaitSeconds`, `enteredAt`, `admissionExpiresAt`, `pollIntervalMillis`. 시각은 KST
+- 화면은 `pollIntervalMillis`마다 순번을 조회한다. 간격 = max(1초, 대기 인원 ÷ `queue.poll-budget`)라서 대기자가 많아도 초당 조회 수가 예산을 넘지 않는다
+- 조회가 받은 간격의 `queue.dropout-factor`배(3배) 동안 끊기면 입장 스케줄러가 대기열에서 이탈 처리한다. 진입, 조회할 때마다 기한이 늘어난다
+- 입장 스케줄러가 1초마다 `queue.admit-rate`명(전체 공모주 합, 기본 433)에게 앞에서부터 허가를 준다. 허가는 `queue.admission-ttl`(5분) 동안 유효
+- 공모주가 여러 개면 입장 인원을 대기자가 있는 공모주에 똑같이 나누되, 대기자가 몫보다 적은 공모주는 있는 만큼만 받고 남는 자리는 대기자가 많은 공모주로 넘긴다
+  - 예 (433명): 대기 5만 명 + 3명 → 430명, 3명 / 5만 명 + 5만 명 → 217명, 216명
+  - 대기자가 적은 공모주는 기다리지 않고 바로 입장한다
+- 진입 때 **청약 중인 공모주인지** 확인한다 (청약 중 공모주 목록에 있고, 지금이 청약 시작 시각 이상 마감 시각 미만). 아니면 422 "청약 중인 공모주가 아닙니다" (없는 번호, 시작 전, 마감을 구분하지 않음)
+  - 목록은 게이트웨이가 청약 서비스 내부 API(`GET /internal/ipos?status=OPEN`)에서 켜지자마자 받고 5초마다 갱신해 메모리에 둔다 (`queue.open-ipos.*`). 진입마다 청약 서비스를 부르지 않는다
+  - 갱신에 실패하면 마지막 목록을 쓴다. 한 번도 받지 못했거나 30초(`stale-after`) 동안 갱신하지 못하면 확인 없이 진입을 허용한다 (이 확인 하나 때문에 대기열이 멈추지 않게. 청약 신청의 입장 허가 확인은 그대로)
+  - 새로 등록된 공모주는 다음 갱신(최대 5초) 뒤부터 진입할 수 있다
+- Redis에 접속할 수 없으면 503 `SERVICE_UNAVAILABLE` (대기열 없이 통과시키지 않음)
+
+📌 청약 신청(`POST /api/v1/subscriptions`)은 그 공모주의 **입장 허가가 있어야** 서비스로 간다 (`AdmissionCheckFilter`)
+
+- 요청 본문의 `ipoId`로 허가를 확인한다. 다른 공모주의 허가로는 신청할 수 없다. 본문은 바꾸지 않고 서비스로 보낸다
+- 허가 없음 → 403 `QUEUE_ADMISSION_REQUIRED` (서비스 호출 없음) / Redis 장애 → 503 `SERVICE_UNAVAILABLE`
+- 본문을 JSON으로 읽을 수 없거나 `ipoId`가 UUID 문자열이 아니면 확인 없이 서비스로 보낸다 (서비스가 400 `VALIDATION_ERROR`와 필드별 details를 준다)
+  - 게이트웨이는 서비스(Spring MVC의 Jackson 변환기)와 같은 방식으로 본문을 읽는다. `Content-Type`의 문자셋이 UTF 계열이 아니면(예: `IBM037`) 그 문자셋으로 풀어 읽는 것까지 같아서, 게이트웨이가 못 읽고 넘긴 본문을 서비스가 읽어 접수하는 일이 없다
+- 게이트웨이가 직접 400 `VALIDATION_ERROR`로 막는 경우 (서비스로 보내지 않음)
+  - 같은 키가 두 번 이상 있는 본문. 서비스가 어느 `ipoId`로 접수할지 키 순서에 따라 달라져서, 허가를 확인한 공모주와 접수될 공모주가 어긋날 수 있다
+  - 본문이 16KB를 넘음 (본문을 메모리에 읽어 확인하므로 상한을 둔다. 청약 신청 본문은 200바이트 안팎)
+- 경로는 퍼센트 디코딩 후 비교하고(`/api/v1/%73ubscriptions`도 대상) 끝 슬래시도 대상이다. 메서드는 대소문자를 가리지 않는다 (`post`는 지금 Spring Security 방화벽이 먼저 400으로 막는다)
+- 허가는 청약이 접수돼도 유효 시간까지 남는다 (잔액 부족 거절 뒤 재신청 가능, 이중청약은 DB 제약이 막음)
+- 마감 판단은 그대로 게이트웨이 도착 시각(`X-Request-Received-At`)이다. 허가를 받았어도 마감 뒤 도착한 신청은 서비스가 422로 거절한다
+- Swagger나 스크립트로 청약을 신청할 때도 먼저 대기열에 진입해 `ADMITTED`를 받는다 (`scripts/subscription-flow.sh` 참고). 부하 테스트는 `run-k6.sh`가 허가를 미리 넣는다 ([부하 테스트 가이드](./LOADTEST.md))
+
 ---
 
 ## 3. 실행
@@ -115,7 +156,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 ### IntelliJ
 
-1. `docker-compose up -d postgres kafka kafka-init kafka-ui` (Kafka가 필요 없는 작업이면 `postgres`만). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
+1. `docker-compose up -d postgres kafka kafka-init kafka-ui redis` (Kafka가 필요 없는 작업이면 `postgres`만. 게이트웨이를 띄우면 `redis`도 필요). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
 2. `⌘8`/`Alt+8` Services 창 → Eureka 실행 → 나머지 실행
 3. http://localhost:8080/api/v1/unknown → 401 JSON(`UNAUTHORIZED`)이면 게이트웨이 정상 (토큰이 필요한 경로라서)
 
@@ -135,12 +176,12 @@ docker-compose down -v                                     # 종료 + DB, Kafka 
 
 - 📌 처음 한 번: `cp .env.example .env` → `JWT_SECRET`에 팀 공용 키, DB 비밀번호(관리자 1개, 서비스별 3개), `GRAFANA_ADMIN_PASSWORD`(직접 정한 값, 기본값 없음). compose가 `.env`를 읽어 컨테이너에 환경변수로 전달한다 (컨테이너 안에는 `.env` 파일이 없다)
 - ⚠️ 코드 수정 후엔 위 `실행` 명령 그대로 (`./gradlew build` 빠지면 예전 코드로 뜸). 한 서비스만 고쳤다면 `./gradlew build -x test && docker-compose up -d --build {서비스 이름}`
-- 📌 서비스 컨테이너 중 내 PC에 열리는 포트는 `http://localhost:8080`(게이트웨이)과 `http://localhost:8761`(Eureka 대시보드) 둘뿐이다 (둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩. PostgreSQL, Kafka, Kafka-UI는 별도로 열린다). 서비스 포트(8081~8083)는 열지 않는다 → 서비스 포트 직접 접속 ❌
+- 📌 서비스 컨테이너 중 내 PC에 열리는 포트는 `http://localhost:8080`(게이트웨이)과 `http://localhost:8761`(Eureka 대시보드) 둘뿐이다 (둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩. PostgreSQL, Kafka, Kafka-UI, Redis는 별도로 열린다). 서비스 포트(8081~8083)는 열지 않는다 → 서비스 포트 직접 접속 ❌
   - 서비스는 토큰 없이 `X-User-Id` 헤더만으로 호출되므로 외부에 열면 안 된다. 서비스별 Swagger도 쓸 수 없고 통합 Swagger(`http://localhost:8080/swagger-ui/index.html`)를 쓴다
   - Eureka 등록 확인은 IntelliJ 때와 같이 `http://localhost:8761` 화면에서 한다
   - Eureka 포트가 이미 사용 중이거나 Windows 예약 포트라 기동되지 않으면 `.env`에서 `EUREKA_PORT`(기본 8761)를 바꾼다
 - 기동 순서는 compose가 제어한다: postgres, kafka 준비 → 토픽 생성(`kafka-init`) → eureka-server → 서비스. 서비스가 모두 `healthy`여도 Gateway가 서비스를 찾는 데 최대 30초 걸려 처음 요청이 503일 수 있다
-- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너와 모니터링(Prometheus, Grafana)까지 전부 올라온다.** `GRAFANA_ADMIN_PASSWORD`가 비어 있으면 Grafana만 시작되지 않는다. jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui`)
+- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너와 모니터링(Prometheus, Grafana)까지 전부 올라온다.** `GRAFANA_ADMIN_PASSWORD`가 비어 있으면 Grafana만 시작되지 않는다. jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui redis`)
 - ⚠️ **같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다** (포트 충돌, Eureka 중복 등록). 특히 IntelliJ의 Eureka를 켠 채 Docker 전체를 띄우면 8761이 충돌한다. 일부 서비스만 IntelliJ로 띄워 컨테이너 Eureka에 붙이는 구성은 확인하지 않았고 지원하지 않는다
 - 📌 **Docker 메모리 6GB 이상 권장** (Kafka 포함 시 2GB 부족. 모니터링 포함 전체 실행 시 컨테이너 사용량 합계가 부하 중 약 3.4GB였다)
   - Colima: `colima stop && colima start --cpus 4 --memory 6` / Docker Desktop: Settings → Resources → Memory
@@ -158,7 +199,7 @@ docker-compose restart {서비스 이름}                                       
 | 서비스 | 같이 올라오는 것 |
 | --- | --- |
 | `eureka-server` | 없음 |
-| `api-gateway` | `eureka-server` |
+| `api-gateway` | `eureka-server`, `redis` |
 | `account-service`, `subscription-service`, `allocation-service` | `postgres`, `kafka`, `kafka-init`(토픽을 만들고 종료), `eureka-server` |
 | `prometheus` | 없음 (수집 대상이 떠 있지 않아도 올라온다) |
 | `grafana` | `prometheus` |
@@ -183,6 +224,18 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 | `HttpServerErrorRateHigh` | 서비스별 5xx 응답 비율 5% 초과 (`/actuator/**` 제외) | 2분 |
 | `HikariConnectionPending` | DB 커넥션을 기다리는 요청이 있음 (`hikaricp_connections_pending > 0`) | 1분 |
 | `JvmHeapUsageHigh` | 힙 사용률 90% 초과 | 5분 |
+| `QueueAdmissionDown` | 게이트웨이 대기열 입장 처리 실패 (`queue_admission_failing{reason} > 0`). 사유별로 따로 뜨고 메시지에 사유가 나온다 (아래 표). 입장 허가가 나가지 않아 청약 신청이 모두 막힌다 | 1분 |
+
+- `QueueAdmissionDown`은 입장 스케줄러가 요청이 없어도 1초마다 Redis를 쓰는 결과라 트래픽이 없는 시간의 Redis 장애도 잡는다. 게이트웨이가 내려가 지표가 없을 때는 울리지 않는다 (`ServiceDown`이 잡는다)
+- 사유 (`reason` 라벨, 게이트웨이 `AdmissionFailureReason`이 예외로 판단)
+
+| `reason` | 메시지 내용 | 판단 기준 |
+| --- | --- | --- |
+| `redis_timeout` | Redis 응답 없음 (연결 끊김 또는 응답 지연으로 시간 초과) | 명령 시간 초과(2초), 입장 처리 5초 초과. **Redis 컨테이너가 멈춘 경우도 여기로 온다** (클라이언트가 재연결을 기다리다 시간 초과로 끝나서 "느림"과 "멈춤"을 구분할 수 없다) |
+| `redis_connection` | Redis 연결 실패 (연결 거부 또는 주소를 찾을 수 없음) | 새 연결을 맺지 못함. 게이트웨이가 Redis 없이 기동했을 때 등 |
+| `redis_oom` | Redis 메모리 상한 도달 (쓰기 거부) | `OOM command not allowed` (`maxmemory`, `noeviction`). 대기자가 있을 때 입장 허가를 쓰다가 거부된 경우라, 대기자가 없으면 이 사유로는 뜨지 않는다 (그때는 진입 API가 503) |
+| `redis_error` | Redis 오류 (키 자료형 불일치, 스크립트 오류 등) | 위에 해당하지 않는 Redis 오류 |
+| `other` | 게이트웨이 내부 오류 (Redis 외 원인) | Redis와 무관한 오류 (코드 오류 등) |
 
 - DB 커넥션 대기, 힙 기준값은 정식 부하 측정(S1 600건/초)에서 울리지 않는 값이다 (대기가 이어진 최장 시간 약 25초, 힙 최대 76%)
 - 설정 파일은 `docker/grafana/provisioning/alerting/`: `rules.yml`(규칙), `contact-points.yml`(Slack 연락처, 메시지 형식), `policies.yml`(묶어 보내기, 반복 주기)
@@ -210,6 +263,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 1. `docker-compose up -d grafana` 후 로그에 `finished to provision alerting`이 있는지 본다 (`docker-compose logs grafana`)
 2. `docker-compose stop allocation-service` → 약 1분 30초 뒤 `[local] 🚨 장애 발생 ServiceDown`
 3. `docker-compose start allocation-service` → 서비스가 뜨고 1~2분 안에 `[local] ✅ 복구 ServiceDown`
+4. `docker-compose stop redis` → 약 2분 뒤 `[local] 🚨 장애 발생 QueueAdmissionDown` (내용: Redis 응답 없음) / `docker-compose start redis` → 1~2분 안에 `[local] ✅ 복구 QueueAdmissionDown`
 
 #### IntelliJ 실행과 Docker 실행의 차이
 
@@ -599,6 +653,7 @@ throw new BusinessException(AccountErrorCode.INSUFFICIENT_BALANCE);
 ### Feign(내부 API) 호출 규칙
 
 > 서비스 간 통신은 기본이 Kafka입니다. Feign은 **배정 → 청약 확정 목록 조회** 하나에만 씁니다.
+> 게이트웨이 → 청약 중 공모주 목록(`GET /internal/ipos?status=OPEN`, 접속 대기열 진입 확인용)도 동기 호출이지만, 게이트웨이는 WebFlux라 Feign 대신 WebClient로 Eureka 서비스 이름(`subscription-service`)을 5초마다 부르고, 사용자 요청 경로에서는 부르지 않습니다. 게이트웨이는 `common`을 쓰지 않아 아래 Feign 공통 설정이 적용되지 않습니다.
 
 - 경로 `/internal/**`, 게이트웨이 등록 ❌ / `@FeignClient(name = "subscription-service")`처럼 Eureka 서비스 이름
 - `X-User-Id`, `X-User-Role`은 common `FeignHeaderInterceptor`가 자동 전달 (직접 넣기 ❌)
@@ -757,7 +812,7 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
   - 해당 포트 사용 중인 앱 종료
 
 - **Windows에서 `bind: An attempt was made to access a socket in a way forbidden by its access permissions`**
-  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`(없으면 `cp .env.example .env`로 만든다)에서 `KAFKA_PORT`, `KAFKA_UI_PORT`, `EUREKA_PORT`, `PROMETHEUS_PORT`, `GRAFANA_PORT`를 다른 값으로 변경
+  - Windows가 예약한 포트 범위에 걸린 것 (범위는 PC마다 다름). `netsh interface ipv4 show excludedportrange protocol=tcp`로 확인 후 `.env`(없으면 `cp .env.example .env`로 만든다)에서 `KAFKA_PORT`, `KAFKA_UI_PORT`, `REDIS_PORT`, `EUREKA_PORT`, `PROMETHEUS_PORT`, `GRAFANA_PORT`를 다른 값으로 변경
 
 - **로그인은 되는데 다른 요청이 전부 401 `UNAUTHORIZED`**
   - account-service와 gateway의 JWT 키가 같은지 확인
@@ -796,4 +851,4 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
   - 서비스는 postgres, kafka, `kafka-init`(토픽 생성 완료), eureka-server가 준비된 뒤에 시작한다. 앞 단계가 `healthy`인지 `docker-compose ps`로 본다
 
 - **`docker-compose up`을 쳤더니 이미지 빌드 오류 (`build/libs/*.jar` 없음)**
-  - jar를 먼저 빌드한다: `./gradlew build -x test`. 인프라만 필요하면 서비스 이름 없이 `up` 하지 말고 `docker-compose up -d postgres kafka kafka-init kafka-ui`
+  - jar를 먼저 빌드한다: `./gradlew build -x test`. 인프라만 필요하면 서비스 이름 없이 `up` 하지 말고 `docker-compose up -d postgres kafka kafka-init kafka-ui redis`

@@ -9,6 +9,12 @@ management:
     web:
       exposure:
         include: health,prometheus
+  health:
+    redis:
+      # Redis 상태를 게이트웨이 헬스체크에 넣지 않는다. 넣으면 Redis가 잠깐 끊겨도 게이트웨이 컨테이너가 unhealthy가 된다
+      # Redis 장애는 입장 처리 지표(queue_admission_up, 알림 QueueAdmissionDown)로 잡는다. 입장 스케줄러가 요청이 없어도 1초마다 Redis를 쓰므로
+      # 트래픽이 없는 시간에도 잡히고, 장애 중 대기열 API와 청약 신청의 503은 5xx 비율 알림(HttpServerErrorRateHigh)에도 잡힌다
+      enabled: false
   metrics:
     distribution:
       # Gateway와 서비스의 응답 시간 p95, p99를 Prometheus에서 따로 볼 수 있도록 구간(histogram)을 함께 내보낸다
@@ -21,6 +27,14 @@ spring:
   config:
     # 레포 루트의 .env를 읽는다 (docker-compose, account-service와 같은 파일). 실행 위치가 루트면 ./.env, 모듈이면 ../.env. 없으면 건너뛴다
     import: optional:file:./.env[.properties],optional:file:../.env[.properties]
+  data:
+    redis:
+      # 접속 대기열 저장소. IntelliJ는 localhost(.env의 REDIS_PORT, 기본 6379), Docker는 compose가 REDIS_HOST=redis를 넣는다
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # Redis가 응답하지 않을 때 오래 붙잡지 않고 503으로 끝낸다 (기본값은 응답 대기 60초, 연결 10초)
+      timeout: 2s
+      connect-timeout: 1s
   cloud:
     gateway:
       server:
@@ -31,6 +45,12 @@ spring:
               uri: lb://account-service
               predicates:
                 - Path=/api/v1/auth/**,/api/v1/users/**,/api/v1/accounts/**
+            # 배정 관리자 API. 아래 subscription-service의 /api/v1/admin/**에도 맞으므로 반드시 그 위에 둔다 (같은 순위면 적힌 순서로 고름)
+            # ADMIN 확인은 SecurityConfig의 /api/v1/admin/** 규칙이 그대로 적용된다
+            - id: allocation-service-admin
+              uri: lb://allocation-service
+              predicates:
+                - Path=/api/v1/admin/allocations/**
             - id: subscription-service
               uri: lb://subscription-service
               predicates:
@@ -73,6 +93,37 @@ springdoc:
         url: /subscription-service/v3/api-docs
       - name: allocation-service
         url: /allocation-service/v3/api-docs
+
+# 접속 대기열 (QueueProperties)
+queue:
+  # 1초마다 입장 처리
+  admit-interval: PT1S
+  # 초당 입장 인원, 전체 공모주 합. 서비스가 계속 받아도 밀리지 않는 처리량(S1 정식 측정 433건/초)
+  # QUEUE_ADMIT_RATE는 대기열 효과 측정(입장 속도만 바꿔 비교)에서만 바꾼다. 서비스 처리량 부하 테스트는 run-k6.sh가 허가를 Redis에 직접 넣으므로 바꾸지 않는다
+  # (대기열을 끄는 설정은 없다)
+  admit-rate: ${QUEUE_ADMIT_RATE:433}
+  # 입장 허가 유효 시간 (허가 후 입력 화면에서 청약 신청까지)
+  admission-ttl: ${QUEUE_ADMISSION_TTL:PT5M}
+  # 받은 조회 간격의 3배 동안 조회가 없으면 이탈 (창을 닫은 사람에게 허가를 주지 않게)
+  dropout-factor: 3
+  # 초당 순번 조회 예산. 조회 간격 = max(1초, 대기 인원 ÷ 이 값). 대기열 효과 측정 전 임시값
+  poll-budget: 500
+  # 입장 처리 한 번에 정리할 이탈자 상한
+  dropout-batch-size: 1000
+  scheduler:
+    # 테스트에서 스케줄러를 끄기 위한 값 (대기열을 끄는 설정 아님)
+    enabled: true
+  # 청약 중 공모주 목록 (OpenIpoProperties). 대기열 진입 때 청약 중인 공모주인지 확인하려고 청약 서비스 내부 API(API 명세 4.4)에서 받아 둔다
+  # 진입마다 청약 서비스를 부르지 않는다. 목록을 받지 못했거나 stale-after 동안 갱신하지 못하면 확인 없이 진입을 허용한다
+  open-ipos:
+    # Eureka 서비스 이름으로 부른다 (load-balanced)
+    base-url: http://subscription-service
+    load-balanced: true
+    # 받지 못했거나 실패했을 때 다시 시도하는 주기 / 받은 뒤 갱신 주기 (게이트웨이 1대 기준 5초에 1번 호출)
+    check-interval: PT1S
+    refresh-interval: PT5S
+    timeout: PT2S
+    stale-after: PT30S
 
 jwt:
   # 서명 키. .env의 JWT_SECRET (account-service와 같은 값). 비어 있거나 짧으면 기동할 때 실패한다

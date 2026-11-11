@@ -5,6 +5,7 @@ import com.gongmoju.common.exception.CommonErrorCode;
 import com.gongmoju.common.util.PageableUtils;
 import com.gongmoju.subscription.domain.ipo.Ipo;
 import com.gongmoju.subscription.domain.ipo.IpoRepository;
+import com.gongmoju.subscription.domain.subscription.Subscription;
 import com.gongmoju.subscription.domain.subscription.SubscriptionIdGenerator;
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import com.gongmoju.subscription.domain.subscription.SubscriptionStatus;
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -108,12 +110,47 @@ public class SubscriptionService {
      */
     @Transactional(readOnly = true)
     public Page<ConfirmedSubscriptionResult> listConfirmed(UUID ipoId, int page, int size) {
-        Ipo ipo = ipoRepository.findById(ipoId)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "공모주를 찾을 수 없습니다.", "ipoId"));
-        ipo.validateClosed();
+        validateClosedIpo(ipoId);
 
         return subscriptionRepository.findByIpoIdAndStatus(ipoId, SubscriptionStatus.CONFIRMED,
                         PageRequest.of(page, size, Sort.by("id")))
                 .map(ConfirmedSubscriptionResult::from);
+    }
+
+    /**
+     * 배정 서비스가 가져갈 공모주의 확정 청약 목록을 키셋 방식으로 조회한다 (내부 API, API 명세 4.1, #138).
+     * 직전 응답의 마지막 청약 ID 다음부터 읽어서, 뒤쪽 목록도 앞 행을 건너뛰며 세지 않는다.
+     * 마감(CLOSED) 이후에만 조회할 수 있어서 나눠 받는 동안 목록이 바뀌지 않는다. 정렬은 청약 ID 오름차순 고정이다.
+     *
+     * @param ipoId               공모주 ID
+     * @param afterSubscriptionId 직전 응답의 마지막 청약 ID. 첫 요청은 null
+     * @param size                페이지 크기 (검증된 값)
+     * @return 확정 청약 목록, 다음 목록이 있는지, 첫 요청이면 전체 건수
+     * @throws BusinessException 공모주가 없으면 RESOURCE_NOT_FOUND(404), CLOSED가 아니면 INVALID_STATUS_TRANSITION(409)
+     */
+    @Transactional(readOnly = true)
+    public ConfirmedSubscriptionKeysetResult listConfirmedAfter(UUID ipoId, UUID afterSubscriptionId, int size) {
+        validateClosedIpo(ipoId);
+
+        // 한 건 더 읽어 다음 목록이 있는지 판단한다 (전체 건수를 세지 않음)
+        List<Subscription> rows = afterSubscriptionId == null
+                ? subscriptionRepository.findConfirmedByIpoId(ipoId, size + 1)
+                : subscriptionRepository.findConfirmedByIpoIdAfter(ipoId, afterSubscriptionId, size + 1);
+        boolean hasNext = rows.size() > size;
+        List<ConfirmedSubscriptionResult> items = rows.stream()
+                .limit(size)
+                .map(ConfirmedSubscriptionResult::from)
+                .toList();
+        // 전체 건수는 배정 서비스가 다 받은 건수를 확인하는 데 한 번만 쓴다. 매 요청 세면 다시 느려진다
+        Long totalElements = afterSubscriptionId == null
+                ? subscriptionRepository.countByIpoIdAndStatusIn(ipoId, Set.of(SubscriptionStatus.CONFIRMED))
+                : null;
+        return new ConfirmedSubscriptionKeysetResult(items, hasNext, totalElements);
+    }
+
+    private void validateClosedIpo(UUID ipoId) {
+        Ipo ipo = ipoRepository.findById(ipoId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "공모주를 찾을 수 없습니다.", "ipoId"));
+        ipo.validateClosed();
     }
 }

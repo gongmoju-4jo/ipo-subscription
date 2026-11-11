@@ -581,6 +581,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `P95_LIMIT`, `DRAIN_LIMIT` | `15`, `15` | `official.sh` → `judge.py` (G2 합격 기준 초) |
 | `DRAIN_TIMEOUT` | `2400` | `official.sh` (소진 대기 상한 초) |
 | `REQUIRED_GROUPS` | `subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve` | `official.sh`, `s2.sh` (lag을 확인할 필수 Consumer 그룹. 접수 Outbox 뒤에는 접수 Consumer 그룹 `subscription-requested`가 없어 뺐다) |
+| `IGNORE_GROUPS` | `subscription-requested` | `official.sh`, `s2.sh` (소진 대기의 lag 합에서 뺄 Consumer 그룹. 읽는 Consumer가 없어진 접수 그룹에 남은 메시지가 소진 대기를 막지 않게 한다. 다른 그룹 lag은 그대로 세고, 빈 값이면 모두 센다) |
 | `STATS_INTERVAL` | `5` | `official.sh`, `g2_run.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh`, `s2.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |

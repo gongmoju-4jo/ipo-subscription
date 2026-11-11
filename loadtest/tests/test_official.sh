@@ -48,12 +48,20 @@ sed 's/^subscription-margin-reserved margin.reserved 0 3 3 0/subscription-margin
 expect_out "LOG-END-OFFSET이 숫자가 아님 → 실패" 1 "" lag_of "$T.5"
 { echo "Consumer group 'subscription-requested' has no active members."; echo; cat "$T"; } > "$T.6"
 expect_out "'no active members' 안내 줄이 있어도 데이터 행은 센다 (5)" 0 5 lag_of "$T.6"
+expect_out "뺄 그룹(subscription-requested)의 lag은 합에서 빼고, 필수 그룹 확인에는 넣음 (0)" 0 0 parse_lag "$REQ" "subscription-requested" < "$T"
+sed 's/^account-margin-reserve margin.reserve-requested 0 7 7 0/account-margin-reserve margin.reserve-requested 0 7 9 2/' "$T" > "$T.8"
+expect_out "뺄 그룹이 아닌 그룹의 lag은 그대로 셈 (2)" 0 2 parse_lag "$REQ" "subscription-requested" < "$T.8"
 
 # ---- kafka_lag: docker 실패 ----
 docker() { echo "Error response from daemon: container is not running" >&2; return 1; }
 expect_out "kafka_lag: docker exec 실패 → 실패 (0을 돌려주지 않음)" 1 "" kafka_lag
 docker() { cat "$REAL_CG" | sed 's/$/\r/'; }
 expect_out "kafka_lag: CRLF 출력도 처리 → 0" 0 0 kafka_lag
+docker() { cat "$T"; }
+expect_out "kafka_lag: 기본값은 접수 그룹(subscription-requested) lag을 뺌 → 0" 0 0 kafka_lag
+IGN_DEF="$IGNORE_GROUPS"; IGNORE_GROUPS=""
+expect_out "kafka_lag: IGNORE_GROUPS가 비면 모두 셈 → 5" 0 5 kafka_lag
+IGNORE_GROUPS="$IGN_DEF"
 unset -f docker
 
 # ---- parse_offsets, kafka_dlt_total ----

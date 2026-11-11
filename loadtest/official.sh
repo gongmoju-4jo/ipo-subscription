@@ -46,6 +46,7 @@
 #   P95_LIMIT=15 DRAIN_LIMIT=15  G2 합격 기준(초)
 #   DRAIN_TIMEOUT=2400  소진 대기 상한(초)
 #   REQUIRED_GROUPS="subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve"   소진 대기에서 lag을 확인할 필수 Consumer 그룹 (s2.sh와 같은 기본값)
+#   IGNORE_GROUPS="subscription-requested"   lag 합에서 뺄 Consumer 그룹 (s2.sh와 같은 기본값. 읽는 Consumer가 없어진 접수 그룹에 남은 메시지가 소진 대기를 막지 않게. 빈 값이면 모두 셈)
 #   SKIP_BUILD=1    빌드, 배포를 건너뛴다 (jar sha256 비교는 그대로 한다)
 #   ALLOW_DIRTY=1   커밋하지 않은 변경이 있어도 실행 (env.txt에 dirty로 남는다. 정식 결과에 쓰지 않는다)
 #   RESTORE=1       시작할 때 기준 스냅샷으로 DB와 Kafka를 되돌린다 (baseline.sh restore). 측정마다 같은 DB 크기, 같은 데이터에서 시작한다.
@@ -89,6 +90,7 @@ PRE_VUS="${PRE_VUS:-500}"; MAX_VUS="${MAX_VUS:-2000}"
 S0_VUS=100; S0_ITERS=10    # S0 = 100명 x 10회 = 1,000건 (발제 조건, 바꾸지 않는다). 판정은 요청 수가 이 값과 같아야 유효로 본다
 P95_LIMIT="${P95_LIMIT:-15}"; DRAIN_LIMIT="${DRAIN_LIMIT:-15}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-2400}"
 REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
+IGNORE_GROUPS="${IGNORE_GROUPS-subscription-requested}"
 TOKEN_MAX_S=$((55 * 60))   # 토큰 만료 1시간보다 5분 일찍 끊는다
 STATS_INTERVAL="${STATS_INTERVAL:-5}"
 RESTORE="${RESTORE:-1}"; DB_DUMP="${DB_DUMP:-1}"
@@ -180,19 +182,20 @@ kafka_topics() { # 토픽 목록은 docker/kafka/create-topics.sh 한 곳에서 
   [ -n "$t" ] || return 1
   printf '%s\n' "$t"
 }
-# 표준입력: kafka-consumer-groups.sh --describe --all-groups 출력 / 인자: 필수 그룹 목록
+# 표준입력: kafka-consumer-groups.sh --describe --all-groups 출력 / 인자: 필수 그룹 목록, lag 합에서 뺄 그룹 목록(없으면 모두 셈)
 # lag = LOG-END-OFFSET - CURRENT-OFFSET (커밋 오프셋이 '-'이면 0으로 보고 끝 오프셋 전체를 대기로 센다).
-# 형식이 이상한 행, 데이터 행 0개, 필수 그룹 누락이면 실패
+# 뺄 그룹도 행 형식 검사와 필수 그룹 확인에는 들어간다. 형식이 이상한 행, 데이터 행 0개, 필수 그룹 누락이면 실패
 parse_lag() {
-  awk -v req="$1" '
-    BEGIN { n = split(req, R, " "); bad = 0; s = 0; rows = 0 }
+  awk -v req="$1" -v ign="${2:-}" '
+    BEGIN { n = split(req, R, " "); m = split(ign, I, " "); for (i = 1; i <= m; i++) skip[I[i]] = 1; bad = 0; s = 0; rows = 0 }
     $1 == "GROUP" && $2 == "TOPIC" { next }
     NF >= 5 && $3 ~ /^[0-9]+$/ {
       leo = $5; cur = $4
       if (leo !~ /^[0-9]+$/) { bad = 1; next }
       if (cur == "-") cur = 0
       else if (cur !~ /^[0-9]+$/) { bad = 1; next }
-      seen[$1] = 1; s += leo - cur; rows++
+      seen[$1] = 1; rows++
+      if (!($1 in skip)) s += leo - cur
     }
     END {
       for (i = 1; i <= n; i++) if (!(R[i] in seen)) { print "필수 Consumer 그룹 없음: " R[i] > "/dev/stderr"; bad = 1 }
@@ -203,7 +206,7 @@ parse_lag() {
 kafka_lag() {
   local out
   out="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --all-groups 2>&1)" || return 1
-  printf '%s\n' "$out" | tr -d '\r' | parse_lag "$REQUIRED_GROUPS"
+  printf '%s\n' "$out" | tr -d '\r' | parse_lag "$REQUIRED_GROUPS" "$IGNORE_GROUPS"
 }
 # 표준입력: kafka-get-offsets.sh 출력(토픽:파티션:끝오프셋) / 인자: 토픽 이름. 해당 토픽 행이 없으면 실패
 parse_offsets() {
@@ -449,7 +452,7 @@ record_versions() { # env.txt에 버전을 쓰고, jar 불일치 수를 돌려�
     echo "설정 GAP=$GAP STAGES=$STAGES DUR=$DUR S1_REPEAT=$S1_REPEAT S0_VUS=$S0_VUS S0_ITERS=$S0_ITERS S0_PRICE=$S0_PRICE S1_PRICE=$S1_PRICE QUANTITY=$QUANTITY PRE_VUS=$PRE_VUS MAX_VUS=$MAX_VUS"
     echo "설정 PG_CONTAINER=$PG_CONTAINER KAFKA_CONTAINER=$KAFKA_CONTAINER EUREKA_URL=$EUREKA_URL"
     echo "설정 P95_LIMIT=$P95_LIMIT DRAIN_LIMIT=$DRAIN_LIMIT DRAIN_TIMEOUT=$DRAIN_TIMEOUT SKIP_BUILD=${SKIP_BUILD:-0} ALLOW_DIRTY=${ALLOW_DIRTY:-0}"
-    echo "설정 REQUIRED_GROUPS=$REQUIRED_GROUPS"
+    echo "설정 REQUIRED_GROUPS=$REQUIRED_GROUPS IGNORE_GROUPS=$IGNORE_GROUPS"
     echo "설정 STATS_INTERVAL=$STATS_INTERVAL K6_CPUS=$K6_CPUS K6_MEMORY=$K6_MEMORY RESTORE=$RESTORE DB_DUMP=$DB_DUMP"
     echo "설정 SCENARIOS=$SCENARIOS MEASURE_ORDER=${ORDER_LIST// /,} S4_PREFIX=$S4_PREFIX SYN_RUNS=$SYN_RUNS BASELINE_DIR=${BASELINE_DIR:-$DIR/data/baseline}"
     # 어떤 행동 데이터로 측정했는지 (Synthetic Data는 커밋한 CSV를 쓰지만, 같은 커밋인지와 별개로 파일 자체를 남긴다)

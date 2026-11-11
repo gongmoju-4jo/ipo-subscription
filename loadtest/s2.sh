@@ -13,6 +13,7 @@
 #          PRE_VUS(500), MAX_VUS(2000)(k6 가상 사용자, official.sh S1과 같음. 202가 DB 커밋을 기다려서 DB가 잠깐 멈추면 응답이 늦어지고,
 #                    가상 사용자가 모자라면 요청이 밀려 회차가 무효가 된다. 요청 속도는 RATE로 고정이라 서버 부하는 바뀌지 않는다),
 #          REQUIRED_GROUPS(소진 대기에서 모두 조회돼야 하는 Consumer 그룹. official.sh와 같은 기본값),
+#          IGNORE_GROUPS(subscription-requested. 랙 합에서 뺄 Consumer 그룹, official.sh와 같은 기본값. 빈 값이면 모두 셈),
 #          ALLOW_DIRTY(0, 1이면 커밋하지 않은 변경이 있어도 실행. env.txt에 남고 결과로 쓰지 않는다),
 #          SKIP_BUILD(0, 1이면 빌드, 배포를 건너뛴다. 서비스 5개의 로컬 jar와 컨테이너 jar sha256 비교는 그대로 하고 env.txt에 남는다.
 #                     둘 다 이전 커밋의 jar여도 비교를 통과하므로, 이 커밋으로 빌드, 배포한 것을 따로 확인했을 때만 쓴다)
@@ -30,6 +31,7 @@ WARM="${WARM:-1}"; WARM_RATE="${WARM_RATE:-200}"; WARM_BUCKET="${WARM_BUCKET:-15
 WARM_SLOPE_PCT="${WARM_SLOPE_PCT:-5}"; WARM_SLOPE_MS="${WARM_SLOPE_MS:-1}"; WARM_CONSEC="${WARM_CONSEC:-2}"; WARM_MIN="${WARM_MIN:-180}"; WARM_MAX="${WARM_MAX:-900}"
 CLOSE_TIMEOUT="${CLOSE_TIMEOUT:-300}"; DRAIN_TIMEOUT="${DRAIN_TIMEOUT:-600}"; POLL="${POLL:-2}"
 REQUIRED_GROUPS="${REQUIRED_GROUPS:-subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve}"
+IGNORE_GROUPS="${IGNORE_GROUPS-subscription-requested}"
 K6_IMAGE="${K6_IMAGE:-grafana/k6:1.3.0}"; K6_CPUS="${K6_CPUS:-2}"; K6_MEMORY="${K6_MEMORY:-1g}"
 PRE_VUS="${PRE_VUS:-500}"; MAX_VUS="${MAX_VUS:-2000}"
 GRACE_FILE="loadtest/data/compose.s2-grace.yml"
@@ -70,15 +72,16 @@ check_dirty() {
   return 0
 }
 
-# 모든 Consumer 그룹의 랙 합. 커밋 오프셋이 '-'인데 메시지가 있으면 끝 오프셋 전체를 대기로 센다 (official.sh와 같은 방식)
+# 모든 Consumer 그룹의 랙 합 (IGNORE_GROUPS는 빼되 필수 그룹 확인에는 넣는다). 커밋 오프셋이 '-'인데 메시지가 있으면 끝 오프셋 전체를 대기로 센다 (official.sh와 같은 방식)
 # 조회가 실패하거나, 읽을 행이 없거나, 필수 그룹(REQUIRED_GROUPS)이 하나라도 없으면 0이 아니라 실패를 돌려준다
 # (아직 조회되지 않은 그룹의 대기를 0으로 넘기지 않는다)
 kafka_lag() {
   local out
   out="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:29092 --describe --all-groups 2>/dev/null)" || return 1
   printf '%s\n' "$out" | tr -d '\r' \
-    | awk -v req="$REQUIRED_GROUPS" '
-        $3 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ { lag += ($4 ~ /^[0-9]+$/) ? $5 - $4 : $5; seen[$1] = 1; n++ }
+    | awk -v req="$REQUIRED_GROUPS" -v ign="$IGNORE_GROUPS" '
+        BEGIN { m = split(ign, I, " "); for (i = 1; i <= m; i++) skip[I[i]] = 1 }
+        $3 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ { if (!($1 in skip)) lag += ($4 ~ /^[0-9]+$/) ? $5 - $4 : $5; seen[$1] = 1; n++ }
         END {
           if (n == 0) exit 1
           k = split(req, R, " "); bad = 0

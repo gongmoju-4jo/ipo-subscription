@@ -37,7 +37,13 @@ account-margin-reserve margin.reserve-requested 0          7               7    
 EOF
 docker() { cat "$CG_LAG"; }
 REQ_ALL="$REQUIRED_GROUPS"; REQUIRED_GROUPS="subscription-requested account-margin-reserve"   # 이 가짜 출력에 있는 그룹만
+IGN_DEF="$IGNORE_GROUPS"; IGNORE_GROUPS=""   # 뺄 그룹 없이 모두 셈
 expect_out "kafka_lag: 밀린 메시지 5 + 커밋 전 메시지 3 = 8 (멤버 없는 그룹도 셈)" 0 8 kafka_lag
+IGNORE_GROUPS="$IGN_DEF"
+expect_out "kafka_lag: 기본값은 접수 그룹(subscription-requested) 랙을 빼고, 필수 그룹 확인에는 넣음" 0 0 kafka_lag
+IGNORE_GROUPS="account-margin-reserve"; docker() { cat "$CG_LAG" | sed 's/ 7               7 / 7               9 /'; }
+expect_out "kafka_lag: 뺄 그룹이 아닌 그룹(subscription-requested)의 랙은 셈 (8)" 0 8 kafka_lag
+IGNORE_GROUPS="$IGN_DEF"; docker() { cat "$CG_LAG"; }
 REQUIRED_GROUPS="$REQ_ALL"
 docker() { grep -v '^subscription-margin-reserved ' "$REAL_CG"; }
 expect_out "kafka_lag: 필수 그룹(subscription-margin-reserved)이 없으면 다른 그룹 랙이 0이어도 실패" 1 "" kafka_lag
@@ -68,7 +74,12 @@ PG_O=0; PG_FAIL=1; expect_out "drain: DB 조회 실패를 0으로 보지 않음"
 PG_FAIL=""; docker() { return 1; }
 expect_out "drain: 랙 조회 실패를 0으로 보지 않음" 1 "" drain "a" 0
 docker() { cat "$CG_LAG"; }
-expect_out "drain: 랙이 남으면 실패" 1 "" drain "a" 0
+IGNORE_GROUPS="" expect_out "drain: 랙이 남으면 실패" 1 "" drain "a" 0
+docker() { cat "$CG_LAG" | sed 's/ 15 / 10 /; s/ 3  / 0  /; s/ 7               7 / 7               9 /'; }   # 계좌 그룹에만 랙 2
+expect_out "drain: 뺄 그룹이 아닌 그룹의 랙이 남으면 실패 (기본값)" 1 "" drain "a" 0
+docker() { cat "$CG_LAG"; }
+out="$(drain "a,b" 1 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && ok "drain: 접수 그룹(subscription-requested)에만 남은 랙은 소진을 막지 않음 (기본값)" || bad "drain: 접수 그룹 랙" "rc=$rc out='$out'"
 
 # ---------- wait_closed: CLOSED, ALLOCATED만 마감. 조회 실패(빈 값)를 마감으로 보지 않음 ----------
 PG_ST=""

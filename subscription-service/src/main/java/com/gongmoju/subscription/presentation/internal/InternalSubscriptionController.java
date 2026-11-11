@@ -33,14 +33,19 @@ public class InternalSubscriptionController {
     private static final int DEFAULT_PAGE_SIZE = 500;
     private static final int MAX_PAGE_SIZE = 1000;
 
+    // 같은 경로라 Swagger가 두 메서드를 한 API로 합치고 한쪽 설명만 보여 주므로, 두 메서드에 같은 설명을 단다
+    private static final String LIST_SUMMARY = "공모주별 확정 청약 목록 조회";
+    private static final String LIST_DESCRIPTION = "배정 서비스가 ipo.closed를 받은 뒤 확정(CONFIRMED) 청약을 subscriptionId 오름차순으로 나눠 모두 가져간다. "
+            + "공모주가 마감(CLOSED)된 뒤에만 조회할 수 있어서 조회하는 동안 목록이 바뀌지 않는다. sort 파라미터는 무시한다.\n\n"
+            + "키셋 방식 (page를 보내지 않음): 첫 요청은 afterSubscriptionId 없이 보내고, 다음 요청부터 직전 응답의 마지막 subscriptionId를 넣는다. "
+            + "hasNext가 false면 끝이다. totalElements는 첫 요청에만 있다.\n\n"
+            + "page 방식 (page를 보냄): 응답은 공통 목록 형식(page, totalPages 포함). 배정 서비스가 키셋으로 바뀌면 없어진다. "
+            + "page와 afterSubscriptionId를 함께 보내면 400";
+
     private final SubscriptionService subscriptionService;
 
     // page 방식. 배정 서비스가 키셋으로 바뀌면(#135) 지운다 (#138). page를 보내면 이 메서드, 없으면 아래 키셋 메서드가 받는다
-    @Operation(summary = "공모주별 확정 청약 목록 조회 (page 방식)",
-            description = "배정 서비스가 ipo.closed를 받은 뒤 확정(CONFIRMED) 청약을 페이지 단위로 모두 가져간다. "
-                    + "공모주가 마감(CLOSED)된 뒤에만 조회할 수 있어서 조회하는 동안 목록이 바뀌지 않는다. "
-                    + "정렬은 subscriptionId 오름차순 고정이며 sort 파라미터는 무시한다. "
-                    + "page를 보내면 page 방식, 보내지 않으면 키셋 방식으로 응답한다. 키셋 방식으로 바뀐 뒤 이 방식은 없어진다.")
+    @Operation(summary = LIST_SUMMARY, description = LIST_DESCRIPTION)
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.RESOURCE_NOT_FOUND},
             value = {SubscriptionErrorCode.INVALID_STATUS_TRANSITION})
     @GetMapping(value = "/{ipoId}/subscriptions", params = "page")
@@ -64,11 +69,7 @@ public class InternalSubscriptionController {
                 "목록을 조회했습니다.");
     }
 
-    @Operation(summary = "공모주별 확정 청약 목록 조회 (키셋 방식)",
-            description = "배정 서비스가 ipo.closed를 받은 뒤 확정(CONFIRMED) 청약을 subscriptionId 오름차순으로 나눠 모두 가져간다. "
-                    + "첫 요청은 afterSubscriptionId 없이 보내고, 다음 요청부터 직전 응답의 마지막 subscriptionId를 넣는다. "
-                    + "hasNext가 false면 끝이다. totalElements는 첫 요청에만 있다. "
-                    + "공모주가 마감(CLOSED)된 뒤에만 조회할 수 있어서 조회하는 동안 목록이 바뀌지 않는다.")
+    @Operation(summary = LIST_SUMMARY, description = LIST_DESCRIPTION)
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.RESOURCE_NOT_FOUND},
             value = {SubscriptionErrorCode.INVALID_STATUS_TRANSITION})
     @GetMapping(value = "/{ipoId}/subscriptions", params = "!page")

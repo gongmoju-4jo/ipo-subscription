@@ -21,7 +21,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// 공모주별 확정 청약 목록 내부 API (API 명세 4.1). 청약은 접수 Consumer가 저장하므로 공모주와 청약을 DB에 직접 넣는다 (H2 메모리 DB)
+// 공모주별 확정 청약 목록 내부 API (API 명세 4.1). 청약은 청약 API가 저장하므로 공모주와 청약을 DB에 직접 넣는다 (H2 메모리 DB)
 // 배정 서비스는 사용자 헤더 없이 호출하므로 요청에 X-User-Id를 넣지 않는다
 @SpringBootTest(properties = {
         "eureka.client.enabled=false",

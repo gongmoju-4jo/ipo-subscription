@@ -15,28 +15,10 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@DisplayName("공모주 (접수 Consumer 방어 검증, 마감, 배정 완료)")
+@DisplayName("공모주 (증거금률 확인, 마감, 배정 완료)")
 class IpoTest {
 
     private static final Instant END_AT = Instant.parse("2026-10-27T07:00:00Z");
-
-    @ParameterizedTest(name = "마감 {0}, 도착 {1}이면 {2}")
-    @CsvSource({
-            "2026-10-27T07:00:00Z, 2026-10-27T06:59:59.999Z, true",
-            "2026-10-27T07:00:00Z, 2026-10-27T07:00:00Z, false",
-            "2026-10-27T07:00:00Z, 2026-10-27T07:00:00.001Z, false"
-    })
-    @DisplayName("receivedAt이 마감 시각보다 앞이면 true, 같거나 이후면 false")
-    void isBeforeSubscriptionEnd_comparesReceivedAtWithEnd(Instant endAt, Instant receivedAt, boolean expected) {
-        // given
-        Ipo ipo = ipoEndingAt(endAt);
-
-        // when
-        boolean before = ipo.isBeforeSubscriptionEnd(receivedAt);
-
-        // then
-        assertThat(before).isEqualTo(expected);
-    }
 
     @ParameterizedTest(name = "증거금률 {0}이면 {1}")
     @CsvSource({"1, true", "1.00, true", "0.50, false", "0.99, false"})

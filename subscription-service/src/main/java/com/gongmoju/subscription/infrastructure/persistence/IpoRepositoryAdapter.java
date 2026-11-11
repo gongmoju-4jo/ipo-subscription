@@ -3,6 +3,8 @@ package com.gongmoju.subscription.infrastructure.persistence;
 import com.gongmoju.subscription.domain.ipo.Ipo;
 import com.gongmoju.subscription.domain.ipo.IpoRepository;
 import com.gongmoju.subscription.domain.ipo.IpoStatus;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -18,6 +20,7 @@ import java.util.UUID;
 class IpoRepositoryAdapter implements IpoRepository {
 
     private final IpoJpaRepository jpaRepository;
+    private final EntityManager entityManager;
 
     @Override
     public Page<Ipo> findAll(Pageable pageable) {
@@ -32,6 +35,16 @@ class IpoRepositoryAdapter implements IpoRepository {
     @Override
     public List<Ipo> findByStatus(IpoStatus status) {
         return jpaRepository.findByStatus(status);
+    }
+
+    @Override
+    public Optional<Ipo> findByIdForUpdate(UUID ipoId) {
+        return jpaRepository.findByIdForUpdate(ipoId);
+    }
+
+    @Override
+    public void refreshForShare(Ipo ipo) {
+        entityManager.refresh(ipo, LockModeType.PESSIMISTIC_READ);
     }
 
     @Override

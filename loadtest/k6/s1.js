@@ -10,7 +10,7 @@
 //   PRE_VUS, MAX_VUS  k6 가상 사용자 수, 기본 300, 800. MAX_VUS가 모자라 요청이 밀리면 dropped_iterations가 생기고 그 회차는 무효다
 //   RATE(+DURATION)  한 속도만 일정하게 (find-limit.sh가 사용). 이때는 단계, 워밍업 없이 전체 구간이 기준이고, dropped_iterations 임계값만 단계 모드와 같이 건다
 // 임계값: 단계마다 평균 응답, 실패율 기준(THRESHOLD=pass 500ms/1%, goal 250ms/p95 500ms/0%)을 따로 걸어서, 처음 넘는 단계가 한계 지점이다. dropped_iterations가 1건이라도 있으면 종료 코드 99
-// IPO_IDS 없이 실행하면 회원 1,000명을 돌려 쓰므로 한 바퀴가 지나면 같은 회원의 요청이 이중청약 거절(Consumer가 판정, HTTP는 202)이 된다 (처리량 한계용).
+// IPO_IDS 없이 실행하면 회원 1,000명을 돌려 쓰므로 한 바퀴가 지나면 같은 회원의 요청이 이중청약 거절(청약 API가 접수 트랜잭션에서 판정, HTTP는 202)이 된다 (처리량 한계용).
 //   G2(접수→확정)까지 재려면 IPO_IDS를 줘서 모든 요청이 확정되게 한다 (아래 default 함수 주석).
 import exec from 'k6/execution';
 import { makeOptions, loadUsers, subscribe, check202, uuid4 } from './lib.js';

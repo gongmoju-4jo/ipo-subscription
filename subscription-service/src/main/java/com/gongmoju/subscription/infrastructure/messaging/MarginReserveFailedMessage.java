@@ -24,7 +24,7 @@ public record MarginReserveFailedMessage(
 
     public static final String TOPIC = SubscriptionRejectService.TOPIC;
 
-    // 이중청약(ALREADY_SUBSCRIBED)은 이 이벤트가 아니라 접수 Consumer가 저장할 때 판정하므로 허용하지 않음
+    // 이중청약(ALREADY_SUBSCRIBED)은 이 이벤트가 아니라 청약 API가 저장할 때 판정하므로 허용하지 않음
     private static final Set<RejectReason> ALLOWED_REASONS = Set.of(RejectReason.INSUFFICIENT_BALANCE, RejectReason.ACCOUNT_NOT_FOUND);
 
     /**

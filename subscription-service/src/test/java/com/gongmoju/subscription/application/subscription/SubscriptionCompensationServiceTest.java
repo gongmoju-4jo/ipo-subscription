@@ -58,7 +58,7 @@ class SubscriptionCompensationServiceTest {
     private UUID accountId;
 
     /**
-     * 공모주, 청약 생성 메서드가 없으므로(시드 데이터와 접수 Consumer만 사용) SQL로 직접 저장함.
+     * 공모주, 청약 생성 메서드가 없으므로(시드 데이터와 청약 API만 사용) SQL로 직접 저장함.
      */
     @BeforeEach
     void setUp() {

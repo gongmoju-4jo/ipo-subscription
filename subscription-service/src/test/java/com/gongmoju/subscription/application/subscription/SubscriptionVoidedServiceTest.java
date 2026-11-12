@@ -59,7 +59,7 @@ class SubscriptionVoidedServiceTest {
     private UUID subscriptionId;
 
     /**
-     * 공모주, 청약 생성 메서드가 없으므로(시드 데이터와 접수 Consumer만 사용) SQL로 직접 저장함. 청약은 보상이 시작된 {@code COMPENSATING(CONFIRM_FAILED)} 상태로 만듦.
+     * 공모주, 청약 생성 메서드가 없으므로(시드 데이터와 청약 API만 사용) SQL로 직접 저장함. 청약은 보상이 시작된 {@code COMPENSATING(CONFIRM_FAILED)} 상태로 만듦.
      */
     @BeforeEach
     void setUp() {

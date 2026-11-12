@@ -32,7 +32,7 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Subscription extends BaseEntity {
 
-    // 청약 API가 만들어 202 응답과 subscription.requested에 싣는 값이라 @GeneratedValue를 쓰지 않음
+    // 청약 API가 userId와 requestId로 계산해 202 응답에 싣는 값이라 @GeneratedValue를 쓰지 않음
     @Id
     @Column(name = "subscription_id")
     private UUID id;
@@ -94,7 +94,7 @@ public class Subscription extends BaseEntity {
     private long version;
 
     /**
-     * 접수 Consumer의 신규 요청 저장용 {@code PENDING} 청약 생성. {@code id}는 API가 {@code userId}와 {@code requestId}로 계산한 {@code subscriptionId}를 사용함.
+     * 청약 API의 신규 요청 저장용 {@code PENDING} 청약 생성. {@code id}는 API가 {@code userId}와 {@code requestId}로 계산한 {@code subscriptionId}를 사용함.
      * 저장과 함께 증거금 확보 요청을 기록하므로 요청 횟수({@code attempts})는 1, 마지막 요청 시각({@code lastRequestedAt})은 현재 시각으로 설정함.
      */
     public static Subscription accept(UUID subscriptionId, UUID requestId, Ipo ipo, UUID userId, UUID accountId,
@@ -120,17 +120,20 @@ public class Subscription extends BaseEntity {
     }
 
     /**
-     * 같은 {@code requestId}로 재전송된 요청이 최초 저장된 청약과 동일한 내용인지 검증함 (이벤트 명세 2-1의 재전송 내용 비교).
-     * {@code eventId}, {@code occurredAt}, {@code receivedAt}은 재전송마다 달라지므로 비교 대상에서 제외함.
+     * 같은 {@code requestId}로 다시 온 요청이 최초 저장된 청약과 동일한 내용인지 검증함 (재전송 내용 비교).
+     * {@code receivedAt}은 재전송마다 달라지므로 비교 대상에서 제외함.
      *
-     * @param event 재전송된 요청
+     * @param userId            다시 온 요청의 회원 ID
+     * @param accountId         다시 온 요청의 계좌 ID
+     * @param ipoId             다시 온 요청의 종목 ID
+     * @param requestedQuantity 다시 온 요청의 청약 수량
      * @return 회원, 계좌, 종목, 수량이 모두 같으면 {@code true}
      */
-    public boolean isSameRequest(SubscriptionRequested event) {
-        return userId.equals(event.userId())
-                && accountId.equals(event.accountId())
-                && ipo.getId().equals(event.ipoId())
-                && requestedQuantity == event.requestedQuantity();
+    public boolean isSameRequest(UUID userId, UUID accountId, UUID ipoId, long requestedQuantity) {
+        return this.userId.equals(userId)
+                && this.accountId.equals(accountId)
+                && ipo.getId().equals(ipoId)
+                && this.requestedQuantity == requestedQuantity;
     }
 
     /**
@@ -156,7 +159,7 @@ public class Subscription extends BaseEntity {
 
     /**
      * 증거금 확보 실패 응답({@code margin.reserve-failed})으로 {@code PENDING}을 {@code REJECTED}로 전환함. 거절 사유를 저장하고, 상태가 바뀌었으므로 요청 횟수({@code attempts})를 0으로 초기화함 (ERD).
-     * 증거금이 인출되지 않았으므로 보상은 필요 없음. 이중청약({@code ALREADY_SUBSCRIBED})은 접수 Consumer가 저장할 때 판정하므로 이 전환의 사유가 될 수 없음.
+     * 증거금이 인출되지 않았으므로 보상은 필요 없음. 이중청약({@code ALREADY_SUBSCRIBED})은 청약 API가 저장할 때 판정하므로 이 전환의 사유가 될 수 없음.
      *
      * @param rejectReason 거절 사유 ({@code INSUFFICIENT_BALANCE}, {@code ACCOUNT_NOT_FOUND})
      * @throws IllegalStateException    {@code PENDING}이 아닌 상태에서 호출한 경우

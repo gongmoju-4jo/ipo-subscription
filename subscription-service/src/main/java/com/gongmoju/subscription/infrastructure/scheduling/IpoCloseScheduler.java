@@ -5,7 +5,6 @@ import com.gongmoju.subscription.application.ipo.IpoCloseService;
 import com.gongmoju.subscription.domain.ipo.Ipo;
 import com.gongmoju.subscription.domain.ipo.IpoRepository;
 import com.gongmoju.subscription.domain.ipo.IpoStatus;
-import com.gongmoju.subscription.domain.subscription.SubscriptionRequestedLagChecker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -18,17 +17,16 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 // 마감 시각 + 대기 시간이 지난 OPEN 공모주를 주기적으로 마감한다 (F-13, D-16)
-// 마감 조건: 대기 시간 경과(마감 대상 조회) → 접수 토픽 랙 0(여기서 확인) → 진행 중 청약 0건(IpoCloseService가 트랜잭션 안에서 확인)
+// 마감 조건: 대기 시간 경과(마감 대상 조회) → 진행 중 청약 0건(IpoCloseService가 공모주 행을 잠근 뒤 트랜잭션 안에서 확인)
+// 접수는 청약 API 트랜잭션에서 끝나므로(D-29 B-2) 접수 토픽 랙은 보지 않는다. 접수와 마감의 순서는 공모주 행 잠금이 정한다
 // 조건이 맞지 않으면 다음 확인에서 다시 시도한다. 오래 막히면 알림 로그만 남기고 강제로 마감하지 않는다 (결정 14)
-// DLT 0건 확인은 Kafka UI에서 수동으로 한다 (E-13)
-// 단일 인스턴스를 전제로 한다 (알림 시각을 메모리에 둔다. 같은 공모주를 동시에 마감하려 하면 @Version으로 한쪽이 실패한다)
+// 단일 인스턴스를 전제로 한다 (알림 시각을 메모리에 둔다. 같은 공모주를 동시에 마감하려 하면 행 잠금으로 차례로 처리되고 뒤쪽은 NOT_OPEN으로 끝난다)
 @Slf4j
 @Component
 @ConditionalOnProperty(prefix = "ipo.close", name = "enabled", havingValue = "true", matchIfMissing = true)
 class IpoCloseScheduler {
 
     private final IpoRepository ipoRepository;
-    private final SubscriptionRequestedLagChecker lagChecker;
     private final IpoCloseService closeService;
     private final IpoCloseProperties properties;
 
@@ -36,11 +34,9 @@ class IpoCloseScheduler {
     private final Map<UUID, Instant> lastAlertAt = new ConcurrentHashMap<>();
 
     IpoCloseScheduler(IpoRepository ipoRepository,
-                      SubscriptionRequestedLagChecker lagChecker,
                       IpoCloseService closeService,
                       IpoCloseProperties properties) {
         this.ipoRepository = ipoRepository;
-        this.lagChecker = lagChecker;
         this.closeService = closeService;
         this.properties = properties;
     }
@@ -54,25 +50,7 @@ class IpoCloseScheduler {
     // 테스트에서 현재 시각을 지정하려고 나눈다
     void closeDueIpos(Instant now) {
         List<Ipo> due = ipoRepository.findByStatusAndSubscriptionEndAtLessThanEqual(IpoStatus.OPEN, now.minus(properties.gracePeriod()));
-        if (due.isEmpty()) {
-            return;
-        }
-
-        // 키가 userId라서 공모주별로 나누지 않고 토픽 전체 랙을 한 번만 본다
-        long lag;
-        try {
-            lag = lagChecker.currentLag();
-        } catch (RuntimeException e) {
-            log.warn("subscription.requested 랙을 조회하지 못해 이번 확인에서는 마감하지 않음. 대상 {}건", due.size(), e);
-            due.forEach(ipo -> notClosed(ipo, now, "랙 조회 실패"));
-            return;
-        }
-
         for (Ipo ipo : due) {
-            if (lag > 0) {
-                notClosed(ipo, now, "subscription.requested 랙 " + lag);
-                continue;
-            }
             close(ipo, now);
         }
     }

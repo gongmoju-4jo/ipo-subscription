@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * {@code margin.settled} Consumer (Consumer 이름 {@code subscription-margin-settled}, group-id도 같은 값).
- * 값을 문자열로 받아 직접 파싱함 ({@link SubscriptionRequestedConsumer}와 같은 이유로, DLT에 원본 JSON이 그대로 쌓임).
+ * 값을 문자열로 받아 직접 파싱함 (DLT에 원본 JSON이 그대로 쌓여, 원 토픽으로 재발행해도 같은 eventId로 처리됨).
  * 예외는 삼키지 않고 던지며, 재시도와 DLT 전송은 {@code KafkaConsumerConfig}의 에러 핸들러가 함.
  */
 @Slf4j

@@ -1,54 +1,54 @@
 package com.gongmoju.subscription.presentation.subscription;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gongmoju.subscription.domain.subscription.SubscriptionIdGenerator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.kafka.KafkaException;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// 청약 신청 API. 공모주는 DB에 직접 넣고(H2), Kafka 전송은 KafkaTemplate을 대신해 결과만 정한다
-@SpringBootTest(properties = {
-        "eureka.client.enabled=false",
-        "spring.datasource.url=jdbc:h2:mem:subscription-create-api;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.username=sa",
-        "spring.datasource.password=",
-        "spring.sql.init.mode=never",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
-})
+// 청약 신청 API. 공모주는 DB에 직접 넣고, 접수 결과는 청약 행과 증거금 인출 요청 Outbox로 확인한다 (D-29 B-2)
+// 접수가 PostgreSQL 전용 SQL(ON CONFLICT, FOR SHARE)을 써서 H2가 아니라 실제 PostgreSQL(Testcontainers)로 돌린다. Docker 필요
+@Testcontainers
+@SpringBootTest(properties = "eureka.client.enabled=false")
 @AutoConfigureMockMvc
 class SubscriptionCreateApiTest {
 
+    @Container
+    @ServiceConnection
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16")
+            .withUrlParam("currentSchema", "subscription");
+
     private static final String SUBSCRIPTIONS = "/api/v1/subscriptions";
-    private static final String TOPIC = "subscription.requested";
+    private static final String RESERVE_TOPIC = "margin.reserve-requested";
 
     private static final UUID USER_ID = UUID.fromString("7a1c0000-0000-4000-8000-000000000001");
     private static final UUID REQUEST_ID = UUID.fromString("3b8f0000-0000-4000-8000-000000000031");
@@ -67,16 +67,14 @@ class SubscriptionCreateApiTest {
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
-    private ObjectMapper objectMapper;
-
-    @MockitoBean
-    private KafkaTemplate<String, String> kafkaTemplate;
+    private DataSource dataSource;
 
     @BeforeEach
     void setUp() {
+        jdbcTemplate.update("DELETE FROM subscription.outbox");
+        jdbcTemplate.update("DELETE FROM subscription.subscription");
         jdbcTemplate.update("DELETE FROM subscription.ipo");
         insertIpo(IPO_ID, "OPEN");
-        when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenReturn(CompletableFuture.completedFuture(null));
     }
 
     @Test
@@ -94,43 +92,40 @@ class SubscriptionCreateApiTest {
     }
 
     @Test
-    void 발행_메시지는_userId_키와_이벤트_명세_필드를_가진다() throws Exception {
+    void 접수하면_청약_행과_증거금_인출_요청_Outbox가_함께_저장된다() throws Exception {
+        UUID subscriptionId = SubscriptionIdGenerator.generate(USER_ID, REQUEST_ID);
+
         subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 100), USER_ID.toString(), DURING_UTC)
                 .andExpect(status().isAccepted());
 
-        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
-        verify(kafkaTemplate).send(eq(TOPIC), key.capture(), payload.capture());
-        assertThat(key.getValue()).isEqualTo(USER_ID.toString());
+        Map<String, Object> subscription = jdbcTemplate.queryForMap(
+                "SELECT status, user_id, account_id, requested_quantity, margin_amount FROM subscription.subscription WHERE subscription_id = ?",
+                subscriptionId);
+        assertThat(subscription.get("status")).isEqualTo("PENDING");
+        assertThat(subscription.get("user_id")).isEqualTo(USER_ID);
+        assertThat(subscription.get("account_id")).isEqualTo(ACCOUNT_ID);
+        assertThat(((Number) subscription.get("requested_quantity")).longValue()).isEqualTo(100);
+        assertThat(((Number) subscription.get("margin_amount")).longValue()).isEqualTo(100 * 15000);
 
-        JsonNode message = objectMapper.readTree(payload.getValue());
-        assertThat(message.properties()).extracting(Map.Entry::getKey).containsExactly(
-                "eventId", "eventType", "occurredAt", "requestId", "subscriptionId", "userId", "accountId", "ipoId",
-                "requestedQuantity", "receivedAt");
-        assertThat(UUID.fromString(message.get("eventId").asText())).isNotNull();
-        assertThat(message.get("eventType").asText()).isEqualTo(TOPIC);
-        assertThat(message.get("occurredAt").asText()).matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+09:00");
-        assertThat(message.get("requestId").asText()).isEqualTo(REQUEST_ID.toString());
-        assertThat(message.get("subscriptionId").asText())
-                .isEqualTo(SubscriptionIdGenerator.generate(USER_ID, REQUEST_ID).toString());
-        assertThat(message.get("userId").asText()).isEqualTo(USER_ID.toString());
-        assertThat(message.get("accountId").asText()).isEqualTo(ACCOUNT_ID.toString());
-        assertThat(message.get("ipoId").asText()).isEqualTo(IPO_ID.toString());
-        assertThat(message.get("requestedQuantity").asLong()).isEqualTo(100);
-        // 헤더(UTC)를 KST +09:00, 밀리초 3자리로 바꿔 넣는다
-        assertThat(message.get("receivedAt").asText()).isEqualTo("2026-11-03T14:30:15.123+09:00");
+        Map<String, Object> outbox = jdbcTemplate.queryForMap(
+                "SELECT topic, message_key, published_at FROM subscription.outbox WHERE aggregate_id = ?", subscriptionId);
+        assertThat(outbox.get("topic")).isEqualTo(RESERVE_TOPIC);
+        assertThat(outbox.get("message_key")).isEqualTo(ACCOUNT_ID.toString());
+        assertThat(outbox.get("published_at")).isNull();
     }
 
     @Test
-    void 도착_시각에_밀리초가_없어도_000으로_채운다() throws Exception {
-        subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 100), USER_ID.toString(), "2026-11-03T05:30:15Z")
+    void 도착_시각_헤더_값을_청약의_received_at으로_저장한다() throws Exception {
+        subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 100), USER_ID.toString(), DURING_UTC)
                 .andExpect(status().isAccepted());
 
-        assertThat(sentMessage().get("receivedAt").asText()).isEqualTo("2026-11-03T14:30:15.000+09:00");
+        Timestamp receivedAt = jdbcTemplate.queryForObject(
+                "SELECT received_at FROM subscription.subscription WHERE request_id = ?", Timestamp.class, REQUEST_ID);
+        assertThat(receivedAt.toInstant()).isEqualTo(Instant.parse(DURING_UTC));
     }
 
     @Test
-    void 같은_requestId로_다시_요청하면_같은_청약_ID로_다시_발행한다() throws Exception {
+    void 같은_requestId로_같은_내용을_다시_요청하면_같은_청약_ID이고_청약은_한_건이다() throws Exception {
         String expectedId = SubscriptionIdGenerator.generate(USER_ID, REQUEST_ID).toString();
 
         subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 100), USER_ID.toString(), DURING_UTC)
@@ -139,8 +134,64 @@ class SubscriptionCreateApiTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.subscriptionId").value(expectedId));
 
-        // 중복은 접수 Consumer가 request_id로 걸러낸다
-        verify(kafkaTemplate, times(2)).send(anyString(), anyString(), anyString());
+        assertThat(subscriptionCount()).isEqualTo(1);
+        assertThat(outboxCount()).isEqualTo(1);
+    }
+
+    @Test
+    void 같은_requestId로_내용이_다르면_409이고_처음_청약은_그대로다() throws Exception {
+        subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 100), USER_ID.toString(), DURING_UTC)
+                .andExpect(status().isAccepted());
+
+        subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 200), USER_ID.toString(), DURING_UTC)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("DUPLICATE_RESOURCE"))
+                .andExpect(jsonPath("$.error.message").value("이미 사용된 requestId입니다. 새 requestId로 다시 요청해 주세요."))
+                .andExpect(jsonPath("$.error.details[0].field").value("requestId"));
+
+        assertThat(jdbcTemplate.queryForObject("SELECT requested_quantity FROM subscription.subscription WHERE request_id = ?",
+                Long.class, REQUEST_ID)).isEqualTo(100L);
+        assertThat(subscriptionCount()).isEqualTo(1);
+    }
+
+    @Test
+    void 같은_회원이_다른_requestId로_동시에_청약하면_늦은_쪽도_202이고_이중청약으로_거절된다() throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Connection first = dataSource.getConnection()) {
+            // given: 같은 회원, 같은 공모주의 앞 요청이 PENDING을 저장하고 아직 커밋하지 않음
+            first.setAutoCommit(false);
+            try (PreparedStatement insert = first.prepareStatement("""
+                    INSERT INTO subscription.subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,
+                                                           margin_amount, status, attempts, last_requested_at, received_at,
+                                                           version, created_at, created_by, updated_at, updated_by)
+                    VALUES (?, ?, ?, ?, ?, 100, 1500000, 'PENDING', 1, now(), now(), 0, now(), 'test', now(), 'test')""")) {
+                UUID firstRequestId = UUID.randomUUID();
+                insert.setObject(1, SubscriptionIdGenerator.generate(USER_ID, firstRequestId));
+                insert.setObject(2, firstRequestId);
+                insert.setObject(3, IPO_ID);
+                insert.setObject(4, USER_ID);
+                insert.setObject(5, ACCOUNT_ID);
+                insert.executeUpdate();
+            }
+
+            // when: 늦은 요청은 앞 요청을 보지 못하고 저장하다가 유효 청약 유일 인덱스에서 앞 요청의 커밋을 기다림
+            Future<ResultActions> late = executor.submit(() -> subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 50), USER_ID.toString(), DURING_UTC));
+            Thread.sleep(1000);
+            assertThat(late).isNotDone();
+            first.commit();
+
+            // then: 제약 위반 뒤 다시 실행해 이중청약으로 저장하고 202
+            late.get(10, TimeUnit.SECONDS)
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.data.subscriptionId").value(SubscriptionIdGenerator.generate(USER_ID, REQUEST_ID).toString()));
+            Map<String, Object> rejected = jdbcTemplate.queryForMap(
+                    "SELECT status, reject_reason FROM subscription.subscription WHERE request_id = ?", REQUEST_ID);
+            assertThat(rejected.get("status")).isEqualTo("REJECTED");
+            assertThat(rejected.get("reject_reason")).isEqualTo("ALREADY_SUBSCRIBED");
+            assertThat(outboxCount()).isZero();
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test
@@ -179,7 +230,7 @@ class SubscriptionCreateApiTest {
                 .andExpect(jsonPath("$.error.details[0].field").value("ipoId"))
                 .andExpect(jsonPath("$.error.details[0].reason").value("청약 시작 전이거나 마감 시각이 지났습니다."));
 
-        verify(kafkaTemplate, times(2)).send(anyString(), anyString(), anyString());
+        assertThat(subscriptionCount()).isEqualTo(2);
     }
 
     @Test
@@ -196,7 +247,7 @@ class SubscriptionCreateApiTest {
                     .andExpect(jsonPath("$.error.details[0].field").value("requestedQuantity"))
                     .andExpect(jsonPath("$.error.details[0].reason").value("청약 수량은 10 이상 10000 이하여야 합니다."));
         }
-        verify(kafkaTemplate, times(2)).send(anyString(), anyString(), anyString());
+        assertThat(subscriptionCount()).isEqualTo(2);
     }
 
     @Test
@@ -209,7 +260,7 @@ class SubscriptionCreateApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
 
-        verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
+        assertThat(subscriptionCount()).isZero();
     }
 
     @Test
@@ -220,7 +271,7 @@ class SubscriptionCreateApiTest {
                 .andExpect(jsonPath("$.error.details[*].field")
                         .value(containsInAnyOrder("requestId", "ipoId", "accountId", "requestedQuantity")));
 
-        verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
+        assertThat(subscriptionCount()).isZero();
     }
 
     @Test
@@ -244,7 +295,7 @@ class SubscriptionCreateApiTest {
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
         }
-        verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
+        assertThat(subscriptionCount()).isZero();
     }
 
     @Test
@@ -254,7 +305,7 @@ class SubscriptionCreateApiTest {
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
         }
-        verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
+        assertThat(subscriptionCount()).isZero();
     }
 
     @Test
@@ -276,28 +327,7 @@ class SubscriptionCreateApiTest {
                 .andExpect(jsonPath("$.error.code").value("INVALID_STATUS_TRANSITION"))
                 .andExpect(jsonPath("$.error.details[0].field").value("ipoId"));
 
-        verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
-    }
-
-    @Test
-    void 브로커_저장을_확인하지_못하면_500이다() throws Exception {
-        when(kafkaTemplate.send(anyString(), anyString(), anyString()))
-                .thenReturn(CompletableFuture.failedFuture(new KafkaException("broker down")));
-
-        subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 100), USER_ID.toString(), DURING_UTC)
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.error.code").value("INTERNAL_SERVER_ERROR"));
-    }
-
-    @Test
-    void 전송_요청_자체가_실패해도_500이다() throws Exception {
-        // 메타데이터를 못 받아 max.block.ms가 지나면 send가 바로 예외를 던진다
-        when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenThrow(new KafkaException("metadata timeout"));
-
-        subscribe(body(REQUEST_ID, IPO_ID, ACCOUNT_ID, 100), USER_ID.toString(), DURING_UTC)
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.error.code").value("INTERNAL_SERVER_ERROR"));
+        assertThat(subscriptionCount()).isZero();
     }
 
     private ResultActions subscribe(String body, String userId, String receivedAt) throws Exception {
@@ -311,10 +341,12 @@ class SubscriptionCreateApiTest {
         return mockMvc.perform(request);
     }
 
-    private JsonNode sentMessage() throws Exception {
-        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
-        verify(kafkaTemplate).send(anyString(), anyString(), payload.capture());
-        return objectMapper.readTree(payload.getValue());
+    private int subscriptionCount() {
+        return jdbcTemplate.queryForObject("SELECT count(*) FROM subscription.subscription", Integer.class);
+    }
+
+    private int outboxCount() {
+        return jdbcTemplate.queryForObject("SELECT count(*) FROM subscription.outbox WHERE topic = ?", Integer.class, RESERVE_TOPIC);
     }
 
     private static String body(UUID requestId, UUID ipoId, UUID accountId, long quantity) {

@@ -14,7 +14,7 @@ public final class SubscriptionIdGenerator {
 
     /**
      * {@code "{userId}:{requestId}"}(소문자 UUID 두 개를 콜론으로 이은 UTF-8 문자열)의 MD5로 UUID v3를 만든다.
-     * 접수 Consumer 등 다른 곳에서 계산해도 같은 값이 나오도록 문자열과 순서를 바꾸지 않는다.
+     * 이미 저장된 청약 ID와 같은 값이 나오도록 문자열과 순서를 바꾸지 않는다.
      *
      * @param userId    회원 ID
      * @param requestId 클라이언트 요청 ID

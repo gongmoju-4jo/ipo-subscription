@@ -11,8 +11,8 @@ public record SubscriptionAcceptedResponse(
         UUID subscriptionId,
         @Schema(description = "클라이언트 멱등 요청 ID", example = "3b8f0000-0000-4000-8000-000000000031")
         UUID requestId,
-        // 응답용 상태다. DB 청약 상태(SubscriptionStatus)가 아니며 접수 Consumer가 처리하면 PENDING 청약이 생긴다
-        @Schema(description = "ACCEPTED (Kafka 접수 완료). DB의 청약 상태값이 아니다", example = "ACCEPTED")
+        // 응답용 상태다. DB 청약 상태(SubscriptionStatus)가 아니다. 접수가 끝나면 PENDING(이중청약이면 REJECTED) 청약이 이미 저장돼 있다
+        @Schema(description = "ACCEPTED (접수 완료, 청약 저장됨). DB의 청약 상태값이 아니다", example = "ACCEPTED")
         String status,
         @Schema(description = "청약 상태 조회 API 경로",
                 example = "/api/v1/subscriptions/e8bd1887-fe8e-378c-8f04-13d9d406e984")

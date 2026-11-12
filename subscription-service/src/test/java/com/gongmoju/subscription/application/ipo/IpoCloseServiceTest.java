@@ -16,9 +16,16 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,10 +52,20 @@ class IpoCloseServiceTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private DataSource dataSource;
+
+    private static final String INSERT_SUBSCRIPTION = """
+            INSERT INTO subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,
+                                      margin_amount, status, attempts, last_requested_at, received_at,
+                                      version, created_at, created_by, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, 100, 1500000, ?, 0, now(), '2026-10-27T06:00:00Z',
+                    0, now(), 'test', now(), 'test')""";
+
     private UUID ipoId;
 
     /**
-     * 공모주, 청약 생성 메서드가 없으므로(시드 데이터와 접수 Consumer만 사용) SQL로 직접 저장함.
+     * 공모주, 청약 생성 메서드가 없으므로(시드 데이터와 청약 API만 사용) SQL로 직접 저장함.
      * 마감 시각은 2026-10-27 16:00 KST(07:00Z)로 고정해서 closedAt 형식을 확인함.
      */
     @BeforeEach
@@ -157,6 +174,44 @@ class IpoCloseServiceTest {
     }
 
     @Test
+    @DisplayName("공모주 행을 잡은 트랜잭션이 끝날 때까지 기다렸다가, 그 트랜잭션이 저장한 PENDING을 세어 마감하지 않는다")
+    void close_waitsForTransactionHoldingIpoRow_andCountsItsPending() throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Connection holder = dataSource.getConnection()) {
+            // given: 다른 트랜잭션이 공모주 행을 FOR SHARE로 잡고 PENDING을 저장한 뒤 아직 커밋하지 않음
+            holder.setAutoCommit(false);
+            try (PreparedStatement lock = holder.prepareStatement("SELECT ipo_id FROM ipo WHERE ipo_id = ? FOR SHARE")) {
+                lock.setObject(1, ipoId);
+                lock.executeQuery().close();
+            }
+            try (PreparedStatement insert = holder.prepareStatement(INSERT_SUBSCRIPTION)) {
+                insert.setObject(1, UUID.randomUUID());
+                insert.setObject(2, UUID.randomUUID());
+                insert.setObject(3, ipoId);
+                insert.setObject(4, UUID.randomUUID());
+                insert.setObject(5, UUID.randomUUID());
+                insert.setString(6, "PENDING");
+                insert.executeUpdate();
+            }
+
+            // when: 마감은 공모주 행 잠금을 기다림
+            Future<IpoCloseResult> closing = executor.submit(() -> closeService.close(ipoId));
+            Thread.sleep(1000);
+            assertThat(closing).isNotDone();
+            holder.commit();
+            IpoCloseResult result = closing.get(10, TimeUnit.SECONDS);
+
+            // then: 커밋된 PENDING을 세어 마감하지 않음
+            assertThat(result.outcome()).isEqualTo(IpoCloseResult.Outcome.IN_PROGRESS_REMAINING);
+            assertThat(result.pendingCount()).isEqualTo(1);
+            assertThat(ipoStatus()).isEqualTo("OPEN");
+            assertThat(outboxRows()).isEmpty();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("이미 CLOSED인 공모주는 아무것도 하지 않고 NOT_OPEN으로 끝난다")
     void close_doesNothing_whenAlreadyClosed() {
         // given
@@ -179,12 +234,7 @@ class IpoCloseServiceTest {
     }
 
     private void insertSubscription(String status) {
-        jdbcTemplate.update("""
-                INSERT INTO subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,
-                                          margin_amount, status, attempts, last_requested_at, received_at,
-                                          version, created_at, created_by, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, ?, 100, 1500000, ?, 0, now(), '2026-10-27T06:00:00Z',
-                        0, now(), 'test', now(), 'test')""",
+        jdbcTemplate.update(INSERT_SUBSCRIPTION,
                 UUID.randomUUID(), UUID.randomUUID(), ipoId, UUID.randomUUID(), UUID.randomUUID(), status);
     }
 

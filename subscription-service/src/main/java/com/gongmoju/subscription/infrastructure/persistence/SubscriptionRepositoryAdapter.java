@@ -4,12 +4,14 @@ import com.gongmoju.subscription.domain.subscription.RejectReason;
 import com.gongmoju.subscription.domain.subscription.Subscription;
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import com.gongmoju.subscription.domain.subscription.SubscriptionStatus;
+import com.gongmoju.subscription.domain.subscription.VoidRetryBackoff;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.AuditorAware;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -75,18 +77,22 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     }
 
     @Override
-    public List<UUID> findStaleVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit) {
-        return jpaRepository.findStaleVoidIds(lastRequestedBefore, maxAttempts, limit);
+    public List<UUID> findStaleVoidIds(Instant now, VoidRetryBackoff backoff, int limit) {
+        return jpaRepository.findStaleVoidIds(now, backoff.initialSeconds(), backoff.maxSeconds(), limit);
     }
 
     @Override
-    public List<UUID> findExhaustedVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit) {
-        return jpaRepository.findExhaustedVoidIds(lastRequestedBefore, maxAttempts, limit);
+    public List<Subscription> findLongVoiding(Instant now, int alertAttempts, Duration minAge, int limit) {
+        return jpaRepository.findLongVoiding(now, alertAttempts, toSeconds(minAge), limit);
     }
 
     @Override
-    public long countExhaustedVoid(Instant lastRequestedBefore, int maxAttempts) {
-        return jpaRepository.countExhaustedVoid(lastRequestedBefore, maxAttempts);
+    public long countLongVoiding(Instant now, int alertAttempts, Duration minAge) {
+        return jpaRepository.countLongVoiding(now, alertAttempts, toSeconds(minAge));
+    }
+
+    private static double toSeconds(Duration duration) {
+        return duration.toMillis() / 1000.0;
     }
 
     @Override

@@ -2,6 +2,7 @@ package com.gongmoju.subscription.application.subscription;
 
 import com.gongmoju.subscription.application.subscription.VoidRetryResult.Outcome;
 import com.gongmoju.subscription.domain.subscription.MarginVoidRequestRecorder;
+import com.gongmoju.subscription.domain.subscription.VoidRetryBackoff;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +21,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -39,14 +41,15 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 
 /**
- * 반환 재요청 1건(재요청, 건너뛰기, 최대 횟수 도달)을 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
+ * 반환 재요청 1건(재요청, 건너뛰기, 요청 횟수별 대기 시간)을 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
  */
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
 @DisplayName("COMPENSATING, CANCEL_REQUESTED 반환 재요청 (PostgreSQL)")
 class SubscriptionVoidRetryServiceTest {
 
-    private static final int MAX_ATTEMPTS = 3;
+    // 기본 설정과 같은 값 (요청 횟수 1, 2, 3, 4, 5 이상일 때 30초, 60초, 120초, 240초, 300초)
+    private static final VoidRetryBackoff BACKOFF = new VoidRetryBackoff(Duration.ofSeconds(30), Duration.ofMinutes(5));
     private static final long MARGIN_AMOUNT = 1_500_000;
 
     @Container
@@ -66,8 +69,8 @@ class SubscriptionVoidRetryServiceTest {
     private UUID ipoId;
     private UUID accountId;
     private UUID subscriptionId;
-    // 응답 시간이 지났는지 가르는 기준 시각 (현재 시각 - 30초)
-    private Instant threshold;
+    // 재요청 판단 기준 시각 (대기 시간이 지났는지는 이 시각에서 대기 시간을 뺀 값과 마지막 요청 시각을 비교)
+    private Instant now;
 
     @BeforeEach
     void setUp() {
@@ -75,7 +78,7 @@ class SubscriptionVoidRetryServiceTest {
         accountId = UUID.randomUUID();
         subscriptionId = UUID.randomUUID();
         // PostgreSQL은 시각을 마이크로초로 저장하므로 기준 시각을 같은 정밀도로 맞춤 (아니면 "기준과 같은 경우" 경계 테스트가 간헐적으로 실패함)
-        threshold = Instant.now().minusSeconds(30).truncatedTo(ChronoUnit.MICROS);
+        now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         jdbcTemplate.update("""
                 INSERT INTO ipo (ipo_id, name, offer_price, retail_quantity, equal_quantity, min_quantity, max_quantity,
                                  margin_rate, subscription_start_at, subscription_end_at, refund_date, status, version,
@@ -83,7 +86,8 @@ class SubscriptionVoidRetryServiceTest {
                 VALUES (?, '테스트종목', 15000, 100000, 50000, 10, 1000, 1.00,
                         now() - interval '1 day', now() + interval '1 day', current_date + 5, 'OPEN', 0,
                         now(), 'test', now(), 'test')""", ipoId);
-        insertSubscription("COMPENSATING", "TIMEOUT", 1, threshold.minusSeconds(10));
+        // 요청 횟수 1의 대기 시간(30초)보다 10초 더 지남
+        insertSubscription("COMPENSATING", "TIMEOUT", 1, now.minusSeconds(40));
     }
 
     @AfterEach
@@ -94,13 +98,13 @@ class SubscriptionVoidRetryServiceTest {
     }
 
     @Test
-    @DisplayName("응답 시간이 지난 COMPENSATING은 요청 횟수가 1 늘고 마지막 요청 시각이 갱신되며 상태와 해제 사유는 그대로이고, 반환 요청 Outbox가 처음과 같은 내용으로 1건 다시 기록된다")
-    void handle_retriesVoid_whenAttemptsBelowMax() {
+    @DisplayName("대기 시간이 지난 COMPENSATING은 요청 횟수가 1 늘고 마지막 요청 시각이 갱신되며 상태와 해제 사유는 그대로이고, 반환 요청 Outbox가 처음과 같은 내용으로 1건 다시 기록된다")
+    void handle_retriesVoid_whenWaitElapsed() {
         // given
         Instant before = Instant.now();
 
         // when
-        VoidRetryResult result = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        VoidRetryResult result = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // then
         assertThat(result.outcome()).isEqualTo(Outcome.RETRIED);
@@ -128,7 +132,7 @@ class SubscriptionVoidRetryServiceTest {
         jdbcTemplate.update("UPDATE subscription SET status = ?, cancel_reason = ? WHERE subscription_id = ?", status, cancelReason, subscriptionId);
 
         // when
-        VoidRetryResult result = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        VoidRetryResult result = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // then
         assertThat(result.outcome()).isEqualTo(Outcome.RETRIED);
@@ -143,12 +147,13 @@ class SubscriptionVoidRetryServiceTest {
     @DisplayName("재요청마다 Outbox 행이 새로 생긴다 (eventId가 되는 outbox_id가 서로 다름)")
     void handle_recordsNewOutboxRowEachRetry() {
         // given
-        voidRetryService.handle(subscriptionId, threshold, 10);
+        voidRetryService.handle(subscriptionId, now, BACKOFF);
+        // 요청 횟수 2의 대기 시간(60초)보다 10초 더 지남
         jdbcTemplate.update("UPDATE subscription SET last_requested_at = ? WHERE subscription_id = ?",
-                Timestamp.from(threshold.minusSeconds(10)), subscriptionId);
+                Timestamp.from(now.minusSeconds(70)), subscriptionId);
 
         // when
-        VoidRetryResult second = voidRetryService.handle(subscriptionId, threshold, 10);
+        VoidRetryResult second = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // then
         assertThat(second.outcome()).isEqualTo(Outcome.RETRIED);
@@ -158,13 +163,13 @@ class SubscriptionVoidRetryServiceTest {
     }
 
     @Test
-    @DisplayName("재요청 직후에는 마지막 요청 시각이 기준보다 새로워서 같은 기준으로 다시 처리해도 건너뛴다")
+    @DisplayName("재요청 직후에는 마지막 요청 시각이 새로워서 같은 기준 시각으로 다시 처리해도 건너뛴다")
     void handle_ignoresRightAfterRetry() {
         // given
-        voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // when
-        VoidRetryResult again = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        VoidRetryResult again = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // then
         assertThat(again.outcome()).isEqualTo(Outcome.NOT_TIMED_OUT_IGNORED);
@@ -173,41 +178,61 @@ class SubscriptionVoidRetryServiceTest {
     }
 
     @ParameterizedTest(name = "요청 횟수 {0}")
-    @ValueSource(ints = {MAX_ATTEMPTS, MAX_ATTEMPTS + 1})
-    @DisplayName("요청 횟수가 최대 횟수 이상이면 상태, 요청 횟수, 요청 시각, Outbox를 바꾸지 않고 최대 횟수 도달을 알려 준다")
-    void handle_reportsMaxAttemptsReached_withoutChange(int attempts) {
+    @ValueSource(ints = {3, 4, 5, 6, 10, 20, 50})
+    @DisplayName("요청 횟수가 3 이상이어도(이전 최대 횟수 이후) 대기 시간이 지났으면 요청 횟수가 1 늘고 반환을 계속 재요청한다")
+    void handle_retries_whenAttemptsAtOrAboveFormerMax(int attempts) {
         // given
-        jdbcTemplate.update("UPDATE subscription SET attempts = ? WHERE subscription_id = ?", attempts, subscriptionId);
-        Object lastRequestedAtBefore = subscription().get("last_requested_at");
+        Instant lastRequestedAt = now.minus(BACKOFF.waitAfter(attempts)).minusSeconds(10);
+        jdbcTemplate.update("UPDATE subscription SET attempts = ?, last_requested_at = ? WHERE subscription_id = ?",
+                attempts, Timestamp.from(lastRequestedAt), subscriptionId);
 
         // when
-        VoidRetryResult result = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
-
-        // then
-        assertThat(result.outcome()).isEqualTo(Outcome.MAX_ATTEMPTS_REACHED);
-        assertThat(result.status().name()).isEqualTo("COMPENSATING");
-        assertThat(result.cancelReason().name()).isEqualTo("TIMEOUT");
-        assertThat(result.attempts()).isEqualTo(attempts);
-        Map<String, Object> row = subscription();
-        assertThat(row.get("status")).isEqualTo("COMPENSATING");
-        assertThat(row.get("attempts")).isEqualTo(attempts);
-        assertThat(row.get("last_requested_at")).isEqualTo(lastRequestedAtBefore);
-        assertThat(row.get("version")).isEqualTo(0L);
-        assertThat(outbox("margin.void-requested")).isEmpty();
-    }
-
-    @Test
-    @DisplayName("요청 횟수가 최대 횟수보다 1 작으면 마지막으로 재요청한다 (최대 횟수는 첫 요청을 포함한 총 요청 횟수)")
-    void handle_retriesLastTime_whenAttemptsIsOneBelowMax() {
-        // given
-        jdbcTemplate.update("UPDATE subscription SET attempts = ? WHERE subscription_id = ?", MAX_ATTEMPTS - 1, subscriptionId);
-
-        // when
-        VoidRetryResult result = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        VoidRetryResult result = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // then
         assertThat(result.outcome()).isEqualTo(Outcome.RETRIED);
-        assertThat(subscription().get("attempts")).isEqualTo(MAX_ATTEMPTS);
+        Map<String, Object> row = subscription();
+        assertThat(row.get("status")).isEqualTo("COMPENSATING");
+        assertThat(row.get("attempts")).isEqualTo(attempts + 1);
+        assertThat(((Timestamp) row.get("last_requested_at")).toInstant()).isAfter(lastRequestedAt);
+        assertThat(outbox("margin.void-requested")).hasSize(1);
+    }
+
+    @ParameterizedTest(name = "요청 횟수 {0} → 대기 {1}초")
+    @CsvSource({"1, 30", "2, 60", "3, 120", "4, 240", "5, 300", "6, 300", "30, 300"})
+    @DisplayName("마지막 요청 뒤 대기 시간이 아직 지나지 않았거나 정확히 같으면 요청 횟수별 대기 시간(30초에서 시작해 2배, 5분 상한)대로 건너뛴다")
+    void handle_ignores_whenWaitNotElapsed(int attempts, long waitSeconds) {
+        // given
+        jdbcTemplate.update("UPDATE subscription SET attempts = ? WHERE subscription_id = ?", attempts, subscriptionId);
+
+        for (long secondsAgo : new long[]{waitSeconds - 1, waitSeconds}) {
+            jdbcTemplate.update("UPDATE subscription SET last_requested_at = ? WHERE subscription_id = ?",
+                    Timestamp.from(now.minusSeconds(secondsAgo)), subscriptionId);
+
+            // when
+            VoidRetryResult result = voidRetryService.handle(subscriptionId, now, BACKOFF);
+
+            // then
+            assertThat(result.outcome()).isEqualTo(Outcome.NOT_TIMED_OUT_IGNORED);
+            assertThat(subscription().get("attempts")).isEqualTo(attempts);
+            assertThat(outbox("margin.void-requested")).isEmpty();
+        }
+    }
+
+    @ParameterizedTest(name = "요청 횟수 {0} → 대기 {1}초")
+    @CsvSource({"1, 30", "2, 60", "3, 120", "4, 240", "5, 300", "6, 300", "30, 300"})
+    @DisplayName("마지막 요청 뒤 요청 횟수별 대기 시간보다 1초 더 지났으면 재요청한다")
+    void handle_retries_whenWaitJustElapsed(int attempts, long waitSeconds) {
+        // given
+        jdbcTemplate.update("UPDATE subscription SET attempts = ?, last_requested_at = ? WHERE subscription_id = ?",
+                attempts, Timestamp.from(now.minusSeconds(waitSeconds + 1)), subscriptionId);
+
+        // when
+        VoidRetryResult result = voidRetryService.handle(subscriptionId, now, BACKOFF);
+
+        // then
+        assertThat(result.outcome()).isEqualTo(Outcome.RETRIED);
+        assertThat(subscription().get("attempts")).isEqualTo(attempts + 1);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -218,7 +243,7 @@ class SubscriptionVoidRetryServiceTest {
         jdbcTemplate.update("UPDATE subscription SET status = ? WHERE subscription_id = ?", status, subscriptionId);
 
         // when
-        VoidRetryResult result = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        VoidRetryResult result = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // then
         assertThat(result.outcome()).isEqualTo(Outcome.NOT_VOIDING_IGNORED);
@@ -230,33 +255,19 @@ class SubscriptionVoidRetryServiceTest {
     }
 
     @Test
-    @DisplayName("마지막 요청 시각이 기준 이후이면(다른 인스턴스가 이미 재요청) 아무것도 바꾸지 않고 건너뛴다")
-    void handle_ignores_whenLastRequestedAfterThreshold() {
+    @DisplayName("마지막 요청 시각이 기준 시각 이후이면(다른 인스턴스가 이미 재요청) 아무것도 바꾸지 않고 건너뛴다")
+    void handle_ignores_whenLastRequestedAfterNow() {
         // given
         jdbcTemplate.update("UPDATE subscription SET last_requested_at = ? WHERE subscription_id = ?",
-                Timestamp.from(threshold.plusSeconds(5)), subscriptionId);
+                Timestamp.from(now.plusSeconds(5)), subscriptionId);
 
         // when
-        VoidRetryResult result = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        VoidRetryResult result = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // then
         assertThat(result.outcome()).isEqualTo(Outcome.NOT_TIMED_OUT_IGNORED);
         assertThat(subscription().get("attempts")).isEqualTo(1);
         assertThat(outbox("margin.void-requested")).isEmpty();
-    }
-
-    @Test
-    @DisplayName("마지막 요청 시각이 기준과 같으면 아직 응답 시간이 지난 것이 아니므로 건너뛴다 (기준보다 이를 때만 처리)")
-    void handle_ignores_whenLastRequestedEqualsThreshold() {
-        // given
-        jdbcTemplate.update("UPDATE subscription SET last_requested_at = ? WHERE subscription_id = ?",
-                Timestamp.from(threshold), subscriptionId);
-
-        // when
-        VoidRetryResult result = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
-
-        // then
-        assertThat(result.outcome()).isEqualTo(Outcome.NOT_TIMED_OUT_IGNORED);
     }
 
     @Test
@@ -266,7 +277,7 @@ class SubscriptionVoidRetryServiceTest {
         UUID unknown = UUID.randomUUID();
 
         // when, then
-        assertThatThrownBy(() -> voidRetryService.handle(unknown, threshold, MAX_ATTEMPTS))
+        assertThatThrownBy(() -> voidRetryService.handle(unknown, now, BACKOFF))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -278,7 +289,7 @@ class SubscriptionVoidRetryServiceTest {
         doThrow(new IllegalStateException("Outbox 실패")).when(voidRequestRecorder).record(any());
 
         // when, then
-        assertThatThrownBy(() -> voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS))
+        assertThatThrownBy(() -> voidRetryService.handle(subscriptionId, now, BACKOFF))
                 .isInstanceOf(IllegalStateException.class);
         Map<String, Object> row = subscription();
         assertThat(row.get("status")).isEqualTo("COMPENSATING");
@@ -302,7 +313,7 @@ class SubscriptionVoidRetryServiceTest {
             for (int i = 0; i < threads; i++) {
                 futures.add(executor.submit(() -> {
                     barrier.await(10, TimeUnit.SECONDS);
-                    return voidRetryService.handle(subscriptionId, threshold, 10);
+                    return voidRetryService.handle(subscriptionId, now, BACKOFF);
                 }));
             }
             int retried = 0;

@@ -42,7 +42,7 @@ function TraceBody({ subscriptionId, live }: { subscriptionId: string; live: boo
     <div className="stack">
       <div className="notice gray" style={{ fontSize: 13 }}>
         <ul className="dots">
-          <li>청약 접수(<code>subscription.requested</code>)는 Outbox 없이 API가 바로 발행하고 브로커 저장을 확인한 뒤 202를 줘서 이 표에는 없어요.</li>
+          <li>청약 접수는 API가 청약과 증거금 인출 요청(<code>margin.reserve-requested</code>)을 한 트랜잭션에 저장한 뒤 202를 줘서, 정상 접수된 청약은 이 표의 첫 줄이 증거금 인출 요청이에요. 이중청약으로 거절된 청약은 인출 요청을 기록하지 않아 표가 비어 있어요.</li>
           <li>서로 다른 Kafka 토픽 사이에는 순서가 보장되지 않아요. 아래는 각 서비스 Outbox에 기록된 시각 순서예요.</li>
           <li>"소비"는 받는 쪽 처리 기록(processed_event)에 같은 이벤트 ID가 있다는 뜻이에요.</li>
           <li>이 기록 때문에 같은 이벤트가 두 번 와도 한 번만 반영돼요.</li>

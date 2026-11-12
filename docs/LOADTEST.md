@@ -228,13 +228,11 @@ W2=$(awk '$1=="W2"{print $2}' loadtest/data/g2-B-10k/ipo-ids.txt)
 bash loadtest/run-k6.sh g2 --ipo "$W2" --run-id g2-B-10k-W2 --users data/users-g2.csv -e CASE=A -e COUNT=1000
 bash loadtest/run-k6.sh g2 --ipo "$M" --run-id g2-B-10k-M --users data/users-g2.csv -e CASE=B
 # 5. 저장 전 확인 (아래 조건을 모두 만족할 때까지 다시 조회한다)
-docker exec ipo-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:29092 --describe --group subscription-requested
 docker exec ipo-postgres psql -U postgres -d ipo -tAc "select ipo_id, status, count(*) from subscription.subscription group by 1, 2"
 ```
 
 5번 조회 결과가 아래를 모두 만족할 때만 저장합니다. 하나라도 아니면 잠시 뒤 5번을 다시 조회합니다. 처리 중 요청이 남아 있는데 저장하면 복원할 때 그 요청이 사라집니다.
 
-- 접수 Consumer 그룹의 `LAG` 열이 모두 0
 - 처리 중 청약(`PENDING`, `COMPENSATING`, `CANCEL_REQUESTED`)이 없음
 - `ipo-ids.txt`의 W마다(`--warmups 2`면 W1, W2 모두) 1,000건, M은 N건(예시는 10,000건)이 모두 `CONFIRMED`
 
@@ -252,7 +250,7 @@ ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/g2-B-10k bash loadtest/baseline
 - 아래가 모두 0일 때만 저장합니다. 하나라도 있으면 종료 코드 2, 조회에 실패하면 종료 코드 4입니다
   - 처리 중 청약 (`PENDING`, `COMPENSATING`, `CANCEL_REQUESTED`)
   - 계좌, 청약, 배정 서비스 outbox의 미발행 메시지
-  - ⚠️ 접수 토픽(`subscription.requested`) 랙은 보지 않습니다. 청약 행은 접수 Consumer가 만들어서, 202를 받은 요청도 처리 전에는 행이 없어 위 조건을 통과합니다. 복원하면 Kafka를 비우므로 그 요청은 사라지고, `g2_run.sh`는 그때 DB의 확정 수를 기대 수로 쓰므로 건수가 모자란 채로 측정됩니다. 그래서 5번처럼 랙 0과 W, M 확정 수를 직접 확인합니다
+  - 청약 API가 202를 주기 전에 청약 행을 저장하므로(D-29 B-2) 202를 받은 요청은 모두 위 조건에 잡힙니다. 다만 `g2_run.sh`는 저장할 때 DB의 확정 수를 기대 수로 쓰므로, 시드가 끝까지 돌았는지는 5번처럼 W, M 확정 수로 직접 확인합니다
   - 종료 시각이 지난 `OPEN` 공모주 (복원 직후 저절로 마감되지 않게. 측정할 공모주와 개발용 공모주의 종료 시각을 먼 미래로 두고, 측정할 때 종료 시각을 바꿔 마감시킵니다)
 - meta에는 청약 수가 든 상태 줄과 `allow_subscriptions` 줄이 남습니다. `restore`, `check`는 옵션 없이 meta의 상태(청약 수 포함)와 비교합니다
 - `ALLOW_SUBSCRIPTIONS`는 `1`일 때만 켜집니다. 다른 값이면 기본 `save`처럼 청약 있는 DB를 거부합니다
@@ -452,7 +450,7 @@ python loadtest/report.py --run-id $RUN                                         
 | S0 | 회원 1,000명이 각 1건 (100명 × 10회, 1초에 걸쳐 시작) | 새 공모주 | `users.csv` | 전부 202 |
 | S1 | 도착률 고정 단계 부하 (`STAGES` 기본 100,200,300,433,600,800건/초, 단계마다 전환 `RAMP` 10초 + 유지 `HOLD` 90초, 앞에 `WARMUP` 60초). 정식 측정은 한 속도 고정(`RATE`, `DURATION`)을 단계마다 따로 실행 | 새 공모주 (`IPO_IDS`면 여러 개) | `users.csv` | 전부 202 |
 | S2 | 마감 경계: 대상 공모주에 회원 1,000명이 1건씩, 마감 시각 앞뒤에 걸쳐 요청하고 배경 공모주로 전체 274건/초 유지 (아래 S2 절) | 대상 1개(측정 중 마감) + 배경 여러 개(`IPO_IDS`) | `users.csv` | 대상: 마감 전 도착 202, 마감 후 422 `SUBSCRIPTION_CLOSED`, 마감 처리 뒤 409 `INVALID_STATUS_TRANSITION`. 배경: 전부 202 |
-| S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약 거절은 Consumer |
+| S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약(다른 계좌 청약)은 청약 API가 접수 트랜잭션에서 `REJECTED(ALREADY_SUBSCRIBED)`로 저장 |
 | S4 | Synthetic Data `s4-behavior.csv`: 투자자 1,000명 x 1건, 97명 예수금 부족 (S0과 같은 100명 x 10회) | 새 공모주 | `users-s4.csv` (S4 행동 CSV의 입금액으로 시드) | 전부 202 (잔액 부족 판정은 Consumer) |
 
 - **S1의 조건(요청 속도, 유지 시간, 요청 구성)은 임시 값입니다.** 첫 측정 전에 확정하고, 측정을 시작한 뒤에는 바꾸지 않습니다.
@@ -473,7 +471,7 @@ POST=0 bash loadtest/s2.sh --run-id S2-g1-r1 --grace PT1S              # ② 장
 - 시작할 때 `official.sh`와 같이 이 커밋으로 jar를 빌드해 배포하고(`./gradlew build -x test`, `compose up -d --build`), 서비스 5개의 로컬 jar와 컨테이너 안 jar의 sha256이 같은지 확인합니다. 다르면 시작하지 않습니다(종료 코드 5). `SKIP_BUILD=1`이면 빌드, 배포만 건너뛰고 비교는 그대로 합니다. 다만 로컬 jar와 컨테이너 jar가 둘 다 이전 커밋으로 빌드한 것이면 비교를 통과해 `env.txt`의 커밋과 실제 코드가 달라지므로, `SKIP_BUILD=1`은 이 커밋으로 빌드, 배포한 것을 따로 확인했을 때만 씁니다. 그래서 회차마다 서비스가 다시 뜨고 1회에 2~3분이 더 걸립니다.
 - 회차마다 토큰을 다시 받고, 정식 측정과 같은 워밍업(`warmup.py`, 응답 시간 추세가 평평해질 때까지)을 합니다 (`WARM=0`이면 생략).
 - `--grace`: 청약 서비스의 마감 유예(`ipo.close.grace-period`, 기본 `PT20S`)만 바꿔 다시 띄우고, 끝나면(오류로 멈춰도) 덮어쓰기 없이 다시 띄워 되돌립니다. 덮어쓰기 파일은 `loadtest/data/`(커밋하지 않음)에 둡니다.
-- ②에서 `POST=0`인 이유: 접수 토픽 랙을 마감 조건으로 보는 구조에서는 다른 공모주 요청이 이어지면 랙이 0이 되지 않아 마감이 미뤄지고(① 평소 부하에서 마감 시각 약 46초 뒤), 그 사이 늦은 발행이 끝나 누락이 가려집니다. 마감 뒤 요청이 없어 랙이 바로 0이 되는 조건에서 "발행 지연 > 유예"를 봅니다.
+- ②에서 `POST=0`인 이유: 접수 토픽 랙을 마감 조건으로 보는 구조에서는 다른 공모주 요청이 이어지면 랙이 0이 되지 않아 마감이 미뤄지고(① 평소 부하에서 마감 시각 약 46초 뒤), 그 사이 늦은 발행이 끝나 누락이 가려집니다. 마감 뒤 요청이 없어 랙이 바로 0이 되는 조건에서 "발행 지연 > 유예"를 봅니다. 접수 Outbox(B후, D-29 B-2)에서는 마감이 랙을 보지 않지만, B전과 같은 조건으로 비교하려고 ②는 그대로 `POST=0`으로 잽니다.
 - 판정 (`results/<run_id>/s2-judge.txt`)
   - 입력 오류 (종료 코드 1, 판정하지 않음): 읽은 로그 행 수가 k6 요청 수(`http_reqs.count`)와 다름(읽지 못한 행을 0건으로 넘기지 않음), 밀린 요청이 없는데 k6 요청 수가 계획한 전체 요청 수와 다름(일찍 끝난 실행. 밀린 요청이 있으면 요청 수가 적은 것이 정상이고 아래 회차 무효), `stage`가 `target`, `bg`가 아닌 로그 행, 요약에 밀린 요청 수나 응답 검사 실패 수가 없음, 마감된 대상 공모주인데 `verify.sql` 20~22번 결과가 없음
   - 회차 무효 (종료 코드 3, 다시 실행): 밀린 요청(`dropped_iterations`)이 있음(요청 순번으로 대상 구간을 정해서 밀리면 구간이 늦어짐), k6 응답 검사 실패(상태 코드나 오류 코드가 기대와 다름), 401(토큰 만료), 대상 요청에 202와 422가 모두 있지 않음(마감 시각이 대상 구간 밖), 배경 요청에 202가 아닌 응답(배경 공모주는 마감되지 않아야 함)
@@ -579,10 +577,11 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `STAGES`, `DUR` | `100,200,300,433,600`, `90` | `official.sh` (S1 속도 단계, 단계 유지 초. 433은 G1 목표의 근거인 오픈 직후 피크, 600은 목표를 넘는 부하 확인) |
 | `S1_REPEAT` | `3` | `official.sh` (S1 단계마다 반복 측정 횟수. 팀 규칙은 최소 3회, 3 미만이면 판정이 참고값) |
 | `S0_PRICE`, `S1_PRICE`, `QUANTITY` | `15000`, `1000`, `10` | `official.sh` (공모가, 청약 수량) |
-| `PRE_VUS`, `MAX_VUS` | `500`, `2000` | `official.sh` (S1 k6 가상 사용자) |
+| `PRE_VUS`, `MAX_VUS` | `500`, `2000` | `official.sh`, `s2.sh` (S1, S2 k6 가상 사용자. S2는 접수 Outbox 뒤 202가 DB 커밋을 기다려 DB가 잠깐 멈추면 응답이 늦어지므로 S1과 같게 둔다) |
 | `P95_LIMIT`, `DRAIN_LIMIT` | `15`, `15` | `official.sh` → `judge.py` (G2 합격 기준 초) |
 | `DRAIN_TIMEOUT` | `2400` | `official.sh` (소진 대기 상한 초) |
-| `REQUIRED_GROUPS` | `subscription-requested subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve` | `official.sh`, `s2.sh` (lag을 확인할 필수 Consumer 그룹) |
+| `REQUIRED_GROUPS` | `subscription-margin-reserved subscription-margin-reserve-failed account-margin-reserve` | `official.sh`, `s2.sh` (lag을 확인할 필수 Consumer 그룹. 접수 Outbox 뒤에는 접수 Consumer 그룹 `subscription-requested`가 없어 뺐다) |
+| `IGNORE_GROUPS` | `subscription-requested` | `official.sh`, `s2.sh` (소진 대기의 lag 합에서 뺄 Consumer 그룹. 읽는 Consumer가 없어진 접수 그룹에 남은 메시지가 소진 대기를 막지 않게 한다. 다른 그룹 lag은 그대로 세고, 빈 값이면 모두 센다) |
 | `STATS_INTERVAL` | `5` | `official.sh`, `g2_run.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh`, `s2.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |

@@ -18,6 +18,13 @@ public interface IpoRepository {
     // 상태가 같은 공모주 전체. 게이트웨이의 청약 중 공모주 목록(내부 API 4.4)용이라 OPEN처럼 몇 개뿐인 상태에만 쓴다
     List<Ipo> findByStatus(IpoStatus status);
 
+    // 마감용. 공모주 행을 잠가(FOR UPDATE) 같은 공모주 행을 잡은 다른 트랜잭션이 끝난 뒤에 읽는다 (D-29)
+    Optional<Ipo> findByIdForUpdate(UUID ipoId);
+
+    // 접수용. 이미 읽은 공모주를 공유 잠금(FOR SHARE)으로 다시 읽어 최신 상태로 맞춘다.
+    // 접수끼리는 함께 진행하고, 마감(FOR UPDATE)과는 순서를 정한다 (D-29). 같은 트랜잭션에서 읽은 객체를 그대로 쓰면 잠근 뒤에도 잠그기 전 값이 남아 있어 다시 읽는다
+    void refreshForShare(Ipo ipo);
+
     // 마감 대상 조회용. 해당 상태이고 청약 마감 시각이 기준 시각과 같거나 앞인 공모주
     List<Ipo> findByStatusAndSubscriptionEndAtLessThanEqual(IpoStatus status, Instant endAt);
 }

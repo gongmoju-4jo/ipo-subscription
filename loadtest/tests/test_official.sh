@@ -48,12 +48,20 @@ sed 's/^subscription-margin-reserved margin.reserved 0 3 3 0/subscription-margin
 expect_out "LOG-END-OFFSET이 숫자가 아님 → 실패" 1 "" lag_of "$T.5"
 { echo "Consumer group 'subscription-requested' has no active members."; echo; cat "$T"; } > "$T.6"
 expect_out "'no active members' 안내 줄이 있어도 데이터 행은 센다 (5)" 0 5 lag_of "$T.6"
+expect_out "뺄 그룹(subscription-requested)의 lag은 합에서 빼고, 필수 그룹 확인에는 넣음 (0)" 0 0 parse_lag "$REQ" "subscription-requested" < "$T"
+sed 's/^account-margin-reserve margin.reserve-requested 0 7 7 0/account-margin-reserve margin.reserve-requested 0 7 9 2/' "$T" > "$T.8"
+expect_out "뺄 그룹이 아닌 그룹의 lag은 그대로 셈 (2)" 0 2 parse_lag "$REQ" "subscription-requested" < "$T.8"
 
 # ---- kafka_lag: docker 실패 ----
 docker() { echo "Error response from daemon: container is not running" >&2; return 1; }
 expect_out "kafka_lag: docker exec 실패 → 실패 (0을 돌려주지 않음)" 1 "" kafka_lag
 docker() { cat "$REAL_CG" | sed 's/$/\r/'; }
 expect_out "kafka_lag: CRLF 출력도 처리 → 0" 0 0 kafka_lag
+docker() { cat "$T"; }
+expect_out "kafka_lag: 기본값은 접수 그룹(subscription-requested) lag을 뺌 → 0" 0 0 kafka_lag
+IGN_DEF="$IGNORE_GROUPS"; IGNORE_GROUPS=""
+expect_out "kafka_lag: IGNORE_GROUPS가 비면 모두 셈 → 5" 0 5 kafka_lag
+IGNORE_GROUPS="$IGN_DEF"
 unset -f docker
 
 # ---- parse_offsets, kafka_dlt_total ----
@@ -62,7 +70,7 @@ expect_out "parse_offsets 합계 5" 0 5 parse_offsets subscription.requested.DLT
 expect_out "parse_offsets 다른 토픽 → 실패" 1 "" parse_offsets margin.voided.DLT < "$T.7"
 expect_out "parse_offsets 빈 출력 → 실패" 1 "" parse_offsets subscription.requested.DLT < "$T.3"
 topics_n="$(kafka_topics | wc -l | tr -d ' ')"
-[ "$topics_n" = 10 ] && ok "kafka_topics: create-topics.sh에서 토픽 10개" || bad "kafka_topics" "${topics_n}개"
+[ "$topics_n" = 9 ] && ok "kafka_topics: create-topics.sh에서 토픽 9개" || bad "kafka_topics" "${topics_n}개"
 # kafka_dlt_total은 아래 "DLT 토픽을 한 번에 조회"에서 확인한다
 
 # ---- sql_in, is_uuid, ceil_div ----
@@ -257,7 +265,7 @@ unset -f docker
 TOPS="$(kafka_topics)"; NT="$(printf '%s\n' "$TOPS" | grep -c .)"
 docker() { echo "$*" > "$ST/dlt-args"; printf '%s\n' "$TOPS" | awk '{ print $1 ".DLT:0:1"; print $1 ".DLT:1:2\r" }'; }
 expect_out "kafka_dlt_total: 토픽 ${NT}개 x (1+2) = $((NT * 3))" 0 "$((NT * 3))" kafka_dlt_total
-[ "$(grep -o 'kafka-get-offsets' "$ST/dlt-args" | wc -l | tr -d ' ')" = 1 ] && grep -q 'subscription\\\.requested' "$ST/dlt-args" && ok "kafka_dlt_total: 한 번 호출, 점은 정규식에서 이스케이프" || bad "kafka_dlt_total 인자" "$(cat "$ST/dlt-args")"
+[ "$(grep -o 'kafka-get-offsets' "$ST/dlt-args" | wc -l | tr -d ' ')" = 1 ] && grep -q 'margin\\\.reserve-requested' "$ST/dlt-args" && ok "kafka_dlt_total: 한 번 호출, 점은 정규식에서 이스케이프" || bad "kafka_dlt_total 인자" "$(cat "$ST/dlt-args")"
 docker() { printf '%s\n' "$TOPS" | sed 1d | awk '{ print $1 ".DLT:0:1" }'; }
 expect_out "kafka_dlt_total: 한 토픽의 행이 없으면 실패 (0으로 넘기지 않음)" 1 "" kafka_dlt_total
 docker() { echo "Error: timeout" >&2; return 1; }
@@ -541,6 +549,13 @@ printf 'echo "%sv가 틀림" "%s{v}가 맞음" "%sv → 화살표" "%sv 공백"\
 expect_out "bash 3.2 검사기: 변수 바로 뒤 한글, 화살표는 잡고 중괄호로 감싼 변수, 공백 뒤는 안 잡는다" 0 "deploy/b.sh:1 loadtest/sub/a.sh:1" na_scan "$NAT"
 NA="$(na_scan "$REPO")"; rc=$?
 [ "$rc" = 0 ] && [ -z "$NA" ] && ok "bash 3.2: 셸 스크립트에 변수 바로 뒤 비ASCII 문자 없음 (\${VAR}로 감쌈)" || bad "bash 3.2 변수 경계" "rc=$rc $NA"
+
+# ---- 필수 Consumer 그룹 기본값: official.sh와 s2.sh가 같고, 접수 Outbox로 없어진 접수 그룹(subscription-requested)이 없다 ----
+# (없는 그룹이 있으면 Kafka를 비우고 시작한 측정이 필수 그룹 확인에서 종료 코드 9로 멈춘다)
+req_default() { grep -o 'REQUIRED_GROUPS="${REQUIRED_GROUPS:-[^}]*}' "$1" | head -1 | sed 's/.*:-//; s/}$//'; }
+RG_OFF="$(req_default "$HERE/../official.sh")"; RG_S2="$(req_default "$HERE/../s2.sh")"
+[ -n "$RG_OFF" ] && [ "$RG_OFF" = "$RG_S2" ] && ok "필수 그룹 기본값: official.sh와 s2.sh가 같음" || bad "필수 그룹 기본값" "official.sh='$RG_OFF' s2.sh='$RG_S2'"
+case " $RG_OFF " in *" subscription-requested "*) bad "필수 그룹 기본값" "official.sh에 subscription-requested가 남아 있음" ;; *) ok "필수 그룹 기본값: subscription-requested 없음" ;; esac
 
 echo; echo "통과 $PASS, 실패 $FAIL"
 [ "$FAIL" -eq 0 ]

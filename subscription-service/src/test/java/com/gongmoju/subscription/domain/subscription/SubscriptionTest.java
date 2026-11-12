@@ -95,18 +95,16 @@ class SubscriptionTest {
     }
 
     @Test
-    @DisplayName("회원, 계좌, 종목, 수량이 같으면 같은 요청이다 (receivedAt이 달라도)")
+    @DisplayName("회원, 계좌, 종목, 수량이 같으면 같은 요청이다")
     void isSameRequest_returnsTrue_whenContentIsSame() {
         // given
         UUID ipoId = UUID.randomUUID();
         when(ipo.getId()).thenReturn(ipoId);
         Subscription subscription = Subscription.accept(subscriptionId, requestId, ipo, userId, accountId,
                 100, 1_500_000, RECEIVED_AT);
-        SubscriptionRequested resent = new SubscriptionRequested(requestId, subscriptionId, userId, accountId, ipoId,
-                100, RECEIVED_AT.plusSeconds(3));
 
         // when
-        boolean same = subscription.isSameRequest(resent);
+        boolean same = subscription.isSameRequest(userId, accountId, ipoId, 100);
 
         // then
         assertThat(same).isTrue();
@@ -121,15 +119,13 @@ class SubscriptionTest {
         when(ipo.getId()).thenReturn(ipoId);
         Subscription subscription = Subscription.accept(subscriptionId, requestId, ipo, userId, accountId,
                 100, 1_500_000, RECEIVED_AT);
-        SubscriptionRequested resent = new SubscriptionRequested(requestId, subscriptionId,
+
+        // when
+        boolean same = subscription.isSameRequest(
                 "userId".equals(differingField) ? UUID.randomUUID() : userId,
                 "accountId".equals(differingField) ? UUID.randomUUID() : accountId,
                 "ipoId".equals(differingField) ? UUID.randomUUID() : ipoId,
-                "requestedQuantity".equals(differingField) ? 101 : 100,
-                RECEIVED_AT);
-
-        // when
-        boolean same = subscription.isSameRequest(resent);
+                "requestedQuantity".equals(differingField) ? 101 : 100);
 
         // then
         assertThat(same).isFalse();

@@ -39,12 +39,13 @@ public class SubscriptionController {
     private final SubscriptionService subscriptionService;
 
     @Operation(summary = "청약 신청",
-            description = "공모주 상태, 청약 기간(Gateway 도착 시각 기준), 수량 범위를 검증한 뒤 subscription.requested를 발행하고 "
-                    + "브로커 저장을 확인하면 202를 준다. 202는 접수 완료이며 청약 확정이 아니다. "
-                    + "같은 requestId로 다시 요청하면 같은 subscriptionId를 돌려준다.")
+            description = "공모주 상태, 청약 기간(Gateway 도착 시각 기준), 수량 범위를 검증하고, 한 트랜잭션에서 청약 저장과 "
+                    + "증거금 인출 요청 기록을 마치면 202를 준다. 202는 접수 완료이며 청약 확정이 아니다. "
+                    + "같은 requestId로 같은 내용을 다시 요청하면 같은 subscriptionId를 돌려주고, 내용이 다르거나 "
+                    + "다른 회원이 쓴 requestId면 409다.")
     @ApiErrorCodes(
             common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.RESOURCE_NOT_FOUND,
-                    CommonErrorCode.INTERNAL_SERVER_ERROR},
+                    CommonErrorCode.DUPLICATE_RESOURCE, CommonErrorCode.INTERNAL_SERVER_ERROR},
             value = {SubscriptionErrorCode.INVALID_STATUS_TRANSITION, SubscriptionErrorCode.SUBSCRIPTION_CLOSED})
     @PostMapping
     public ResponseEntity<ApiResponse<SubscriptionAcceptedResponse>> subscribe(
@@ -60,7 +61,7 @@ public class SubscriptionController {
 
     @Operation(summary = "내 청약 목록 조회",
             description = "로그인한 회원의 청약을 거절, 취소된 것까지 모두 조회한다. 정렬은 createdAt만 가능하고 기본은 등록 시각 최신순, "
-                    + "같은 시각이면 subscriptionId 순이다. 접수 직후 아직 저장되지 않은 청약은 목록에 없을 수 있다.")
+                    + "같은 시각이면 subscriptionId 순이다.")
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED})
     @GetMapping
     public ApiResponse<PageResponse<SubscriptionSummaryResponse>> list(
@@ -76,8 +77,7 @@ public class SubscriptionController {
     }
 
     @Operation(summary = "청약 상세, 상태 조회",
-            description = "청약 1건의 상태와 증거금, 배정 수량, 환불 결과를 조회한다. 다른 회원의 청약은 없는 청약과 같은 404다. "
-                    + "202 직후 아직 저장되지 않은 청약도 404이므로 접수 직후의 404는 최종 거절로 보지 않고 다시 조회한다.")
+            description = "청약 1건의 상태와 증거금, 배정 수량, 환불 결과를 조회한다. 다른 회원의 청약은 없는 청약과 같은 404다.")
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.RESOURCE_NOT_FOUND})
     @GetMapping("/{subscriptionId}")
     public ApiResponse<SubscriptionResponse> get(

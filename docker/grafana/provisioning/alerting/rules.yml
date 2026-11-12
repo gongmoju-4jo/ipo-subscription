@@ -159,3 +159,81 @@ groups:
               expression: A
               conditions:
                 - evaluator: { type: gt, params: [0] }
+
+      # 아래 두 규칙은 "새로 생겼다"는 사건 알림이다. 바로 보내고(for 0s), 복구 메시지는 보내지 않는다 (policies.yml → slack-incident-event)
+      # - 최근 5분 동안 늘어난 건수를 본다. 5분 동안 새로 생기지 않으면 조건이 풀리고, 그 뒤 다시 생기면 새 알림이 간다
+      # - 증가량(increase)은 새로 생긴 시계열의 첫 값을 세지 않는다. 그래서 서비스가 다시 뜬 뒤(배포 포함) 첫 수집에 이미 1 이상인 경우를
+      #   "5분 전에는 없던 시계열" 조건(unless ... offset 5m)으로 같이 잡는다
+      # - 알림에 실패 원인은 없다. DLT는 Kafka-UI에서 메시지 헤더, ERROR는 해당 서비스 로그로 확인한다
+
+      # DLT 적재: Consumer가 재시도 끝에 처리하지 못한 메시지를 {토픽}.DLT로 보낸 건수 (서비스, DLT 토픽별)
+      # 토픽별 전송 지표는 그 토픽에 처음 보낸 뒤에 생기고, 생길 때 이미 1 이상이다
+      - uid: ipo-dlt-message-arrived
+        title: DltMessageArrived
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: '{{ $labels.topic }}에 새 메시지 {{ $values.A.Value }}건 (최근 5분). Kafka-UI에서 메시지 헤더의 실패 원인 확인'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                round(
+                  sum by (job, topic) (increase(kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}[5m])) > 0
+                  or
+                  sum by (job, topic) (
+                    kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}
+                    unless on (job, topic) (kafka_producer_topic_record_send_total{topic=~".+[.]DLT"} offset 5m)
+                  )
+                )
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # ERROR 로그: 서비스별 ERROR 로그 건수 (서비스 코드 외 Kafka 클라이언트, Eureka 등 라이브러리 로거 포함)
+      # 이 지표는 기동할 때 0으로 생기므로, 새 시계열 조건에는 0보다 큰 것만 남긴다 (기동 중 ERROR는 잡고, 정상 기동은 울리지 않음)
+      - uid: ipo-error-log-detected
+        title: ErrorLogDetected
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'ERROR 로그 {{ $values.A.Value }}건 (최근 5분). 해당 서비스 로그 확인'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                round(
+                  sum by (job) (increase(logback_events_total{level="error"}[5m])) > 0
+                  or
+                  sum by (job) (
+                    logback_events_total{level="error"}
+                    unless on (job) (logback_events_total{level="error"} offset 5m)
+                  ) > 0
+                )
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }

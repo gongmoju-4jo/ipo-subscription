@@ -79,6 +79,14 @@ spring:
             connect-timeout: 1000
             read-timeout: 5000
 
+# ipo.closed 처리 시간 한도 (IpoClosedConsumer에만 적용, #135)
+# 배정 1건이 이 시간을 넘기면 Kafka가 파티션을 다른 Consumer에 넘겨 같은 배정이 동시에 다시 실행된다
+# 확정 청약 200만 건 추정(약 15분)에 여유를 둔 임시 값. 청약 서비스 키셋 조회를 합친 뒤 측정해서 다시 정한다
+# 크게 잡을수록 Consumer가 실제로 멈췄을 때, 리밸런스 중 다른 파티션이 기다리는 시간도 길어진다
+allocation:
+  ipo-closed:
+    max-poll-interval-ms: 1800000
+
 # Outbox 발행기 (서비스 3개가 같은 키)
 outbox:
   publisher:

@@ -233,6 +233,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
   - 알림이 켜져 있는 5분 안에 같은 서비스(DLT는 같은 토픽)에서 더 생기면 새 메시지 없이 같은 알림으로 묶인다
   - 알림에 실패 원인은 없다. DLT는 Kafka-UI의 해당 `.DLT` 토픽 메시지 헤더(`kafka_dlt-exception-message`), ERROR는 해당 서비스 로그로 확인한다
   - ERROR 건수에는 서비스 코드 외 라이브러리 로거(Kafka 클라이언트, Eureka 등)의 ERROR도 들어간다. 정상 기동 때는 5개 서비스 모두 0건이다
+  - 수집이 10분 넘게 끊겼다 이어지면(Prometheus 재시작 등) 이미 쌓여 있던 건수를 새로 생긴 것으로 보지 않는다. 그 대신 공백 중에 생긴 DLT, ERROR는 서비스가 공백 중에 다시 뜬 경우(뜬 지 10분 안)에만 알린다
   - DLT로 보내도 ERROR 로그가 남지 않는 실패가 있다 (예: 서킷 브레이커가 열려 호출하지 못함). 그래서 두 알림을 따로 둔다
 - 사유 (`reason` 라벨, 게이트웨이 `AdmissionFailureReason`이 예외로 판단)
 
@@ -275,7 +276,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
    ```bash
    echo 'test:{broken' | docker exec -i ipo-kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka:29092 --topic margin.reserve-requested --reader-property parse.key=true --reader-property key.separator=:
    ```
-   - Git Bash에서는 경로가 바뀌지 않도록 앞에 `MSYS_NO_PATHCONV=1 `을 붙인다
+   - Git Bash에서는 경로가 바뀌지 않도록 `docker` 바로 앞에 `MSYS_NO_PATHCONV=1 `을 붙인다 (`echo ... | MSYS_NO_PATHCONV=1 docker exec ...`). 줄 맨 앞에 붙이면 `echo`에만 적용된다
 
 #### IntelliJ 실행과 Docker 실행의 차이
 

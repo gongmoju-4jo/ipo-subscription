@@ -225,15 +225,16 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 | `HikariConnectionPending` | DB 커넥션을 기다리는 요청이 있음 (`hikaricp_connections_pending > 0`) | 1분 |
 | `JvmHeapUsageHigh` | 힙 사용률 90% 초과 | 5분 |
 | `QueueAdmissionDown` | 게이트웨이 대기열 입장 처리 실패 (`queue_admission_failing{reason} > 0`). 사유별로 따로 뜨고 메시지에 사유가 나온다 (아래 표). 입장 허가가 나가지 않아 청약 신청이 모두 막힌다 | 1분 |
-| `DltMessageArrived` (사건 알림) | `{토픽}.DLT`로 보낸 메시지가 최근 5분 동안 늘었거나, 서비스가 다시 뜬 뒤 처음 생김 (`kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}`). 서비스, DLT 토픽별로 따로 뜨고 메시지에 토픽과 건수가 나온다 | 바로 |
-| `ErrorLogDetected` (사건 알림) | 서비스의 ERROR 로그가 최근 5분 동안 늘었거나, 기동 중에 생김 (`logback_events_total{level="error"}`). 메시지에 건수가 나온다 | 바로 |
+| `DltMessageArrived` (사건 알림) | `{토픽}.DLT`로 보낸 메시지가 최근 5분 동안 늘어남 (재시작, 수집 공백 처리는 아래) (`kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}`). 서비스, DLT 토픽별로 따로 뜨고 메시지에 토픽과 건수가 나온다 | 바로 |
+| `ErrorLogDetected` (사건 알림) | 서비스의 ERROR 로그가 최근 5분 동안 늘어남 (기동 중 ERROR 포함) (`logback_events_total{level="error"}`). 메시지에 건수가 나온다 | 바로 |
 
 - `QueueAdmissionDown`은 입장 스케줄러가 요청이 없어도 1초마다 Redis를 쓰는 결과라 트래픽이 없는 시간의 Redis 장애도 잡는다. 게이트웨이가 내려가 지표가 없을 때는 울리지 않는다 (`ServiceDown`이 잡는다)
 - 사건 알림(`DltMessageArrived`, `ErrorLogDetected`)은 **복구 메시지를 보내지 않는다**. 5분 동안 새로 생기지 않으면 조건이 풀리지만, 쌓인 DLT나 ERROR 원인은 그대로 남아 있어서다. 풀린 뒤 다시 생기면 새 장애 메시지가 간다
   - 알림이 켜져 있는 5분 안에 같은 서비스(DLT는 같은 토픽)에서 더 생기면 새 메시지 없이 같은 알림으로 묶인다
   - 알림에 실패 원인은 없다. DLT는 Kafka-UI의 해당 `.DLT` 토픽 메시지 헤더(`kafka_dlt-exception-message`), ERROR는 해당 서비스 로그로 확인한다
   - ERROR 건수에는 서비스 코드 외 라이브러리 로거(Kafka 클라이언트, Eureka 등)의 ERROR도 들어간다. 정상 기동 때는 5개 서비스 모두 0건이다
-  - 수집이 10분 넘게 끊겼다 이어지면(Prometheus 재시작 등) 이미 쌓여 있던 건수를 새로 생긴 것으로 보지 않는다. 그 대신 공백 중에 생긴 DLT, ERROR는 서비스가 공백 중에 다시 뜬 경우(뜬 지 10분 안)에만 알린다
+  - 건수는 "지금 누적값 - 5분 전까지 마지막으로 수집한 누적값"이다. 수집이 끊겼다 이어져도(Prometheus 재시작 등) 이미 알린 건은 다시 알리지 않고 공백 중에 생긴 건만 알린다. 서비스가 다시 떴으면(시작 시각이 바뀜) 누적값 전체가 새 건이다
+  - 1시간 넘게 수집하지 못한 서비스는 비교할 값이 없어, 그사이 다시 뜬 경우가 아니면 공백 중 생긴 건을 알리지 않는다
   - DLT로 보내도 ERROR 로그가 남지 않는 실패가 있다 (예: 서킷 브레이커가 열려 호출하지 못함). 그래서 두 알림을 따로 둔다
 - 사유 (`reason` 라벨, 게이트웨이 `AdmissionFailureReason`이 예외로 판단)
 

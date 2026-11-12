@@ -134,6 +134,14 @@ class S6SummaryTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("로컬 단일 머신, Docker, 인스턴스 1개", out)
 
+    def test_different_warmup_seconds_are_same_condition(self):
+        make_run(self.root, "r1", warm="함 (204초, 200건/초)")
+        make_run(self.root, "r2", warm="함 (312초, 200건/초)")
+        rc, out, _ = self.run_main(["r1", "r2"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("워밍업 조건이 섞여", out)
+        self.assertIn("함 (204초, 200건/초)", out)   # 표에는 회차별 워밍업 시간을 그대로 보인다
+
     def test_missing_run_returns_1(self):
         make_run(self.root, "r1")
         rc, _, err = self.run_main(["r1", "nope"])

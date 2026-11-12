@@ -114,7 +114,8 @@ def main(argv=None):
     if bad:
         print(f"※ 정합성 위반이 있는 회차: {', '.join(bad)}")
     print("※ 환경 한계: 로컬 단일 머신, Docker, 인스턴스 1개 (k6도 같은 머신). 실제 운영 수치가 아닌 시뮬레이션입니다.")
-    warm = {r["warm"] for r in runs}
+    # 워밍업 진행 여부(함, 안 함)만 비교한다. 워밍업이 정상 상태에 닿는 시간(204초, 312초 등)은 회차마다 달라도 같은 조건이다
+    warm = {r["warm"].split(" (")[0] for r in runs}
     if len(warm) > 1:
         print(f"※ 워밍업 조건이 섞여 있습니다 ({', '.join(sorted(warm))}). 같은 조건끼리 묶어서 보세요.")
     return 0

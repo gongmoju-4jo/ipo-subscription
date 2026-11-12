@@ -11,13 +11,16 @@ import com.gongmoju.allocation.domain.allocation.ConfirmedSubscription;
 import com.gongmoju.common.exception.BusinessException;
 import com.gongmoju.common.exception.CommonErrorCode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AllocationService {
@@ -41,14 +44,26 @@ public class AllocationService {
                 .orElseThrow(() -> new IllegalStateException("배정 회차가 없습니다. allocationRoundId=" + allocationRoundId));
         round.checkRunning();
 
+        long calculateStartedAt = System.nanoTime();
         AllocationCalculation calculation = allocationCalculator.calculate(round.getOfferPrice(), round.getRetailQuantity(),
                 round.getEqualQuantity(), round.getMinQuantity(), round.getLotterySeed(), subscriptions);
+        long calculateMillis = elapsedMillis(calculateStartedAt);
+
+        long saveStartedAt = System.nanoTime();
         List<Allocation> allocations = allocationRepository.saveAll(
                 calculation.allocations().stream().map(result -> Allocation.of(round, result)).toList());
 
         allocations.forEach(allocationEventPublisher::publishResult);
         allocationEventPublisher.publishFinished(round, calculation.totalAllocatedQuantity(), allocations.size());
         round.finish(Instant.now());
+        // calculateMillis: 균등, 비례, 추첨 계산
+        // saveMillis: 배정 결과, Outbox를 영속성 컨텍스트에 기록하고 회차 DONE까지 (커밋 전. INSERT 대부분은 커밋할 때 가서 여기 빠진다)
+        log.info("배정 계산, 저장 기록 완료 (커밋 전). allocationRoundId={}, ipoId={}, subscriptionCount={}, calculateMillis={}, saveMillis={}",
+                allocationRoundId, round.getIpoId(), subscriptions.size(), calculateMillis, elapsedMillis(saveStartedAt));
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
     }
 
     /**

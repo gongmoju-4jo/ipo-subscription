@@ -3,6 +3,7 @@ package com.gongmoju.allocation.application.allocation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gongmoju.allocation.domain.allocation.AllocationEventPublisher;
+import com.gongmoju.allocation.domain.allocation.AllocationRepository;
 import com.gongmoju.allocation.domain.allocation.ConfirmedSubscription;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,13 +17,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 // 배정 실행: 배정 결과 저장, allocation.result/finished Outbox 기록, 회차 DONE (H2 메모리 DB)
 // 회차는 DB에 직접 넣고, 확정 청약 목록은 직접 만들어 넘긴다 (ipo.closed 수신, 목록 조회는 다음 이슈)
@@ -47,6 +52,12 @@ class AllocationExecutionTest {
 
     @MockitoSpyBean
     private AllocationEventPublisher allocationEventPublisher;
+
+    @MockitoSpyBean
+    private AllocationRepository allocationRepository;
+
+    @Autowired
+    private AllocationReplayService allocationReplayService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -203,6 +214,63 @@ class AllocationExecutionTest {
         assertThat(outbox("allocation.result")).isEmpty();
         assertThat(roundStatus(roundId)).isEqualTo("RUNNING");
         assertThat(roundFinishedAt(roundId)).isNull();
+    }
+
+    // 확정 청약이 저장 단위(1만 건)보다 많으면 나눠서 DB로 보내고 비운다. 행 수, 수량 합, Outbox, 회차 DONE, 추첨 재현이 한 번에 저장할 때와 같다
+    @Test
+    void savesAllocationsInChunksWhenSubscriptionsExceedChunkSize() throws Exception {
+        int count = AllocationService.SAVE_CHUNK_SIZE * 2 + 5_000;
+        UUID roundId = insertRound("RUNNING", 50_000, 25_000, 10);
+        List<ConfirmedSubscription> subscriptions = IntStream.range(0, count).mapToObj(i -> subscription(10 + i % 50)).toList();
+
+        allocationService.allocate(roundId, subscriptions);
+
+        // 묶음 3개 (1만, 1만, 5천)
+        verify(allocationRepository, times(3)).flushAndClear();
+        assertThat(countRows("SELECT COUNT(*) FROM allocation.allocation WHERE allocation_round_id = ?", roundId)).isEqualTo(count);
+        assertThat(countRows("SELECT COALESCE(SUM(allocated_quantity), 0) FROM allocation.allocation WHERE allocation_round_id = ?", roundId))
+                .isEqualTo(50_000);
+        assertThat(countRows("SELECT COUNT(*) FROM allocation.outbox WHERE topic = ?", "allocation.result")).isEqualTo(count);
+        // 청약마다 allocation.result가 하나씩 (빠지거나 겹치지 않음)
+        assertThat(countRows("SELECT COUNT(DISTINCT aggregate_id) FROM allocation.outbox WHERE topic = ?", "allocation.result")).isEqualTo(count);
+        JsonNode finished = payload(outbox("allocation.finished").get(0));
+        assertThat(finished.get("totalAllocatedQuantity").asLong()).isEqualTo(50_000);
+        assertThat(finished.get("subscriptionCount").asLong()).isEqualTo(count);
+        assertThat(roundStatus(roundId)).isEqualTo("DONE");
+        assertThat(roundFinishedAt(roundId)).isNotNull();
+
+        AllocationReplayResult replay = allocationReplayService.replay(IPO_ID);
+        assertThat(replay.matched()).isTrue();
+        assertThat(replay.comparedCount()).isEqualTo(count);
+    }
+
+    // 두 번째 묶음에서 실패하면 이미 DB로 보낸 첫 묶음까지 모두 롤백되고 회차는 RUNNING으로 남는다
+    @Test
+    void rollsBackEarlierChunksWhenLaterChunkFails() {
+        int count = AllocationService.SAVE_CHUNK_SIZE * 2;
+        UUID roundId = insertRound("RUNNING", 50_000, 25_000, 10);
+        List<ConfirmedSubscription> subscriptions = IntStream.range(0, count).mapToObj(i -> subscription(10 + i % 50)).toList();
+        AtomicInteger published = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (published.incrementAndGet() == AllocationService.SAVE_CHUNK_SIZE + 1) {
+                throw new IllegalStateException("두 번째 묶음 기록 실패");
+            }
+            return invocation.callRealMethod();
+        }).when(allocationEventPublisher).publishResult(any());
+
+        assertThatThrownBy(() -> allocationService.allocate(roundId, subscriptions)).hasMessage("두 번째 묶음 기록 실패");
+
+        // 첫 묶음은 flushAndClear로 DB에 보냈지만 커밋 전이라 함께 롤백된다
+        verify(allocationRepository, times(1)).flushAndClear();
+        assertThat(countRows("SELECT COUNT(*) FROM allocation.allocation WHERE allocation_round_id = ?", roundId)).isZero();
+        assertThat(countRows("SELECT COUNT(*) FROM allocation.outbox WHERE topic = ?", "allocation.result")).isZero();
+        assertThat(outbox("allocation.finished")).isEmpty();
+        assertThat(roundStatus(roundId)).isEqualTo("RUNNING");
+        assertThat(roundFinishedAt(roundId)).isNull();
+    }
+
+    private long countRows(String sql, Object arg) {
+        return jdbcTemplate.queryForObject(sql, Long.class, arg);
     }
 
     private UUID insertRound(String status, long retailQuantity, long equalQuantity, long minQuantity) {

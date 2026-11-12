@@ -166,9 +166,12 @@ groups:
       #   이미 알린 누적값을 다시 알리지 않고 공백 중에 실제로 생긴 건만 알린다
       # - 카운터는 서비스가 다시 뜨면 0부터 세는데 시계열 라벨은 같다. 그래서 그 마지막 값이 지금 프로세스가 뜬 뒤에 수집된 것일 때만 빼고
       #   (마지막 수집 시각 > process_start_time_seconds), 아니면(재시작 전 값, 처음 생긴 시계열) 0으로 보고 지금 누적값 전체를 알린다
+      #   - 마지막 수집 시각은 1초 간격 서브쿼리(timestamp(...)[1h:1s])로 구한다. 샘플은 다음 수집이나 끊김 표시까지 수집 간격(5초) 동안 보이므로
+      #     1초 간격이면 샘플 하나 뒤 바로 수집이 끊겨도 놓치지 않는다. 수집 간격을 1초 이하로 줄이면 이 간격도 줄인다
       # - 1시간 넘게 수집하지 못한 서비스는 비교할 값이 없다. 그사이 다시 떴으면(1시간 5분 안에 시작) 전체를 알리고,
       #   그보다 오래 떠 있던 서비스는 공백 중 생긴 건을 알 수 없어 알리지 않는다
       # - 알림에 실패 원인은 없다. DLT는 Kafka-UI에서 메시지 헤더, ERROR는 해당 서비스 로그로 확인한다
+      # - 식을 바꾸면 docker/grafana/alert-tests/run.sh로 확인한다 (재시작, 수집 공백, 첫 샘플 직후 수집 실패 등)
 
       # DLT 적재: Consumer가 재시도 끝에 처리하지 못한 메시지를 {토픽}.DLT로 보낸 건수 (서비스, DLT 토픽별)
       # 토픽별 전송 지표는 그 토픽에 처음 보낸 뒤에 생기고, 생길 때 이미 1 이상이다
@@ -192,7 +195,7 @@ groups:
                     sum by (job, topic) (kafka_producer_topic_record_send_total{topic=~".+[.]DLT"})
                     - on (job, topic) (
                       sum by (job, topic) (last_over_time(kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}[1h] offset 5m))
-                      and on (job, topic) (max by (job, topic) (max_over_time(timestamp(kafka_producer_topic_record_send_total{topic=~".+[.]DLT"})[1h:15s] offset 5m)) > on (job) group_left max by (job) (process_start_time_seconds))
+                      and on (job, topic) (max by (job, topic) (max_over_time(timestamp(kafka_producer_topic_record_send_total{topic=~".+[.]DLT"})[1h:1s] offset 5m)) > on (job) group_left max by (job) (process_start_time_seconds))
                       or
                       sum by (job, topic) (kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}) * 0
                     )
@@ -236,7 +239,7 @@ groups:
                     sum by (job) (logback_events_total{level="error"})
                     - on (job) (
                       sum by (job) (last_over_time(logback_events_total{level="error"}[1h] offset 5m))
-                      and on (job) (max by (job) (max_over_time(timestamp(logback_events_total{level="error"})[1h:15s] offset 5m)) > on (job) group_left max by (job) (process_start_time_seconds))
+                      and on (job) (max by (job) (max_over_time(timestamp(logback_events_total{level="error"})[1h:1s] offset 5m)) > on (job) group_left max by (job) (process_start_time_seconds))
                       or
                       sum by (job) (logback_events_total{level="error"}) * 0
                     )

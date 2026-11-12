@@ -71,7 +71,7 @@ class SubscriptionClientCircuitBreakerTest {
     // 5xx가 최소 호출 수(5회)만큼 쌓이면 열리고, 열린 뒤에는 청약 서비스를 호출하지 않고 바로 실패한다
     @Test
     void opensAfterServerFailuresAndRejectsCallsWithoutCallingSubscriptionService() {
-        when(client.getConfirmedSubscriptions(any(), anyString(), anyInt(), anyInt()))
+        when(client.getConfirmedSubscriptions(any(), anyString(), any(), anyInt()))
                 .thenThrow(new FeignServerException(503, "SERVICE_UNAVAILABLE", "청약 서비스 오류", "getConfirmedSubscriptions"));
         for (int i = 0; i < 5; i++) {
             assertThatThrownBy(() -> adapter.readAll(IPO_ID)).isInstanceOf(FeignServerException.class);
@@ -80,13 +80,13 @@ class SubscriptionClientCircuitBreakerTest {
         clearInvocations(client);
 
         assertThatThrownBy(() -> adapter.readAll(IPO_ID)).isInstanceOf(CallNotPermittedException.class);
-        verify(client, never()).getConfirmedSubscriptions(any(), anyString(), anyInt(), anyInt());
+        verify(client, never()).getConfirmedSubscriptions(any(), anyString(), any(), anyInt());
     }
 
     // 4xx(아직 CLOSED 아님 등)는 청약 서비스가 정상 응답한 것이라 실패로 세지 않는다
     @Test
     void doesNotCountClientErrorsAsFailures() {
-        when(client.getConfirmedSubscriptions(any(), anyString(), anyInt(), anyInt()))
+        when(client.getConfirmedSubscriptions(any(), anyString(), any(), anyInt()))
                 .thenThrow(new FeignClientException(409, "INVALID_STATUS_TRANSITION", "공모주가 아직 마감되지 않았습니다.", List.of()));
         for (int i = 0; i < 10; i++) {
             assertThatThrownBy(() -> adapter.readAll(IPO_ID)).isInstanceOf(FeignClientException.class);

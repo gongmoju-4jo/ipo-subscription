@@ -12,11 +12,14 @@ import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -48,6 +51,7 @@ import static org.mockito.Mockito.when;
 // 처리 기록의 ON CONFLICT (event_id, consumer_name)를 H2가 지원하지 않아 실제 PostgreSQL(Testcontainers)로 확인한다. Docker 필요
 // 확정 청약 목록은 청약 서비스를 띄우지 않고 가짜 Reader로 넘긴다
 @Testcontainers
+@ExtendWith(OutputCaptureExtension.class)
 @SpringBootTest(properties = "eureka.client.enabled=false")
 class IpoClosedServiceTest {
 
@@ -113,6 +117,26 @@ class IpoClosedServiceTest {
             assertThat(row.get("CONSUMER_NAME")).isEqualTo("allocation-ipo-closed");
             assertThat(row.get("TOPIC")).isEqualTo("ipo.closed");
         });
+    }
+
+    // 배정이 끝나면 확정 청약 건수와 단계별 소요 시간(조회, 계산, 저장 기록, 커밋 포함 배정, 전체)을 로그로 남긴다
+    // 이미 끝난 공모주를 다시 받으면 배정하지 않으므로 이 로그를 다시 남기지 않는다
+    @Test
+    void logsCountAndElapsedTimesWhenAllocated(CapturedOutput output) {
+        when(confirmedSubscriptionReader.readAll(IPO_ID)).thenReturn(subscriptions(3));
+        IpoClosed event = event(3);
+
+        ipoClosedService.handle(event);
+
+        Object roundId = round().get("ALLOCATION_ROUND_ID");
+        assertThat(output.getOut()).containsPattern("배정 계산, 저장 기록 완료 \\(커밋 전\\)\\. allocationRoundId=" + roundId
+                + ", ipoId=" + IPO_ID + ", subscriptionCount=3, calculateMillis=\\d+, saveMillis=\\d+");
+        assertThat(output.getOut()).containsPattern("배정 완료\\. ipoId=" + IPO_ID + ", allocationRoundId=" + roundId
+                + ", confirmedCount=3, readMillis=\\d+, allocateMillis=\\d+, totalMillis=\\d+");
+
+        ipoClosedService.handle(event);
+
+        assertThat(output.getOut().split("배정 완료\\. ", -1)).hasSize(2);
     }
 
     // 확정 청약이 0건이어도 회차를 DONE으로 바꾸고 allocation.finished만 기록한다

@@ -24,8 +24,12 @@ function kstInput(ms: number): string {
 function kstDate(ms: number): string {
   return new Date(ms + 9 * 60 * MINUTE).toISOString().slice(0, 10);
 }
+// 브라우저에 따라 초까지 포함된 값("HH:mm:ss")이 전달될 수 있어 분 단위까지만 사용한다
+function toMinute(v: string): string {
+  return v.slice(0, 16);
+}
 function inputToMs(v: string): number {
-  return new Date(`${v}:00${KST_OFFSET}`).getTime();
+  return new Date(`${toMinute(v)}:00${KST_OFFSET}`).getTime();
 }
 
 interface Form {
@@ -102,8 +106,8 @@ function toRequest(f: Form): IpoCreateRequest {
     equalQuantity: Number(f.equalQuantity),
     minQuantity: Number(f.minQuantity),
     maxQuantity: Number(f.maxQuantity),
-    subscriptionStartAt: `${f.startAt}:00${KST_OFFSET}`,
-    subscriptionEndAt: `${f.endAt}:00${KST_OFFSET}`,
+    subscriptionStartAt: `${toMinute(f.startAt)}:00${KST_OFFSET}`,
+    subscriptionEndAt: `${toMinute(f.endAt)}:00${KST_OFFSET}`,
     refundDate: f.refundDate,
   };
 }

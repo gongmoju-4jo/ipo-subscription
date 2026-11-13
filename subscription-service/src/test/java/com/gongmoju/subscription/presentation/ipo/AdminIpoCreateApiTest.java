@@ -250,6 +250,16 @@ class AdminIpoCreateApiTest {
                 .andExpect(status().isOk());
     }
 
+    @Test
+    @DisplayName("Swagger 문서에 성공 응답이 200이 아니라 201로 나오고 응답 형식이 붙는다")
+    void apiDocs_showCreatedAsSuccess() throws Exception {
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/ipos'].post.responses['201'].content['*/*'].schema").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/ipos'].post.responses['200']").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/v1/admin/ipos'].post.responses['403']").exists());
+    }
+
     // 명세 3.6 요청 예시의 값. 기본값과 다른지 보려고 minQuantity는 20
     private Map<String, Object> validBody() {
         Map<String, Object> body = new java.util.LinkedHashMap<>();

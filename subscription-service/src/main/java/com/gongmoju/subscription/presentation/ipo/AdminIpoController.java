@@ -28,6 +28,8 @@ public class AdminIpoController {
             description = "공모주를 OPEN 상태로 등록한다. 최소 청약 수량은 없으면 10, 증거금률은 없으면 1.00이고 1.00만 받는다. "
                     + "청약 마감 시각이 이미 지났으면 400이고, 시작 시각이 지난 것은 받는다. "
                     + "등록한 공모주는 게이트웨이의 청약 중 공모주 목록 갱신(최대 5초) 뒤부터 접속 대기열에 들어갈 수 있다.")
+    // ResponseEntity로 201을 주면 Swagger가 상태를 알 수 없어 200으로 표시하므로 성공 응답을 직접 적는다
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "등록됨")
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.FORBIDDEN})
     @PostMapping
     public ResponseEntity<ApiResponse<IpoCreateResponse>> register(@Valid @RequestBody IpoCreateRequest request) {

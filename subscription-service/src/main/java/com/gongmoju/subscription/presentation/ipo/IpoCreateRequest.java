@@ -22,7 +22,7 @@ public record IpoCreateRequest(
         @NotNull(message = "필수값입니다.")
         Long offerPrice,
 
-        @Schema(description = "일반청약 물량, 1 이상", example = "100000")
+        @Schema(description = "일반청약 물량, 1 이상. 물량 x 2와 물량 x 공모가가 long 범위 안", example = "100000")
         @NotNull(message = "필수값입니다.")
         Long retailQuantity,
 
@@ -33,7 +33,7 @@ public record IpoCreateRequest(
         @Schema(description = "최소 청약 수량. 없으면 10, 1 이상", example = "10", nullable = true)
         Long minQuantity,
 
-        @Schema(description = "1인 청약 한도. 최소 청약 수량 이상", example = "10000")
+        @Schema(description = "1인 청약 한도. 최소 청약 수량 이상, 한도 x 공모가가 long 범위 안", example = "10000")
         @NotNull(message = "필수값입니다.")
         Long maxQuantity,
 

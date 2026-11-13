@@ -15,7 +15,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 // 원장 대사를 주기적으로 실행하고 결과를 로그로 기록한다 (#132). 실행 시각은 ledger.reconciliation.cron
-// 불일치가 있으면 요약 ERROR 1줄 + 상세 WARN으로 기록한다. ERROR 로그는 Grafana ErrorLogDetected가 Slack 알림으로 발송한다 (#136)
+// 불일치 0건이면 INFO 1줄, 불일치가 있으면 검사별 ERROR (건수, 불일치 발생 대상 ID) + 상세 WARN으로 기록한다
+// ERROR 로그는 Grafana ErrorLogDetected가 Slack 알림으로 발송한다 (#136)
 // 로그는 모두 "[원장 대사]"로 시작해서 Slack 알림 후 로그 검색 1번으로 조회 가능하다
 // 단일 인스턴스를 전제로 한다. 인스턴스가 여러 개면 인스턴스 수만큼 실행된다 (조회만 해서 데이터 영향은 없고, 알림이 중복 발송된다)
 // 수평 확장 시 분산 락을 reconcile()에 추가한다
@@ -25,7 +26,7 @@ import java.util.stream.Collectors;
 @ConditionalOnProperty(prefix = "ledger.reconciliation", name = "enabled", havingValue = "true", matchIfMissing = true)
 class LedgerReconciliationScheduler {
 
-    // 상세 로그 상한. 버그 배포로 전체 계좌가 불일치하는 경우에도 로그 수가 이 값을 초과하지 않는다
+    // 상세 로그 라인 수, 검사별 불일치 발생 대상 ID 개수 상한. 버그 배포로 전체 계좌가 불일치하는 경우에도 로그 크기가 이 값 기준으로 제한된다
     static final int DETAIL_LOG_LIMIT = 100;
 
     private final LedgerReconciliationService reconciliationService;
@@ -50,11 +51,20 @@ class LedgerReconciliationScheduler {
         logMismatches(result, elapsedMillis);
     }
 
-    // ERROR는 1줄만 기록한다. Slack 알림의 ERROR 건수가 불일치 건수만큼 증가하지 않게 하고, 상세는 WARN으로 기록한다
+    // 요약 WARN 1줄 → 불일치가 있는 검사마다 ERROR 1줄 (건수, 불일치 발생 대상 ID) → 불일치마다 상세 WARN (기대값, 실제값)
+    // ERROR는 검사 단위라 Slack 알림의 ERROR 건수는 최대 검사 수(4)이고, 불일치 건수만큼 증가하지 않는다
     private void logMismatches(LedgerReconciliationResult result, long elapsedMillis) {
         List<LedgerMismatch> mismatches = result.mismatches();
-        log.error("[원장 대사] 불일치 {}건. 자동으로 수정하지 않으니 운영자 확인 필요. 실행 시간 {}ms, 검사별 불일치 건수: {}",
+        log.warn("[원장 대사] 불일치 총 {}건. 자동으로 수정하지 않으니 운영자 확인 필요. 실행 시간 {}ms, 검사별 불일치 건수: {}",
                 mismatches.size(), elapsedMillis, countsByCheck(result));
+
+        for (LedgerReconciliationCheck check : LedgerReconciliationCheck.values()) {
+            List<LedgerMismatch> ofCheck = result.mismatchesOf(check);
+            if (!ofCheck.isEmpty()) {
+                log.error("[원장 대사] 불일치 검사={}({}) {}건. 불일치 발생 대상 ID: {}",
+                        check, check.getDescription(), ofCheck.size(), targetIds(ofCheck));
+            }
+        }
 
         int logged = Math.min(mismatches.size(), DETAIL_LOG_LIMIT);
         for (int i = 0; i < logged; i++) {
@@ -66,6 +76,16 @@ class LedgerReconciliationScheduler {
         if (mismatches.size() > logged) {
             log.warn("[원장 대사] 불일치 상세 {}건 생략. 상세 로그 상한 {}건", mismatches.size() - logged, DETAIL_LOG_LIMIT);
         }
+    }
+
+    // 예: "a1b2..., c3d4..." / 상한 초과 시 "a1b2..., ... 외 5건"
+    private String targetIds(List<LedgerMismatch> mismatches) {
+        String ids = mismatches.stream()
+                .limit(DETAIL_LOG_LIMIT)
+                .map(mismatch -> String.valueOf(mismatch.targetId()))
+                .collect(Collectors.joining(", "));
+        int omitted = mismatches.size() - DETAIL_LOG_LIMIT;
+        return omitted > 0 ? ids + " 외 " + omitted + "건" : ids;
     }
 
     // 예: "MARGIN_BALANCE=0, LEDGER_SUM=1, MARGIN_PENDING_LEDGER=0, MARGIN_STATUS_LEDGER=0"

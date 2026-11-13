@@ -11,4 +11,9 @@ public record LedgerMismatch(
         UUID marginId,
         String detail
 ) {
+
+    // 불일치 발생 대상 ID: 증거금 단위 검사는 marginId, 계좌 단위 검사는 accountId
+    public UUID targetId() {
+        return marginId != null ? marginId : accountId;
+    }
 }

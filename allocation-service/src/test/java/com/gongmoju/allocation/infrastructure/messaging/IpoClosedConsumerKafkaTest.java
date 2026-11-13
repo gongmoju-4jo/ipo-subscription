@@ -14,7 +14,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -27,6 +29,7 @@ import org.testcontainers.kafka.KafkaContainer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Arrays;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -69,6 +72,9 @@ class IpoClosedConsumerKafkaTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private KafkaListenerEndpointRegistry kafkaListenerEndpointRegistry;
 
     @MockitoBean
     private ConfirmedSubscriptionReader confirmedSubscriptionReader;
@@ -129,6 +135,19 @@ class IpoClosedConsumerKafkaTest {
         assertThat(dlt).singleElement().satisfies(record -> assertThat(record.value()).isEqualTo(payload));
         assertThat(elapsedMillis).isGreaterThanOrEqualTo(RETRY_BACKOFF_MILLIS);
         assertThat(roundStatus()).isEqualTo("FAILED");
+    }
+
+    // ipo.closed 리스너에 처리 시간 한도(15분, application.yml)와 한 번에 1건 받기가 적용된다
+    @Test
+    void appliesLongPollIntervalToIpoClosedListener() {
+        MessageListenerContainer container = kafkaListenerEndpointRegistry.getListenerContainers().stream()
+                .filter(c -> Arrays.asList(c.getContainerProperties().getTopics()).contains(TOPIC))
+                .findFirst()
+                .orElseThrow();
+
+        Properties consumerProperties = container.getContainerProperties().getKafkaConsumerProperties();
+        assertThat(consumerProperties.getProperty(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG)).isEqualTo("900000");
+        assertThat(consumerProperties.getProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG)).isEqualTo("1");
     }
 
     private void send(String payload) {

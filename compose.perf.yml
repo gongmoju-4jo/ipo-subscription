@@ -9,7 +9,7 @@
 # | 컨테이너 | CPU | 메모리 상한 | JVM 힙 |
 # | api-gateway, account | 1.0 | 1g | 512m |
 # | subscription-service | 2.0 | 1g | 512m |
-# | allocation-service | 0.5 | 1g | 512m |
+# | allocation-service | 0.5 | 2g | 1536m |
 # | eureka-server | 0.5 | 512m | 192m |
 # | postgres | 2.0 | 1g | - |
 # | kafka | 1.0 | 1g | 512m |
@@ -72,9 +72,9 @@ services:
 
   allocation-service:
     cpus: 0.5
-    mem_limit: 1g
+    mem_limit: 2g
     environment:
-      JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
+      JAVA_TOOL_OPTIONS: "-Xms1536m -Xmx1536m -XX:+UseG1GC"
 
   prometheus:
     cpus: 0.5

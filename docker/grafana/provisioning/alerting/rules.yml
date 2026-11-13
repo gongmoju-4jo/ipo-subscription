@@ -159,3 +159,104 @@ groups:
               expression: A
               conditions:
                 - evaluator: { type: gt, params: [0] }
+
+      # 아래 두 규칙은 "새로 생겼다"는 사건 알림이다. 바로 보내고(for 0s), 복구 메시지는 보내지 않는다 (policies.yml → slack-incident-event)
+      # - 새로 생긴 건수 = 지금 누적값 - 5분 전까지 마지막으로 수집한 누적값. 5분 동안 새로 생기지 않으면 조건이 풀리고, 그 뒤 다시 생기면 새 알림이 간다
+      # - 5분 전 값은 1시간 안의 마지막 값을 쓴다 (last_over_time). 수집이 끊겼다 이어져도(Prometheus 재시작, 수집 실패) 공백 전 값과 비교해서,
+      #   이미 알린 누적값을 다시 알리지 않고 공백 중에 실제로 생긴 건만 알린다
+      # - 카운터는 서비스가 다시 뜨면 0부터 세는데 시계열 라벨은 같다. 그래서 그 마지막 값이 지금 프로세스가 뜬 뒤에 수집된 것일 때만 빼고
+      #   (마지막 수집 시각 > process_start_time_seconds), 아니면(재시작 전 값, 처음 생긴 시계열) 0으로 보고 지금 누적값 전체를 알린다
+      #   - 마지막 수집 시각은 1초 간격 서브쿼리(timestamp(...)[1h:1s])로 구한다. 샘플은 다음 수집이나 끊김 표시까지 수집 간격(5초) 동안 보이므로
+      #     1초 간격이면 샘플 하나 뒤 바로 수집이 끊겨도 놓치지 않는다. 수집 간격을 1초 이하로 줄이면 이 간격도 줄인다
+      # - 1시간 넘게 수집하지 못한 서비스는 비교할 값이 없다. 그사이 다시 떴으면(1시간 5분 안에 시작) 전체를 알리고,
+      #   그보다 오래 떠 있던 서비스는 공백 중 생긴 건을 알 수 없어 알리지 않는다
+      # - 알림에 실패 원인은 없다. DLT는 Kafka-UI에서 메시지 헤더, ERROR는 해당 서비스 로그로 확인한다
+      # - 식을 바꾸면 docker/grafana/alert-tests/run.sh로 확인한다 (재시작, 수집 공백, 첫 샘플 직후 수집 실패 등)
+
+      # DLT 적재: Consumer가 재시도 끝에 처리하지 못한 메시지를 {토픽}.DLT로 보낸 건수 (서비스, DLT 토픽별)
+      # 토픽별 전송 지표는 그 토픽에 처음 보낸 뒤에 생기고, 생길 때 이미 1 이상이다
+      - uid: ipo-dlt-message-arrived
+        title: DltMessageArrived
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: '{{ $labels.topic }}에 새 메시지 {{ $values.A.Value }}건 (최근 5분). Kafka-UI에서 메시지 헤더의 실패 원인 확인'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                (
+                  (
+                    sum by (job, topic) (kafka_producer_topic_record_send_total{topic=~".+[.]DLT"})
+                    - on (job, topic) (
+                      sum by (job, topic) (last_over_time(kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}[1h] offset 5m))
+                      and on (job, topic) (max by (job, topic) (max_over_time(timestamp(kafka_producer_topic_record_send_total{topic=~".+[.]DLT"})[1h:1s] offset 5m)) > on (job) group_left max by (job) (process_start_time_seconds))
+                      or
+                      sum by (job, topic) (kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}) * 0
+                    )
+                  )
+                  and on (job) (
+                    max by (job) (process_start_time_seconds) == on (job) max by (job) (last_over_time(process_start_time_seconds[1h] offset 5m))
+                    or
+                    max by (job) (process_start_time_seconds) > time() - 3900
+                  )
+                ) > 0
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # ERROR 로그: 서비스별 ERROR 로그 건수 (서비스 코드 외 Kafka 클라이언트, Eureka 등 라이브러리 로거 포함)
+      # 이 지표는 기동할 때 0으로 생긴다. 기동 중 ERROR는 재시작 조건으로 잡고, 정상 기동은 0이라 울리지 않는다
+      - uid: ipo-error-log-detected
+        title: ErrorLogDetected
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 'ERROR 로그 {{ $values.A.Value }}건 (최근 5분). 해당 서비스 로그 확인'
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                (
+                  (
+                    sum by (job) (logback_events_total{level="error"})
+                    - on (job) (
+                      sum by (job) (last_over_time(logback_events_total{level="error"}[1h] offset 5m))
+                      and on (job) (max by (job) (max_over_time(timestamp(logback_events_total{level="error"})[1h:1s] offset 5m)) > on (job) group_left max by (job) (process_start_time_seconds))
+                      or
+                      sum by (job) (logback_events_total{level="error"}) * 0
+                    )
+                  )
+                  and on (job) (
+                    max by (job) (process_start_time_seconds) == on (job) max by (job) (last_over_time(process_start_time_seconds[1h] offset 5m))
+                    or
+                    max by (job) (process_start_time_seconds) > time() - 3900
+                  )
+                ) > 0
+              instant: true
+              range: false
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }

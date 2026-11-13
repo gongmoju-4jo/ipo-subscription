@@ -88,6 +88,23 @@ export interface IpoResponse extends IpoSummaryResponse {
   refundDate: string;
 }
 
+// 공모주 등록 (subscription-service POST /api/v1/admin/ipos, ADMIN 전용)
+// 최소 청약 수량, 증거금률은 보내지 않으면 서버 기본값(10, 1.00)을 사용한다. 증거금률은 1.00만 허용한다
+export interface IpoCreateRequest {
+  name: string;
+  offerPrice: number;
+  retailQuantity: number;
+  equalQuantity: number;
+  minQuantity?: number;
+  maxQuantity: number;
+  subscriptionStartAt: string;
+  subscriptionEndAt: string;
+  refundDate: string;
+}
+export interface IpoCreateResponse extends IpoResponse {
+  createdAt: string;
+}
+
 // 접속 대기열 (api-gateway가 직접 응답)
 export type QueueStatus = 'WAITING' | 'ADMITTED';
 export interface QueueEntryResponse {
@@ -170,4 +187,13 @@ export interface AllocationResponse {
   proportionalAllocatedQuantity: number;
   allocatedQuantity: number;
   allocatedAmount: number;
+}
+
+// 추첨 재현 (allocation-service GET /api/v1/admin/allocations/ipos/{ipoId}/replay, ADMIN 전용)
+// 저장된 공모주 조건, 추첨 시드, 청약 수량으로 다시 계산해 저장된 배정 결과와 청약마다 비교한 결과. 읽기만 한다
+export interface AllocationReplayResponse {
+  ipoId: string;
+  matched: boolean;
+  comparedCount: number;
+  mismatchedSubscriptionIds: string[];
 }

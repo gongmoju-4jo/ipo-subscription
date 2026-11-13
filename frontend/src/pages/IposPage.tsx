@@ -4,20 +4,25 @@ import { useIpos } from '../api/queries';
 import { Badge, Card, Empty, ErrorBox, Loading } from '../components/ui';
 import { formatDateTime, formatWon } from '../lib/format';
 import { ipoStatusLabel } from '../lib/status';
+import { useIsAdmin } from '../admin/flag';
 
 type Filter = 'open' | 'all';
 
 export function IposPage() {
   const ipos = useIpos();
+  const isAdmin = useIsAdmin();
   const [filter, setFilter] = useState<Filter>('open');
   const all = ipos.data?.items ?? [];
   const shown = filter === 'all' ? all : all.filter((i) => ipoStatusLabel(i.status, i.subscriptionStartAt, i.subscriptionEndAt).label === '청약 중');
 
   return (
     <div className="stack">
-      <div>
-        <div className="page-title">공모주</div>
-        <p className="page-sub">증거금률 100%라 청약 금액만큼 예수금이 필요해요</p>
+      <div className="row between wrap">
+        <div>
+          <div className="page-title">공모주</div>
+          <p className="page-sub">증거금률 100%라 청약 금액만큼 예수금이 필요해요</p>
+        </div>
+        {isAdmin && <Link to="/admin/ipos/new" className="btn btn-dark btn-sm">공모주 등록</Link>}
       </div>
       <div className="tabs">
         <button className={filter === 'open' ? 'on' : ''} onClick={() => setFilter('open')}>청약 중</button>

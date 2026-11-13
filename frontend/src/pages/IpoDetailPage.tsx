@@ -4,6 +4,7 @@ import { Badge, Card, ErrorBox, Loading } from '../components/ui';
 import { IpoInfoCard } from '../components/IpoInfoCard';
 import { formatDateTime, formatWon } from '../lib/format';
 import { ipoStatusLabel } from '../lib/status';
+import { LotteryReplayCard } from '../admin/LotteryReplayCard';
 
 // 공모주 상세. 정보는 누구나 보고, [청약 화면으로]를 누르면 청약 화면(대기열 → 입장 허가 → 입력)으로 간다
 export function IpoDetailPage() {
@@ -54,6 +55,8 @@ export function IpoDetailPage() {
           )}
         </Card>
       </div>
+
+      <LotteryReplayCard ipoId={ipoId} status={d.status} />
     </div>
   );
 }

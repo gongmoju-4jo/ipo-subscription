@@ -2,8 +2,11 @@ import { api, newRequestId } from './client';
 import type {
   AccountResponse,
   AccountSummaryResponse,
+  AllocationReplayResponse,
   AllocationResponse,
   DepositResponse,
+  IpoCreateRequest,
+  IpoCreateResponse,
   LedgerEntryResponse,
   IpoResponse,
   IpoSummaryResponse,
@@ -41,6 +44,12 @@ export const ipoApi = {
   get: (ipoId: string) => api.get<IpoResponse>(`/api/v1/ipos/${ipoId}`),
 };
 
+// 관리자 전용 (Gateway가 ADMIN이 아니면 403으로 거부한다)
+export const adminIpoApi = {
+  // 등록하면 OPEN 상태, 성공 201. 게이트웨이 대기열은 최대 5초 후부터 이 공모주로 진입 가능하다
+  create: (body: IpoCreateRequest) => api.post<IpoCreateResponse>('/api/v1/admin/ipos', body),
+};
+
 export const subscriptionApi = {
   // 202는 "접수"일 뿐 확정이 아니다. 상태는 get으로 다시 조회한다
   create: (body: SubscriptionCreateRequest) => api.post<SubscriptionAcceptedResponse>('/api/v1/subscriptions', body),
@@ -60,4 +69,6 @@ export const queueApi = {
 
 export const allocationApi = {
   get: (subscriptionId: string) => api.get<AllocationResponse>(`/api/v1/allocations/subscriptions/${subscriptionId}`),
+  // 관리자 전용. 배정 회차가 없으면 404, 배정이 끝나지 않았으면 422
+  replay: (ipoId: string) => api.get<AllocationReplayResponse>(`/api/v1/admin/allocations/ipos/${ipoId}/replay`),
 };

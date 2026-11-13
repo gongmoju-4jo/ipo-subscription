@@ -71,6 +71,14 @@ const CATALOG: { method: string; pattern: RegExp; desc: ApiDescription }[] = [
     desc: { title: '내 청약 목록', service: 'Gateway → subscription-service' },
   },
   {
+    method: 'POST', pattern: /^\/api\/v1\/admin\/ipos$/,
+    desc: { title: '공모주 등록 (관리자)', service: 'Gateway → subscription-service', point: 'Gateway가 ADMIN 토큰만 통과시켜요(아니면 403). 등록하면 바로 OPEN이고, 대기열은 게이트웨이 목록 갱신(최대 5초) 후부터 진입 가능해요' },
+  },
+  {
+    method: 'GET', pattern: new RegExp(`^/api/v1/admin/allocations/ipos/${UUID}/replay$`),
+    desc: { title: '추첨 재현 (관리자)', service: 'Gateway → allocation-service', point: '저장된 추첨 시드, 공모주 조건, 청약 수량으로 배정을 다시 계산해 저장된 결과와 청약마다 비교해요. 읽기만 해서 여러 번 실행해도 데이터가 바뀌지 않아요' },
+  },
+  {
     method: 'GET', pattern: /^\/api\/v1\/allocations\/subscriptions\//,
     desc: { title: '배정 결과', service: 'Gateway → allocation-service', point: '마감 전이면 아직 배정 결과가 없어요' },
   },

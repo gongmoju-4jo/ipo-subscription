@@ -30,6 +30,9 @@ public class AllocationService {
     private final AllocationEventPublisher allocationEventPublisher;
     private final AllocationCalculator allocationCalculator = new AllocationCalculator();
 
+    // 배정 결과를 DB로 보내고 메모리에서 비우는 단위. 1건당 배정 결과 1행 + Outbox 1행이라 한 번에 2만 행 (#135)
+    static final int SAVE_CHUNK_SIZE = 10_000;
+
     /**
      * 확정 청약 목록으로 배정을 실행한다. 배정 결과 저장, allocation.result(청약 1건당 1개), allocation.finished(1개) Outbox 기록,
      * 회차 DONE을 한 트랜잭션으로 처리하므로 중간에 실패하면 모두 롤백된다.
@@ -40,26 +43,42 @@ public class AllocationService {
      */
     @Transactional
     public void allocate(UUID allocationRoundId, List<ConfirmedSubscription> subscriptions) {
-        AllocationRound round = allocationRoundRepository.findById(allocationRoundId)
-                .orElseThrow(() -> new IllegalStateException("배정 회차가 없습니다. allocationRoundId=" + allocationRoundId));
+        AllocationRound round = findRound(allocationRoundId);
         round.checkRunning();
 
+        // 계산은 전체를 한 번에 한다 (추첨 시드 하나로 청약 ID 순서대로 계산해야 추첨 재현 결과가 같다)
         long calculateStartedAt = System.nanoTime();
         AllocationCalculation calculation = allocationCalculator.calculate(round.getOfferPrice(), round.getRetailQuantity(),
                 round.getEqualQuantity(), round.getMinQuantity(), round.getLotterySeed(), subscriptions);
         long calculateMillis = elapsedMillis(calculateStartedAt);
 
+        // 저장은 SAVE_CHUNK_SIZE건씩 DB로 보내고 비운다 (배정 결과, Outbox 엔티티를 전부 들고 있지 않도록, #135)
+        // 커밋은 트랜잭션이 끝날 때 한 번이라 중간에 실패하면 이미 보낸 것까지 모두 롤백된다
         long saveStartedAt = System.nanoTime();
-        List<Allocation> allocations = allocationRepository.saveAll(
-                calculation.allocations().stream().map(result -> Allocation.of(round, result)).toList());
+        List<AllocationCalculation.SubscriptionAllocation> results = calculation.allocations();
+        for (int from = 0; from < results.size(); from += SAVE_CHUNK_SIZE) {
+            // 앞 묶음의 flushAndClear로 회차도 JPA 관리에서 빠졌으므로 묶음마다 다시 조회한다 (첫 묶음은 DB 조회 없음)
+            AllocationRound chunkRound = findRound(allocationRoundId);
+            List<Allocation> allocations = allocationRepository.saveAll(
+                    results.subList(from, Math.min(from + SAVE_CHUNK_SIZE, results.size())).stream()
+                            .map(result -> Allocation.of(chunkRound, result)).toList());
+            allocations.forEach(allocationEventPublisher::publishResult);
+            allocationRepository.flushAndClear();
+        }
 
-        allocations.forEach(allocationEventPublisher::publishResult);
-        allocationEventPublisher.publishFinished(round, calculation.totalAllocatedQuantity(), allocations.size());
-        round.finish(Instant.now());
+        // 회차 DONE이 저장되려면 JPA가 관리하는 회차여야 해서 다시 조회한다
+        AllocationRound finishingRound = findRound(allocationRoundId);
+        allocationEventPublisher.publishFinished(finishingRound, calculation.totalAllocatedQuantity(), results.size());
+        finishingRound.finish(Instant.now());
         // calculateMillis: 균등, 비례, 추첨 계산
-        // saveMillis: 배정 결과, Outbox를 영속성 컨텍스트에 기록하고 회차 DONE까지 (커밋 전. INSERT 대부분은 커밋할 때 가서 여기 빠진다)
+        // saveMillis: 배정 결과, Outbox를 묶음마다 DB로 보내고 회차 DONE까지 (커밋 전. 마지막 기록과 커밋은 IpoClosedService의 allocateMillis에 들어간다)
         log.info("배정 계산, 저장 기록 완료 (커밋 전). allocationRoundId={}, ipoId={}, subscriptionCount={}, calculateMillis={}, saveMillis={}",
-                allocationRoundId, round.getIpoId(), subscriptions.size(), calculateMillis, elapsedMillis(saveStartedAt));
+                allocationRoundId, finishingRound.getIpoId(), subscriptions.size(), calculateMillis, elapsedMillis(saveStartedAt));
+    }
+
+    private AllocationRound findRound(UUID allocationRoundId) {
+        return allocationRoundRepository.findById(allocationRoundId)
+                .orElseThrow(() -> new IllegalStateException("배정 회차가 없습니다. allocationRoundId=" + allocationRoundId));
     }
 
     private static long elapsedMillis(long startedAt) {

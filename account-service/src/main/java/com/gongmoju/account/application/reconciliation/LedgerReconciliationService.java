@@ -12,7 +12,7 @@ import java.util.Arrays;
 import java.util.List;
 
 // 계좌 잔고, 증거금, 원장이 서로 일치하는지 검사한다 (원장 대사, #132)
-// 조회만 하고 수정하지 않는다. 배치는 계좌와 원장 중 어느 쪽이 정답인지 판단할 수 없어서, 정정은 사람이 원인을 확인한 후 반대 거래로 처리한다
+// 조회만 하고 수정하지 않는다. 배치는 계좌와 원장 중 어느 쪽이 정답인지 판단 불가능해서, 정정은 사람이 원인을 확인한 후 반대 거래로 처리한다
 @Service
 @RequiredArgsConstructor
 public class LedgerReconciliationService {

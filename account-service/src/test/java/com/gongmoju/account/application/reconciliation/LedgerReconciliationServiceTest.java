@@ -100,7 +100,7 @@ class LedgerReconciliationServiceTest {
 
     @Test
     void 정산_원장_2줄의_기록_시각이_같아도_불일치로_검출하지_않는다() {
-        // 정산 1건의 MARGIN_POST, REFUND 원장을 동일한 시각으로 변경한다. 마지막 원장 방식이면 둘 중 무엇을 마지막으로 선택할지 알 수 없는 상황
+        // 정산 1건의 MARGIN_POST, REFUND 원장을 동일한 시각으로 변경한다. 마지막 원장 방식이면 둘 중 무엇을 마지막으로 선택할지 판단 불가능한 상황
         jdbcTemplate.update("""
                 UPDATE ledger_entry SET created_at = TIMESTAMPTZ '2026-11-14 10:00:00+09'
                 WHERE type IN ('MARGIN_POST', 'REFUND')""");

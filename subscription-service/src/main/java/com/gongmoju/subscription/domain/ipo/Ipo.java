@@ -21,10 +21,12 @@ import lombok.NoArgsConstructor;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-// 공모주. CHECK 제약(1 이상, 균등 물량 범위, 증거금률 범위, 기간)은 ERD_v1.1_DDL.sql 기준으로 schema.sql 또는 생성 로직에서 검증
+// 공모주. CHECK 제약(1 이상, 균등 물량 범위, 증거금률 범위, 기간)은 schema.sql에 있고, 등록(register)에서도 같은 규칙을 확인한다
 @Getter
 @Entity
 @Table(name = "ipo")
@@ -75,6 +77,71 @@ public class Ipo extends BaseEntity {
     @Version
     @Column(nullable = false)
     private long version;
+
+    // 환불일은 마감 시각의 KST 날짜와 비교한다 (schema.sql ck_ipo_refund_date와 같은 기준)
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
+    /**
+     * 관리자가 공모주를 등록한다 (API 명세 3.6, F-18). 상태는 OPEN으로 시작한다.
+     * 값의 범위와 필드끼리의 관계를 모두 확인하고, 어긴 규칙을 한꺼번에 details로 모아 던진다.
+     * 규칙은 schema.sql의 ck_ipo_* 제약과 같고, 증거금률과 마감 시각은 더 좁게 받는다.
+     *
+     * @param minQuantity 최소 청약 수량 (요청에 없으면 호출하는 쪽에서 기본값 10을 넣는다)
+     * @param marginRate  증거금률. 1(100%)만 받는다. 청약 접수가 100%만 처리하기 때문 (D-18)
+     * @param now         지금 시각. 마감 시각이 이미 지난 공모주는 등록하지 않는다 (시작 시각이 지난 것은 허용)
+     * @throws BusinessException 규칙을 어기면 VALIDATION_ERROR(400), details에 필드별 사유
+     */
+    public static Ipo register(String name, long offerPrice, long retailQuantity, long equalQuantity,
+                               long minQuantity, long maxQuantity, BigDecimal marginRate,
+                               Instant subscriptionStartAt, Instant subscriptionEndAt, LocalDate refundDate,
+                               Instant now) {
+        List<ApiErrorDetail> violations = new ArrayList<>();
+        if (offerPrice < 1) {
+            violations.add(new ApiErrorDetail("offerPrice", "1 이상이어야 합니다."));
+        }
+        if (retailQuantity < 1) {
+            violations.add(new ApiErrorDetail("retailQuantity", "1 이상이어야 합니다."));
+        }
+        // 균등 물량 x 2 ≥ 일반청약 물량. 곱하면 long 범위를 넘을 수 있어 빼서 비교한다
+        if (equalQuantity < retailQuantity - equalQuantity || equalQuantity > retailQuantity) {
+            violations.add(new ApiErrorDetail("equalQuantity", "일반청약 물량의 절반 이상, 일반청약 물량 이하여야 합니다."));
+        }
+        if (minQuantity < 1) {
+            violations.add(new ApiErrorDetail("minQuantity", "1 이상이어야 합니다."));
+        }
+        if (maxQuantity < minQuantity) {
+            violations.add(new ApiErrorDetail("maxQuantity", "최소 청약 수량 이상이어야 합니다."));
+        }
+        if (marginRate.compareTo(BigDecimal.ONE) != 0) {
+            violations.add(new ApiErrorDetail("marginRate", "증거금률은 1.00(100%)만 등록할 수 있습니다."));
+        }
+        if (!subscriptionEndAt.isAfter(subscriptionStartAt)) {
+            violations.add(new ApiErrorDetail("subscriptionEndAt", "청약 시작 시각보다 뒤여야 합니다."));
+        }
+        if (!subscriptionEndAt.isAfter(now)) {
+            violations.add(new ApiErrorDetail("subscriptionEndAt", "현재 시각보다 뒤여야 합니다."));
+        }
+        if (!refundDate.isAfter(LocalDate.ofInstant(subscriptionEndAt, KST))) {
+            violations.add(new ApiErrorDetail("refundDate", "청약 마감일(KST)보다 뒤여야 합니다."));
+        }
+        if (!violations.isEmpty()) {
+            throw new BusinessException(CommonErrorCode.VALIDATION_ERROR,
+                    CommonErrorCode.VALIDATION_ERROR.getMessage(), List.copyOf(violations));
+        }
+
+        Ipo ipo = new Ipo();
+        ipo.name = name;
+        ipo.offerPrice = offerPrice;
+        ipo.retailQuantity = retailQuantity;
+        ipo.equalQuantity = equalQuantity;
+        ipo.minQuantity = minQuantity;
+        ipo.maxQuantity = maxQuantity;
+        ipo.marginRate = marginRate;
+        ipo.subscriptionStartAt = subscriptionStartAt;
+        ipo.subscriptionEndAt = subscriptionEndAt;
+        ipo.refundDate = refundDate;
+        return ipo;
+    }
 
     /**
      * 청약을 받을 수 있는지 검증한다 (API 명세 F-02 사전 검증). 상태 → 청약 기간 → 수량 순서로 확인한다.

@@ -108,7 +108,7 @@ class IpoTest {
     }
 
     /**
-     * 공모주 생성 메서드가 없으므로(시드 데이터만 사용) 같은 패키지의 {@code protected} 생성자와 리플렉션으로 생성함.
+     * 상태 전이만 보므로 등록 규칙(register)을 거치지 않고 같은 패키지의 {@code protected} 생성자와 리플렉션으로 생성함.
      */
     private Ipo ipoEndingAt(Instant endAt) {
         Ipo ipo = new Ipo();

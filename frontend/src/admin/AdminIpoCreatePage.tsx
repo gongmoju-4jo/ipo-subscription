@@ -256,6 +256,7 @@ export function AdminIpoCreatePage() {
                 <input className="input" type="date" value={form.refundDate} onChange={(e) => set('refundDate')(e.target.value)} />
               </Field>
 
+              {submitted && hasError && <div className="error-text">입력값을 확인해 주세요 ({Object.keys(errors).length}개 항목)</div>}
               {error !== null && <SubmitError error={error} />}
               <button type="submit" className="btn btn-primary btn-block" disabled={busy || (submitted && hasError)}>
                 {busy ? '등록 중' : '공모주 등록'}

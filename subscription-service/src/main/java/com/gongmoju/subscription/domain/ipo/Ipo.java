@@ -97,7 +97,7 @@ public class Ipo extends BaseEntity {
      *
      * @param minQuantity 최소 청약 수량 (요청에 없으면 호출하는 쪽에서 기본값 10을 넣는다)
      * @param marginRate  증거금률. 1(100%)만 받는다. 청약 접수가 100%만 처리하기 때문 (D-18)
-     * @param now         지금 시각. 마감 시각이 이미 지난 공모주는 등록하지 않는다 (시작 시각이 지난 것은 허용)
+     * @param now         지금 시각. 마감 시각이 이미 지난 공모주는 등록하지 않는다 (시작 시각이 지난 것은 시연에서 바로 청약 중으로 등록하려고 허용)
      * @throws BusinessException 규칙을 어기면 VALIDATION_ERROR(400), details에 필드별 사유
      */
     public static Ipo register(String name, long offerPrice, long retailQuantity, long equalQuantity,

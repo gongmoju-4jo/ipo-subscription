@@ -40,7 +40,7 @@ public record IpoCreateRequest(
         @Schema(description = "증거금률. 없으면 1.00. 청약 접수가 100%만 처리해서 1.00만 받음 (D-18)", example = "1.00", nullable = true)
         BigDecimal marginRate,
 
-        @Schema(description = "청약 시작 시각 (시간대 포함). 이미 지난 시각도 받음", example = "2026-11-03T10:00:00+09:00")
+        @Schema(description = "청약 시작 시각 (시간대 포함). 이미 지난 시각도 받음 (시연에서 바로 청약 중으로 등록하려고)", example = "2026-11-03T10:00:00+09:00")
         @NotNull(message = "필수값입니다.")
         OffsetDateTime subscriptionStartAt,
 

@@ -23,6 +23,11 @@ class IpoRepositoryAdapter implements IpoRepository {
     private final EntityManager entityManager;
 
     @Override
+    public Ipo save(Ipo ipo) {
+        return jpaRepository.save(ipo);
+    }
+
+    @Override
     public Page<Ipo> findAll(Pageable pageable) {
         return jpaRepository.findAll(pageable);
     }

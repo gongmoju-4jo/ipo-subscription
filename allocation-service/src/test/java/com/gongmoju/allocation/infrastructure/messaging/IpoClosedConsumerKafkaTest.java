@@ -137,7 +137,7 @@ class IpoClosedConsumerKafkaTest {
         assertThat(roundStatus()).isEqualTo("FAILED");
     }
 
-    // ipo.closed 리스너에 처리 시간 한도(30분, application.yml)와 한 번에 1건 받기가 적용된다
+    // ipo.closed 리스너에 처리 시간 한도(15분, application.yml)와 한 번에 1건 받기가 적용된다
     @Test
     void appliesLongPollIntervalToIpoClosedListener() {
         MessageListenerContainer container = kafkaListenerEndpointRegistry.getListenerContainers().stream()
@@ -146,7 +146,7 @@ class IpoClosedConsumerKafkaTest {
                 .orElseThrow();
 
         Properties consumerProperties = container.getContainerProperties().getKafkaConsumerProperties();
-        assertThat(consumerProperties.getProperty(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG)).isEqualTo("1800000");
+        assertThat(consumerProperties.getProperty(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG)).isEqualTo("900000");
         assertThat(consumerProperties.getProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG)).isEqualTo("1");
     }
 

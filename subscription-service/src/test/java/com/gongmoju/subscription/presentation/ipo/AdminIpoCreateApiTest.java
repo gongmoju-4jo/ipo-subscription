@@ -199,6 +199,38 @@ class AdminIpoCreateApiTest {
         assertNoIpoSaved();
     }
 
+    @Test
+    @DisplayName("금액 계산이나 DB 제약 계산이 long 범위를 넘는 물량, 한도는 500이 아니라 400")
+    void register_returns400_whenAmountsOverflow() throws Exception {
+        Map<String, Object> body = validBody();
+        body.put("offerPrice", 1);
+        body.put("retailQuantity", Long.MAX_VALUE);
+        body.put("equalQuantity", Long.MAX_VALUE / 2 + 1);
+        body.put("maxQuantity", Long.MAX_VALUE);
+
+        mockMvc.perform(admin(post(ADMIN_IPOS)).content(json(body)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details[*].field", containsInAnyOrder("retailQuantity")));
+        assertNoIpoSaved();
+    }
+
+    @Test
+    @DisplayName("증거금률을 1로 보내도 등록 응답과 조회 응답 모두 1.00이다")
+    void register_returnsMarginRateWithScale2() throws Exception {
+        Map<String, Object> body = validBody();
+        body.put("marginRate", 1);
+
+        String created = mockMvc.perform(admin(post(ADMIN_IPOS)).content(json(body)))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(created).contains("\"marginRate\":1.00");
+
+        String ipoId = JsonPath.read(created, "$.data.ipoId");
+        String detail = mockMvc.perform(get("/api/v1/ipos/" + ipoId))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(detail).contains("\"marginRate\":1.00");
+    }
+
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"2026-11-03T10:00:00", "2026-11-03", "내일"})
     @DisplayName("시각 형식이 틀리면(시간대 없음 포함) 400")

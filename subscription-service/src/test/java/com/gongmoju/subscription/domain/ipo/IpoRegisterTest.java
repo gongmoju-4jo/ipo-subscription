@@ -69,20 +69,113 @@ class IpoRegisterTest {
         assertThat(ipo.getEqualQuantity()).isEqualTo(equal);
     }
 
-    @Test
-    @DisplayName("균등 물량 x 2가 long 범위를 넘어도 절반 이상이면 통과한다 (곱하지 않고 비교)")
-    void register_acceptsEqualQuantity_whenDoubleOverflowsLong() {
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {
+            // DB 제약이 균등 물량 x 2를 계산하므로 일반청약 물량은 long 최댓값의 절반까지 (공모가 1)
+            "물량 x 2가 범위 안 (공모가 1)       | 1 | 4611686018427387903 | 1 | true",
+            "물량 x 2가 범위 밖 (공모가 1)       | 1 | 4611686018427387904 | 1 | false",
+            // 배정 대금 합계 = 물량 x 공모가
+            "물량 x 공모가가 범위 안 (공모가 3)  | 3 | 3074457345618258602 | 1 | true",
+            "물량 x 공모가가 범위 밖 (공모가 3)  | 3 | 3074457345618258603 | 1 | false"
+    })
+    @DisplayName("일반청약 물량은 x 2와 x 공모가가 long 범위 안이어야 한다 (DB 제약, 배정 대금 계산)")
+    void register_limitsRetailQuantity_toCalculableRange(String title, long offerPrice, long retail, long max,
+                                                         boolean accepted) {
         // given
         Values v = new Values().with(x -> {
+            x.offerPrice = offerPrice;
+            x.retailQuantity = retail;
+            x.equalQuantity = retail;
+            x.minQuantity = 1;
+            x.maxQuantity = max;
+        });
+
+        // when, then
+        assertAcceptedOrField(v, accepted, "retailQuantity");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {
+            "청약 한도 x 공모가가 범위 안 | 2 | 4611686018427387903 | true",
+            "청약 한도 x 공모가가 범위 밖 | 2 | 4611686018427387904 | false"
+    })
+    @DisplayName("청약 한도 x 공모가(1인 최대 청약 금액)는 long 범위 안이어야 한다 (청약 금액 계산)")
+    void register_limitsMaxQuantity_toCalculableRange(String title, long offerPrice, long max, boolean accepted) {
+        // given
+        Values v = new Values().with(x -> {
+            x.offerPrice = offerPrice;
+            x.maxQuantity = max;
+        });
+
+        // when, then
+        assertAcceptedOrField(v, accepted, "maxQuantity");
+    }
+
+    @Test
+    @DisplayName("일반청약 물량이 아주 커도 균등 물량 검사는 넘치지 않고 물량 상한 사유만 나온다")
+    void register_reportsOnlyRetailLimit_whenRetailHuge() {
+        // given
+        Values v = new Values().with(x -> {
+            x.offerPrice = 1;
             x.retailQuantity = Long.MAX_VALUE;
             x.equalQuantity = Long.MAX_VALUE / 2 + 1;
+        });
+
+        // when, then
+        assertAcceptedOrField(v, false, "retailQuantity");
+    }
+
+    @Test
+    @DisplayName("시각은 마이크로초로 잘라 검사, 저장한다 (DB가 나노초를 반올림해 제약에 걸리지 않게)")
+    void register_truncatesTimesToMicros() {
+        // given: 마감 11/20 23:59:59.9999996 KST. 그대로 DB에 넣으면 11/21 0시로 반올림되어 환불일 11/21이 제약에 걸림
+        // 시작도 나노초 그대로면 DB가 올림해 마감과 같아질 수 있음 (기간 제약)
+        Values v = new Values().with(x -> {
+            x.startAt = Instant.parse("2026-11-04T01:00:00.000000600Z");
+            x.endAt = Instant.parse("2026-11-20T14:59:59.999999600Z");
+            x.refundDate = LocalDate.parse("2026-11-21");
         });
 
         // when
         Ipo ipo = v.register();
 
         // then
-        assertThat(ipo.getEqualQuantity()).isEqualTo(Long.MAX_VALUE / 2 + 1);
+        assertThat(ipo.getSubscriptionStartAt()).isEqualTo(Instant.parse("2026-11-04T01:00:00Z"));
+        assertThat(ipo.getSubscriptionEndAt()).isEqualTo(Instant.parse("2026-11-20T14:59:59.999999Z"));
+    }
+
+    @Test
+    @DisplayName("시작과 마감이 1마이크로초 안쪽으로만 다르면 같은 시각으로 보고 거절한다")
+    void register_rejectsPeriodShorterThanMicro() {
+        // given
+        Values v = new Values().with(x -> x.endAt = x.startAt.plusNanos(500));
+
+        // when, then
+        assertAcceptedOrField(v, false, "subscriptionEndAt");
+    }
+
+    @Test
+    @DisplayName("증거금률 1을 받으면 컬럼 자릿수에 맞춰 1.00으로 둔다 (등록 응답과 조회 응답이 같게)")
+    void register_storesMarginRateWithScale2() {
+        // given
+        Values v = new Values().with(x -> x.marginRate = new BigDecimal("1"));
+
+        // when
+        Ipo ipo = v.register();
+
+        // then
+        assertThat(ipo.getMarginRate().toPlainString()).isEqualTo("1.00");
+    }
+
+    private static void assertAcceptedOrField(Values v, boolean accepted, String field) {
+        if (accepted) {
+            assertThat(v.register().getStatus()).isEqualTo(IpoStatus.OPEN);
+            return;
+        }
+        assertThatThrownBy(v::register)
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getDetails())
+                .satisfies(d -> assertThat(d).extracting(ApiErrorDetail::field).containsExactly(field));
     }
 
     @Test

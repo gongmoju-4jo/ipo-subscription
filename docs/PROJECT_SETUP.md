@@ -216,7 +216,7 @@ docker-compose restart {서비스 이름}                                       
 
 #### Slack 장애 알림
 
-Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 시간 계속되면 Slack 채널로 장애 메시지를, 정상으로 돌아오면 복구 메시지를 보낸다.
+Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 시간 계속되면 Slack 채널로 장애 메시지를, 정상으로 돌아오면 복구 메시지를 보낸다. DLT 적재와 ERROR 로그는 생기면 바로 장애 메시지만 보낸다 (아래 표의 사건 알림).
 
 | 규칙 | 조건 | 지속 시간 |
 | --- | --- | --- |
@@ -225,8 +225,18 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 | `HikariConnectionPending` | DB 커넥션을 기다리는 요청이 있음 (`hikaricp_connections_pending > 0`) | 1분 |
 | `JvmHeapUsageHigh` | 힙 사용률 90% 초과 | 5분 |
 | `QueueAdmissionDown` | 게이트웨이 대기열 입장 처리 실패 (`queue_admission_failing{reason} > 0`). 사유별로 따로 뜨고 메시지에 사유가 나온다 (아래 표). 입장 허가가 나가지 않아 청약 신청이 모두 막힌다 | 1분 |
+| `DltMessageArrived` (사건 알림) | `{토픽}.DLT`로 보낸 메시지가 최근 5분 동안 늘어남 (재시작, 수집 공백 처리는 아래) (`kafka_producer_topic_record_send_total{topic=~".+[.]DLT"}`). 서비스, DLT 토픽별로 따로 뜨고 메시지에 토픽과 건수가 나온다 | 바로 |
+| `ErrorLogDetected` (사건 알림) | 서비스의 ERROR 로그가 최근 5분 동안 늘어남 (기동 중 ERROR 포함) (`logback_events_total{level="error"}`). 메시지에 건수가 나온다 | 바로 |
 
 - `QueueAdmissionDown`은 입장 스케줄러가 요청이 없어도 1초마다 Redis를 쓰는 결과라 트래픽이 없는 시간의 Redis 장애도 잡는다. 게이트웨이가 내려가 지표가 없을 때는 울리지 않는다 (`ServiceDown`이 잡는다)
+- 사건 알림(`DltMessageArrived`, `ErrorLogDetected`)은 **복구 메시지를 보내지 않는다**. 5분 동안 새로 생기지 않으면 조건이 풀리지만, 쌓인 DLT나 ERROR 원인은 그대로 남아 있어서다. 풀린 뒤 다시 생기면 새 장애 메시지가 간다
+  - 알림이 켜져 있는 5분 안에 같은 서비스(DLT는 같은 토픽)에서 더 생기면 새 메시지 없이 같은 알림으로 묶인다
+  - 알림에 실패 원인은 없다. DLT는 Kafka-UI의 해당 `.DLT` 토픽 메시지 헤더(`kafka_dlt-exception-message`), ERROR는 해당 서비스 로그로 확인한다
+  - ERROR 건수에는 서비스 코드 외 라이브러리 로거(Kafka 클라이언트, Eureka 등)의 ERROR도 들어간다. 정상 기동 때는 5개 서비스 모두 0건이다
+  - 건수는 "지금 누적값 - 5분 전까지 마지막으로 수집한 누적값"이다. 수집이 끊겼다 이어져도(Prometheus 재시작 등) 이미 알린 건은 다시 알리지 않고 공백 중에 생긴 건만 알린다. 서비스가 다시 떴으면(시작 시각이 바뀜) 누적값 전체가 새 건이다
+  - 1시간 넘게 수집하지 못한 서비스는 비교할 값이 없어, 그사이 다시 뜬 경우가 아니면 공백 중 생긴 건을 알리지 않는다
+  - 두 규칙의 식을 바꾸면 `bash docker/grafana/alert-tests/run.sh`로 확인한다 (Docker 필요, `SUCCESS`면 통과). 재시작, 수집 공백, 첫 샘플 직후 수집 실패 등 7가지 경우를 `rules.yml`의 실제 식으로 검사한다
+  - DLT로 보내도 ERROR 로그가 남지 않는 실패가 있다 (예: 서킷 브레이커가 열려 호출하지 못함). 그래서 두 알림을 따로 둔다
 - 사유 (`reason` 라벨, 게이트웨이 `AdmissionFailureReason`이 예외로 판단)
 
 | `reason` | 메시지 내용 | 판단 기준 |
@@ -238,9 +248,9 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 | `other` | 게이트웨이 내부 오류 (Redis 외 원인) | Redis와 무관한 오류 (코드 오류 등) |
 
 - DB 커넥션 대기, 힙 기준값은 정식 부하 측정(S1 600건/초)에서 울리지 않는 값이다 (대기가 이어진 최장 시간 약 25초, 힙 최대 76%)
-- 설정 파일은 `docker/grafana/provisioning/alerting/`: `rules.yml`(규칙), `contact-points.yml`(Slack 연락처, 메시지 형식), `policies.yml`(묶어 보내기, 반복 주기)
+- 설정 파일은 `docker/grafana/provisioning/alerting/`: `rules.yml`(규칙), `contact-points.yml`(Slack 연락처 2개: 복구 메시지를 보내는 `slack-incident`, 보내지 않는 `slack-incident-event`), `templates.yml`(두 연락처가 같이 쓰는 메시지 형식), `policies.yml`(묶어 보내기, 반복 주기, 사건 알림을 `slack-incident-event`로 보내는 경로)
   - 파일로 넣은 규칙은 Grafana 화면에서 수정할 수 없다. 파일을 고친 뒤 `docker-compose restart grafana`
-  - 연락처, 정책(메시지 형식 포함)은 재시작 후 약 1분 뒤에 적용된다. 그 사이에 나가는 알림은 이전 설정을 쓴다
+  - 연락처, 정책, 메시지 형식은 재시작 후 약 1분 뒤에 적용된다. 그 사이에 나가는 알림은 이전 설정을 쓴다
 - 처음 발생하면 30초 동안 같은 묶음을 모아 보내고, 묶음에 바뀐 것(새 알림, 복구)은 1분 간격으로 보낸다. 복구되지 않으면 1시간마다 다시 보낸다
 - 장애 메시지에는 서비스, 내용, 시작 시각이, 복구 메시지에는 서비스, 복구된 장애, 복구 시각이 나온다. 제목 앞에 환경 이름이 붙는다 (예: `[local] 🚨 장애 발생 ServiceDown`)
 
@@ -255,7 +265,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 - 📌 장애대응 채널 URL은 로컬 `.env`에 넣지 않는다. 넣으면 로컬에서 서비스를 껐다 켤 때마다 장애대응 채널에 알림이 간다
 - `SLACK_WEBHOOK_URL`이 비어 있으면 Grafana는 그대로 시작하고 알림만 나가지 않는다 (로그: `SLACK_WEBHOOK_URL이 비어 있어 Slack 장애 알림이 나가지 않습니다.`)
 - `.env`를 바꾼 뒤에는 `docker-compose up -d grafana` (재시작만으로는 환경변수가 바뀌지 않는다)
-- 배포 환경에서 부하 테스트를 할 때는 Grafana → Alerting → Silences에서 알림을 일시 중지한다
+- 배포 환경에서 부하 테스트를 할 때는 Grafana → Alerting → Silences에서 알림을 일시 중지한다 (DLT, ERROR 알림도 함께 울릴 수 있다)
 - Grafana가 내려가 있으면 알림도 나가지 않는다
 
 동작 확인 (개인 테스트 채널 URL을 넣은 상태)
@@ -264,6 +274,11 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 2. `docker-compose stop allocation-service` → 약 1분 30초 뒤 `[local] 🚨 장애 발생 ServiceDown`
 3. `docker-compose start allocation-service` → 서비스가 뜨고 1~2분 안에 `[local] ✅ 복구 ServiceDown`
 4. `docker-compose stop redis` → 약 2분 뒤 `[local] 🚨 장애 발생 QueueAdmissionDown` (내용: Redis 응답 없음) / `docker-compose start redis` → 1~2분 안에 `[local] ✅ 복구 QueueAdmissionDown`
+5. 계좌 서비스가 받는 토픽에 JSON이 아닌 메시지 1건을 넣는다 → 1분 안에 `[local] 🚨 장애 발생 DltMessageArrived` (account-service, `margin.reserve-requested.DLT`에 새 메시지 1건)와 `[local] 🚨 장애 발생 ErrorLogDetected` (account-service). 5분이 지나도 복구 메시지는 오지 않는다
+   ```bash
+   echo 'test:{broken' | docker exec -i ipo-kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka:29092 --topic margin.reserve-requested --reader-property parse.key=true --reader-property key.separator=:
+   ```
+   - Git Bash에서는 경로가 바뀌지 않도록 `docker` 바로 앞에 `MSYS_NO_PATHCONV=1 `을 붙인다 (`echo ... | MSYS_NO_PATHCONV=1 docker exec ...`). 줄 맨 앞에 붙이면 `echo`에만 적용된다
 
 #### IntelliJ 실행과 Docker 실행의 차이
 

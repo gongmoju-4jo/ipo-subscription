@@ -26,7 +26,7 @@ import java.util.stream.Collectors;
 @ConditionalOnProperty(prefix = "ledger.reconciliation", name = "enabled", havingValue = "true", matchIfMissing = true)
 class LedgerReconciliationScheduler {
 
-    // 상세 로그 라인 수, 검사별 불일치 발생 대상 ID 개수 상한. 버그 배포로 전체 계좌가 불일치하는 경우에도 로그 크기가 이 값 기준으로 제한된다
+    // 검사별 상세 로그 라인 수, 불일치 발생 대상 ID 개수 상한. 버그 배포로 전체 계좌가 불일치하는 경우에도 로그 크기가 이 값 기준으로 제한된다
     static final int DETAIL_LOG_LIMIT = 100;
 
     private final LedgerReconciliationService reconciliationService;
@@ -51,30 +51,34 @@ class LedgerReconciliationScheduler {
         logMismatches(result, elapsedMillis);
     }
 
-    // 요약 WARN 1줄 → 불일치가 있는 검사마다 ERROR 1줄 (건수, 불일치 발생 대상 ID) → 불일치마다 상세 WARN (기대값, 실제값)
+    // 요약 WARN 1줄 → 불일치가 있는 검사마다 ERROR 1줄 (건수, 불일치 발생 대상 ID) + 상세 WARN (기대값, 실제값)
     // ERROR는 검사 단위라 Slack 알림의 ERROR 건수는 최대 검사 수(4)이고, 불일치 건수만큼 증가하지 않는다
     private void logMismatches(LedgerReconciliationResult result, long elapsedMillis) {
-        List<LedgerMismatch> mismatches = result.mismatches();
         log.warn("[원장 대사] 불일치 총 {}건. 자동으로 수정하지 않으니 운영자 확인 필요. 실행 시간 {}ms, 검사별 불일치 건수: {}",
-                mismatches.size(), elapsedMillis, countsByCheck(result));
+                result.mismatches().size(), elapsedMillis, countsByCheck(result));
 
         for (LedgerReconciliationCheck check : LedgerReconciliationCheck.values()) {
             List<LedgerMismatch> ofCheck = result.mismatchesOf(check);
             if (!ofCheck.isEmpty()) {
                 log.error("[원장 대사] 불일치 검사={}({}) {}건. 불일치 발생 대상 ID: {}",
                         check, check.getDescription(), ofCheck.size(), targetIds(ofCheck));
+                logDetails(ofCheck);
             }
         }
+    }
 
-        int logged = Math.min(mismatches.size(), DETAIL_LOG_LIMIT);
+    // 검사 1개의 상세 WARN. 상한은 검사별로 적용해서, 이전 검사의 불일치가 많아도 이후 검사의 상세가 누락되지 않는다
+    private void logDetails(List<LedgerMismatch> ofCheck) {
+        int logged = Math.min(ofCheck.size(), DETAIL_LOG_LIMIT);
         for (int i = 0; i < logged; i++) {
-            LedgerMismatch mismatch = mismatches.get(i);
+            LedgerMismatch mismatch = ofCheck.get(i);
             log.warn("[원장 대사] 불일치 상세 {}/{}: 검사={}({}), accountId={}, marginId={}, {}",
-                    i + 1, mismatches.size(), mismatch.check(), mismatch.check().getDescription(),
+                    i + 1, ofCheck.size(), mismatch.check(), mismatch.check().getDescription(),
                     mismatch.accountId(), mismatch.marginId(), mismatch.detail());
         }
-        if (mismatches.size() > logged) {
-            log.warn("[원장 대사] 불일치 상세 {}건 생략. 상세 로그 상한 {}건", mismatches.size() - logged, DETAIL_LOG_LIMIT);
+        if (ofCheck.size() > logged) {
+            log.warn("[원장 대사] 불일치 상세 {}건 생략 (검사={}). 검사별 상세 로그 상한 {}건",
+                    ofCheck.size() - logged, ofCheck.get(0).check(), DETAIL_LOG_LIMIT);
         }
     }
 

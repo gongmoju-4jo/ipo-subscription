@@ -10,11 +10,13 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.IntStream;
 
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.LEDGER_SUM;
+import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_BALANCE;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_PENDING_LEDGER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -68,10 +70,28 @@ class LedgerReconciliationSchedulerTest {
                         + marginId)
                 .contains("[원장 대사] 불일치 총 3건. 자동으로 수정하지 않으니 운영자 확인 필요")
                 .contains("MARGIN_BALANCE=0, LEDGER_SUM=2, MARGIN_PENDING_LEDGER=1, MARGIN_STATUS_LEDGER=0")
-                .contains("[원장 대사] 불일치 상세 1/3: 검사=LEDGER_SUM(잔고 = 원장 금액 합계), accountId=" + firstAccountId
+                .contains("[원장 대사] 불일치 상세 1/2: 검사=LEDGER_SUM(잔고 = 원장 금액 합계), accountId=" + firstAccountId
                         + ", marginId=null, 예수금=65000, 원장 예수금 합계=75000")
-                .contains("[원장 대사] 불일치 상세 3/3: 검사=MARGIN_PENDING_LEDGER(증거금마다 인출 원장 1줄, 금액 = 증거금), accountId="
+                .contains("[원장 대사] 불일치 상세 1/1: 검사=MARGIN_PENDING_LEDGER(증거금마다 인출 원장 1줄, 금액 = 증거금), accountId="
                         + firstAccountId + ", marginId=" + marginId + ", 증거금=15000, 인출 원장 2줄");
+    }
+
+    @Test
+    void 이전_검사의_불일치가_상한을_초과해도_이후_검사의_상세를_기록한다(CapturedOutput output) {
+        // 청약증거금 검사 101건 + 잔고 합계 검사 1건. 상한을 전체 기준으로 적용하면 잔고 합계 검사의 상세가 누락된다
+        UUID lastAccountId = UUID.randomUUID();
+        List<LedgerMismatch> mismatches = new ArrayList<>(IntStream.range(0, LedgerReconciliationScheduler.DETAIL_LOG_LIMIT + 1)
+                .mapToObj(i -> new LedgerMismatch(MARGIN_BALANCE, UUID.randomUUID(), null, "번호=" + i))
+                .toList());
+        mismatches.add(new LedgerMismatch(LEDGER_SUM, lastAccountId, null, "예수금=1000, 원장 예수금 합계=0"));
+        when(reconciliationService.reconcile()).thenReturn(new LedgerReconciliationResult(mismatches));
+
+        scheduler.reconcile();
+
+        assertThat(output.getOut())
+                .contains("[원장 대사] 불일치 상세 1건 생략 (검사=MARGIN_BALANCE). 검사별 상세 로그 상한 100건")
+                .contains("[원장 대사] 불일치 상세 1/1: 검사=LEDGER_SUM(잔고 = 원장 금액 합계), accountId=" + lastAccountId
+                        + ", marginId=null, 예수금=1000, 원장 예수금 합계=0");
     }
 
     @Test
@@ -87,7 +107,7 @@ class LedgerReconciliationSchedulerTest {
         assertThat(output.getOut())
                 .contains("불일치 상세 100/105:")
                 .doesNotContain("불일치 상세 101/105:")
-                .contains("[원장 대사] 불일치 상세 5건 생략. 상세 로그 상한 100건");
+                .contains("[원장 대사] 불일치 상세 5건 생략 (검사=LEDGER_SUM). 검사별 상세 로그 상한 100건");
         // 불일치 발생 대상 ID는 100개 + "외 5건"
         assertThat(errorLines(output)).singleElement().asString()
                 .contains("105건. 불일치 발생 대상 ID: " + mismatches.get(0).accountId())

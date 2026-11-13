@@ -56,7 +56,8 @@ export function IpoDetailPage() {
         </Card>
       </div>
 
-      <LotteryReplayCard ipoId={ipoId} status={d.status} />
+      {/* 공모주가 바뀌면 카드를 새로 생성해 이전 공모주의 재현 결과, 진행 중 요청을 초기화한다 */}
+      <LotteryReplayCard key={ipoId} ipoId={ipoId} status={d.status} />
     </div>
   );
 }

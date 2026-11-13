@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { cloneElement, useId, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { adminIpoApi } from '../api/endpoints';
@@ -278,11 +278,13 @@ function CreatedStatus({ ipo }: { ipo: IpoCreateResponse }) {
   return <Badge tone={st.tone}>{st.label}</Badge>;
 }
 
+// 레이블과 입력 요소를 id로 연결한다 (스크린 리더가 입력 필드를 구분 가능)
 function Field({ label, error, hint, children }: { label: string; error?: string; hint?: string; children: JSX.Element }) {
+  const id = useId();
   return (
     <div className="field">
-      <label>{label}</label>
-      {children}
+      <label htmlFor={id}>{label}</label>
+      {cloneElement(children, { id })}
       {error ? <span className="error-text">{error}</span> : hint && <span className="hint">{hint}</span>}
     </div>
   );
@@ -301,7 +303,7 @@ function SubmitError({ error }: { error: unknown }) {
       ))}
       {unknownResult && (
         <div style={{ fontSize: 13, marginTop: 4 }}>
-          등록됐을 수 있어요. <Link to="/ipos" style={{ fontWeight: 700 }}>공모주 목록</Link>을 확인한 후 다시 시도해 주세요
+          등록됐을 수 있어요. <Link to="/ipos" style={{ fontWeight: 700 }}>공모주 목록</Link>의 "전체" 탭을 확인한 후 다시 시도해 주세요
         </div>
       )}
     </div>

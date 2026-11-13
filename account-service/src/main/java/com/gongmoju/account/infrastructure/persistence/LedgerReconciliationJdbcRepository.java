@@ -15,7 +15,7 @@ import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationChe
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_PENDING_LEDGER;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_STATUS_LEDGER;
 
-// 원장 대사 검사 SQL (PostgreSQL). loadtest/sql/verify.sql의 계좌 단독 검사를 이동했고, 공모주 조건 없이 전체 계좌, 증거금을 검사한다
+// 원장 대사 검사 SQL (PostgreSQL). loadtest/sql/verify.sql의 계좌 단독 검사를 기반으로 구현했고, 공모주 조건 없이 전체 계좌, 증거금을 검사한다
 // 집계 조회라 JPA 대신 JdbcTemplate을 사용한다. 호출한 트랜잭션의 커넥션을 동일하게 사용한다
 // 검사마다 불일치 행만 조회하고, detail에 원인 확인용 기대값과 실제값을 기록한다
 @Repository

@@ -8,7 +8,7 @@ import { useIsAdmin } from './flag';
 
 // 관리자 추첨 재현. 저장된 추첨 시드, 공모주 조건, 청약 수량으로 배정을 다시 계산해 저장된 결과와 청약마다 비교한다
 // 읽기만 하는 API라 여러 번 실행해도 데이터 변경 없음. 배정 완료(ALLOCATED) 공모주에서만 표시한다
-export function LotteryReplayCard({ ipoId, status }: { ipoId: string; status: IpoStatus }) {
+export function AllocationReplayCard({ ipoId, status }: { ipoId: string; status: IpoStatus }) {
   const isAdmin = useIsAdmin();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);

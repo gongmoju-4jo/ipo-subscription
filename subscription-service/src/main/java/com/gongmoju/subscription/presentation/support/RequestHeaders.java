@@ -18,6 +18,8 @@ public final class RequestHeaders {
 
     public static final String USER_ID = "X-User-Id";
     public static final String RECEIVED_AT = "X-Request-Received-At";
+    // 관리자 API에서 역할 확인용. 없거나 ADMIN이 아니면 403 (common UserRole.from)
+    public static final String USER_ROLE = "X-User-Role";
 
     /**
      * @param header {@code X-User-Id} 헤더 값

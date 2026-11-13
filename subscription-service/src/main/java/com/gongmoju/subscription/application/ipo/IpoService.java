@@ -3,6 +3,7 @@ package com.gongmoju.subscription.application.ipo;
 import com.gongmoju.common.exception.BusinessException;
 import com.gongmoju.common.exception.CommonErrorCode;
 import com.gongmoju.common.util.PageableUtils;
+import com.gongmoju.subscription.domain.ipo.Ipo;
 import com.gongmoju.subscription.domain.ipo.IpoRepository;
 import com.gongmoju.subscription.domain.ipo.IpoStatus;
 import lombok.RequiredArgsConstructor;
@@ -11,6 +12,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -23,6 +25,22 @@ public class IpoService {
     private static final Set<String> LIST_SORTABLE_FIELDS = Set.of("createdAt");
 
     private final IpoRepository ipoRepository;
+
+    /**
+     * 관리자가 공모주를 등록한다 (API 명세 3.6, F-18). 등록 규칙은 도메인({@link Ipo#register})이 확인한다.
+     * 마감 시각은 지금 시각과 비교한다 (이미 지난 마감은 등록하지 않음).
+     *
+     * @param command 등록 값 (선택값은 기본값이 채워져 있음)
+     * @return 등록한 공모주 (등록 시각 포함). 상태는 OPEN
+     * @throws BusinessException 등록 규칙을 어기면 VALIDATION_ERROR(400)
+     */
+    @Transactional
+    public IpoResult register(IpoRegisterCommand command) {
+        Ipo ipo = Ipo.register(command.name(), command.offerPrice(), command.retailQuantity(), command.equalQuantity(),
+                command.minQuantity(), command.maxQuantity(), command.marginRate(),
+                command.subscriptionStartAt(), command.subscriptionEndAt(), command.refundDate(), Instant.now());
+        return IpoResult.from(ipoRepository.save(ipo));
+    }
 
     /**
      * 공모주 목록을 조회한다. 청약 시작 전, 진행 중, 마감된 종목을 모두 돌려준다.

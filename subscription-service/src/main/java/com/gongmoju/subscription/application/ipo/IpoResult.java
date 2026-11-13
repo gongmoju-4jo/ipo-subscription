@@ -23,12 +23,15 @@ public record IpoResult(
         Instant subscriptionStartAt,
         Instant subscriptionEndAt,
         LocalDate refundDate,
-        IpoStatus status
+        IpoStatus status,
+        // 등록 시각. 등록 응답(API 명세 3.6)에만 내보내고 조회 응답에는 넣지 않는다
+        Instant createdAt
 ) {
 
     public static IpoResult from(Ipo ipo) {
         return new IpoResult(ipo.getId(), ipo.getName(), ipo.getOfferPrice(), ipo.getRetailQuantity(),
                 ipo.getEqualQuantity(), ipo.getMinQuantity(), ipo.getMaxQuantity(), ipo.getMarginRate(),
-                ipo.getSubscriptionStartAt(), ipo.getSubscriptionEndAt(), ipo.getRefundDate(), ipo.getStatus());
+                ipo.getSubscriptionStartAt(), ipo.getSubscriptionEndAt(), ipo.getRefundDate(), ipo.getStatus(),
+                ipo.getCreatedAt());
     }
 }

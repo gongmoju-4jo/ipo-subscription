@@ -21,7 +21,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// 공모주별 확정 청약 목록 내부 API (API 명세 4.1). 청약은 청약 API가 저장하므로 공모주와 청약을 DB에 직접 넣는다 (H2 메모리 DB)
+// 공모주별 확정 청약 목록 내부 API의 page 방식 (API 명세 4.1). 청약은 청약 API가 저장하므로 공모주와 청약을 DB에 직접 넣는다 (H2 메모리 DB)
 // 배정 서비스는 사용자 헤더 없이 호출하므로 요청에 X-User-Id를 넣지 않는다
 @SpringBootTest(properties = {
         "eureka.client.enabled=false",
@@ -52,8 +52,8 @@ class InternalSubscriptionListApiTest {
     }
 
     @Test
-    void 확정_청약이_없으면_빈_목록을_기본_page_0_size_500으로_응답한다() throws Exception {
-        mockMvc.perform(list(IPO_ID))
+    void 확정_청약이_없으면_빈_목록을_기본_size_500으로_응답한다() throws Exception {
+        mockMvc.perform(pageList(IPO_ID))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.message").value("목록을 조회했습니다."))
@@ -68,7 +68,7 @@ class InternalSubscriptionListApiTest {
     void 항목은_명세의_6개_필드를_KST_시각으로_담는다() throws Exception {
         UUID subscriptionId = insertSubscription(UUID.randomUUID(), IPO_ID, "CONFIRMED");
 
-        String body = mockMvc.perform(list(IPO_ID))
+        String body = mockMvc.perform(pageList(IPO_ID))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].subscriptionId").value(subscriptionId.toString()))
                 .andExpect(jsonPath("$.data.items[0].userId").value(USER_ID.toString()))
@@ -91,7 +91,7 @@ class InternalSubscriptionListApiTest {
         }
         insertSubscription(UUID.randomUUID(), otherIpo, "CONFIRMED");
 
-        mockMvc.perform(list(IPO_ID))
+        mockMvc.perform(pageList(IPO_ID))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.totalElements").value(1))
                 .andExpect(jsonPath("$.data.items[0].subscriptionId").value(confirmed.toString()));
@@ -129,14 +129,14 @@ class InternalSubscriptionListApiTest {
         UUID first = insertSubscription(UUID.fromString("10000000-0000-3000-8000-000000000001"), IPO_ID, "CONFIRMED");
         insertSubscription(UUID.fromString("20000000-0000-3000-8000-000000000001"), IPO_ID, "CONFIRMED");
 
-        mockMvc.perform(list(IPO_ID).param("sort", "subscriptionId,desc"))
+        mockMvc.perform(pageList(IPO_ID).param("sort", "subscriptionId,desc"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].subscriptionId").value(first.toString()));
     }
 
     @Test
     void size는_최대_1000까지_허용한다() throws Exception {
-        mockMvc.perform(list(IPO_ID).param("size", "1000"))
+        mockMvc.perform(pageList(IPO_ID).param("size", "1000"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.size").value(1000));
     }
@@ -164,12 +164,14 @@ class InternalSubscriptionListApiTest {
                 new String[]{"size", "0"}, new String[]{"size", "1001"}, new String[]{"size", "abc"});
 
         for (String[] param : invalid) {
-            mockMvc.perform(list(IPO_ID).param(param[0], param[1]))
+            // page 값 검사는 page를 그 값으로, size 값 검사는 page=0과 함께 보낸다 (둘 다 page 방식)
+            MockHttpServletRequestBuilder request = "page".equals(param[0]) ? list(IPO_ID) : pageList(IPO_ID);
+            mockMvc.perform(request.param(param[0], param[1]))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
                     .andExpect(jsonPath("$.error.details[0].field").value(param[0]));
         }
-        mockMvc.perform(list(IPO_ID).param("size", "1001"))
+        mockMvc.perform(pageList(IPO_ID).param("size", "1001"))
                 .andExpect(jsonPath("$.error.message").value("페이지 요청 값이 올바르지 않습니다."))
                 .andExpect(jsonPath("$.error.details[0].reason").value("페이지 크기는 1 이상 1000 이하여야 합니다."));
     }
@@ -184,7 +186,7 @@ class InternalSubscriptionListApiTest {
 
     @Test
     void 공모주가_없으면_404다() throws Exception {
-        mockMvc.perform(list(UUID.fromString("8b2d0000-0000-4000-8000-000000000099")))
+        mockMvc.perform(pageList(UUID.fromString("8b2d0000-0000-4000-8000-000000000099")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"))
                 .andExpect(jsonPath("$.error.details[0].field").value("ipoId"));
@@ -196,7 +198,7 @@ class InternalSubscriptionListApiTest {
         UUID allocated = insertIpo(UUID.fromString("8b2d0000-0000-4000-8000-000000000004"), "ALLOCATED");
 
         for (UUID ipoId : List.of(open, allocated)) {
-            mockMvc.perform(list(ipoId))
+            mockMvc.perform(pageList(ipoId))
                     .andExpect(status().isConflict())
                     .andExpect(jsonPath("$.error.code").value("INVALID_STATUS_TRANSITION"))
                     .andExpect(jsonPath("$.error.details[0].field").value("ipoId"))
@@ -206,6 +208,11 @@ class InternalSubscriptionListApiTest {
 
     private MockHttpServletRequestBuilder list(UUID ipoId) {
         return get("/internal/ipos/" + ipoId + "/subscriptions").param("status", "CONFIRMED");
+    }
+
+    // page 방식 첫 페이지. page가 없으면 키셋 방식으로 응답한다 (#138, 키셋은 InternalSubscriptionKeysetApiTest)
+    private MockHttpServletRequestBuilder pageList(UUID ipoId) {
+        return list(ipoId).param("page", "0");
     }
 
     // 값은 API 명세 4.1 예시와 같다 (100주, 증거금 1,500,000원, 접수 2026-11-03T10:00:00+09:00)

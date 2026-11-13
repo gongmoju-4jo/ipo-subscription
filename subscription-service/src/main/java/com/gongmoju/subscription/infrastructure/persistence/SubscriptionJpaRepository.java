@@ -120,4 +120,22 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
             countQuery = "select count(s) from Subscription s where s.ipo.id = :ipoId and s.status = :status")
     Page<Subscription> findByIpoIdAndStatus(@Param("ipoId") UUID ipoId, @Param("status") SubscriptionStatus status,
                                             Pageable pageable);
+
+    // 확정 청약 키셋 조회 (#138). 상태를 바인딩 값이 아니라 SQL에 'CONFIRMED'로 적어야 부분 인덱스 ix_subscription_confirmed_ipo를 쓴다
+    // (바인딩 값이면 재사용하는 실행 계획이 어떤 상태인지 몰라 부분 인덱스를 고를 수 없음). 첫 요청과 다음 요청을 나눠 ID 위치로 바로 찾게 한다
+    @Query(value = """
+            SELECT * FROM subscription s
+            WHERE s.ipo_id = :ipoId AND s.status = 'CONFIRMED'
+            ORDER BY s.subscription_id
+            LIMIT :limit""", nativeQuery = true)
+    List<Subscription> findConfirmedByIpoId(@Param("ipoId") UUID ipoId, @Param("limit") int limit);
+
+    @Query(value = """
+            SELECT * FROM subscription s
+            WHERE s.ipo_id = :ipoId AND s.status = 'CONFIRMED' AND s.subscription_id > :afterSubscriptionId
+            ORDER BY s.subscription_id
+            LIMIT :limit""", nativeQuery = true)
+    List<Subscription> findConfirmedByIpoIdAfter(@Param("ipoId") UUID ipoId,
+                                                 @Param("afterSubscriptionId") UUID afterSubscriptionId,
+                                                 @Param("limit") int limit);
 }

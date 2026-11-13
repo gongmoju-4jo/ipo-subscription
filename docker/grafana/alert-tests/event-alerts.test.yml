@@ -1,0 +1,109 @@
+# 사건 알림(DltMessageArrived, ErrorLogDetected) 식의 회귀 테스트 (promtool test rules)
+# run.sh가 rules.yml의 실제 식으로 __DLT_EXPR__, __ERROR_EXPR__를 바꿔 실행한다. 이 파일만 직접 실행하지 않는다
+# 시각은 테스트 시작(0초) 기준이고, 수집 간격은 실제와 같은 5초다
+# 값 표기: 'a x n'은 a를 n+1번, '_'는 수집 없음, 'stale'은 수집 실패로 생기는 끊김 표시
+rule_files: []
+evaluation_interval: 5s
+tests:
+  # 1. 첫 DLT 샘플(2:05) 하나 직후 수집 실패(2:10), 6:30 재개. 새 건이 없으므로 재개 뒤 다시 알리지 않는다
+  #    (샘플이 서브쿼리 간격 사이에만 있어 15초 간격이면 놓치던 경우)
+  - interval: 5s
+    input_series:
+      - series: 'process_start_time_seconds{job="account-service"}'
+        values: '10x25 stale _x50 10x200'
+      - series: 'kafka_producer_topic_record_send_total{job="account-service",topic="margin.reserve-requested.DLT"}'
+        values: '_x25 1 stale _x50 1x200'
+    promql_expr_test:
+      - expr: '__DLT_EXPR__'
+        eval_time: 7m30s
+        exp_samples: []
+      - expr: '__DLT_EXPR__'
+        eval_time: 9m
+        exp_samples: []
+
+  # 2. 재시작 전 프로세스가 2건, 재시작(시작 시각 400초) 뒤 1건. 라벨이 같아도 재시작 전 값을 빼지 않고 1건으로 알린다
+  - interval: 5s
+    input_series:
+      - series: 'process_start_time_seconds{job="account-service"}'
+        values: '100x59 stale _x10 400x200'
+      - series: 'kafka_producer_topic_record_send_total{job="account-service",topic="margin.void-requested.DLT"}'
+        values: '2x59 stale _x20 1x200'
+    promql_expr_test:
+      - expr: '__DLT_EXPR__'
+        eval_time: 7m
+        exp_samples:
+          - labels: '{job="account-service",topic="margin.void-requested.DLT"}'
+            value: 1
+
+  # 3. 같은 프로세스, 3:00부터 6분 수집 공백, 그사이 3 → 4. 공백 전 3은 다시 알리지 않고 공백 중 1건만 알린다
+  - interval: 5s
+    input_series:
+      - series: 'process_start_time_seconds{job="account-service"}'
+        values: '10x36 stale _x72 10x200'
+      - series: 'kafka_producer_topic_record_send_total{job="account-service",topic="margin.reserve-requested.DLT"}'
+        values: '3x36 stale _x72 4x200'
+    promql_expr_test:
+      - expr: '__DLT_EXPR__'
+        eval_time: 10m
+        exp_samples:
+          - labels: '{job="account-service",topic="margin.reserve-requested.DLT"}'
+            value: 1
+
+  # 4. 30분 넘게 떠 있던 프로세스에서 DLT 토픽에 처음 전송 (시계열이 1로 처음 생김). 1건으로 알린다
+  - interval: 5s
+    input_series:
+      - series: 'process_start_time_seconds{job="account-service"}'
+        values: '10x400'
+      - series: 'kafka_producer_topic_record_send_total{job="account-service",topic="allocation.result.DLT"}'
+        values: '_x360 1x40'
+    promql_expr_test:
+      - expr: '__DLT_EXPR__'
+        eval_time: 30m30s
+        exp_samples:
+          - labels: '{job="account-service",topic="allocation.result.DLT"}'
+            value: 1
+
+  # 5. 같은 프로세스, 1시간 넘는 수집 공백, 새 건 없음. 비교할 값이 없어도 오래 떠 있던 프로세스라 알리지 않는다
+  - interval: 5s
+    input_series:
+      - series: 'process_start_time_seconds{job="account-service"}'
+        values: '10x12 stale _x840 10x100'
+      - series: 'kafka_producer_topic_record_send_total{job="account-service",topic="margin.reserve-requested.DLT"}'
+        values: '3x12 stale _x840 3x100'
+    promql_expr_test:
+      - expr: '__DLT_EXPR__'
+        eval_time: 72m
+        exp_samples: []
+
+  # 6. ERROR: 정상 기동(0)은 알리지 않고, 기동 중 ERROR(재시작 뒤 2)는 알린다. 재시작 전 5는 빼지 않는다
+  - interval: 5s
+    input_series:
+      - series: 'process_start_time_seconds{job="subscription-service"}'
+        values: '10x400'
+      - series: 'logback_events_total{job="subscription-service",level="error"}'
+        values: '0x400'
+      - series: 'process_start_time_seconds{job="account-service"}'
+        values: '100x59 stale _x10 400x200'
+      - series: 'logback_events_total{job="account-service",level="error"}'
+        values: '5x59 stale _x10 2x200'
+    promql_expr_test:
+      - expr: '__ERROR_EXPR__'
+        eval_time: 7m
+        exp_samples:
+          - labels: '{job="account-service"}'
+            value: 2
+
+  # 7. ERROR: 첫 ERROR 샘플(2:05) 하나 직후 수집 실패, 재개 뒤 새 ERROR 없음. 다시 알리지 않는다
+  - interval: 5s
+    input_series:
+      - series: 'process_start_time_seconds{job="account-service"}'
+        values: '10x25 stale _x50 10x200'
+      - series: 'logback_events_total{job="account-service",level="error"}'
+        values: '0x24 1 stale _x50 1x200'
+    promql_expr_test:
+      - expr: '__ERROR_EXPR__'
+        eval_time: 7m30s
+        exp_samples: []
+      - expr: '__ERROR_EXPR__'
+        eval_time: 9m
+        exp_samples: []

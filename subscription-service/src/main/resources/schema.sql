@@ -56,6 +56,12 @@ CREATE INDEX IF NOT EXISTS ix_outbox_unpublished
     ON outbox (created_at)
     WHERE published_at IS NULL;
 
+-- 확정 청약 목록 조회 (배정이 마감 뒤 받아 감, 청약 ID 순, #138). 없으면 공모주의 확정 청약을 모두 꺼내 정렬함
+-- 확정 청약만 담아 작다. 배정 뒤 ALLOCATED, REFUNDED로 바뀌면 빠지고, 접수(PENDING 저장)할 때는 갱신하지 않는다
+CREATE INDEX IF NOT EXISTS ix_subscription_confirmed_ipo
+    ON subscription (ipo_id, subscription_id)
+    WHERE status = 'CONFIRMED';
+
 -- 응답 시간 초과 처리 대상 조회 (PENDING만, 마지막 요청 시각 순). 없으면 (ipo_id, status) 인덱스 전체를 훑음
 CREATE INDEX IF NOT EXISTS ix_subscription_pending_last_requested
     ON subscription (last_requested_at)

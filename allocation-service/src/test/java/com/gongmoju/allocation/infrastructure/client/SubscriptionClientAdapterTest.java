@@ -112,6 +112,19 @@ class SubscriptionClientAdapterTest {
         verify(client, times(1)).getConfirmedSubscriptions(eq(IPO_ID), eq("CONFIRMED"), any(), eq(500));
     }
 
+    // 다음이 있다면서 마지막 항목이 방금 보낸 커서와 같으면 같은 요청을 반복하지 않고 두 번째 응답에서 멈춘다
+    @Test
+    void stopsWhenNextCursorDoesNotAdvance() {
+        ConfirmedSubscriptionItem first = item("00000000-0000-4000-8000-000000000001", 100);
+        givenPage(null, List.of(first), true, 3L);
+        givenPage(first.subscriptionId(), List.of(first), true, null);
+
+        assertThatThrownBy(() -> adapter.readAll(IPO_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("커서가 바뀌지 않았습니다");
+        verify(client, times(2)).getConfirmedSubscriptions(eq(IPO_ID), eq("CONFIRMED"), any(), eq(500));
+    }
+
     private void givenPage(UUID afterSubscriptionId, List<ConfirmedSubscriptionItem> items, boolean hasNext, Long totalElements) {
         when(client.getConfirmedSubscriptions(IPO_ID, "CONFIRMED", afterSubscriptionId, 500))
                 .thenReturn(ApiResponse.success(new ConfirmedSubscriptionKeysetPage(items, 500, hasNext, totalElements)));

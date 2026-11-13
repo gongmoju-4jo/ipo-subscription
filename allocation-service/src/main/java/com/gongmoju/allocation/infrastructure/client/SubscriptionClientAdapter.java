@@ -40,6 +40,7 @@ class SubscriptionClientAdapter implements ConfirmedSubscriptionReader {
         // 전체 건수만큼 미리 잡아 두어 200만 건을 받는 동안 목록을 여러 번 늘려 복사하지 않는다
         List<ConfirmedSubscription> subscriptions = new ArrayList<>((int) Math.min(totalElements, Integer.MAX_VALUE));
         subscriptions.addAll(toConfirmedSubscriptions(page));
+        UUID cursor = null;
         while (page.hasNext()) {
             // 항목 없이 다음이 있다고 하거나 전체 건수보다 많이 받으면 응답이 잘못된 것이다. 계속 요청하지 않고 멈춘다
             if (page.items().isEmpty() || subscriptions.size() > totalElements) {
@@ -47,7 +48,14 @@ class SubscriptionClientAdapter implements ConfirmedSubscriptionReader {
                         + ", totalElements=" + totalElements + ", received=" + subscriptions.size()
                         + ", lastItemCount=" + page.items().size());
             }
-            page = fetch(ipoId, page.items().getLast().subscriptionId());
+            // 다음 커서가 방금 보낸 커서와 같으면 목록이 앞으로 가지 않은 것이다. 같은 요청을 반복하지 않고 멈춘다
+            UUID nextCursor = page.items().getLast().subscriptionId();
+            if (nextCursor.equals(cursor)) {
+                throw new IllegalStateException("확정 청약 목록의 다음 커서가 바뀌지 않았습니다. ipoId=" + ipoId
+                        + ", afterSubscriptionId=" + cursor + ", received=" + subscriptions.size());
+            }
+            cursor = nextCursor;
+            page = fetch(ipoId, cursor);
             subscriptions.addAll(toConfirmedSubscriptions(page));
         }
         if (subscriptions.size() != totalElements) {

@@ -117,7 +117,10 @@ public class Ipo extends BaseEntity {
             violations.add(new ApiErrorDetail("retailQuantity", "공모가와 일반청약 물량이 너무 커서 금액을 계산할 수 없습니다."));
         }
         // 균등 물량 x 2 ≥ 일반청약 물량. 일반청약 물량이 범위를 넘은 경우에도 넘치지 않게 빼서 비교한다
-        if (equalQuantity < retailQuantity - equalQuantity || equalQuantity > retailQuantity) {
+        // 균등 물량이 음수면 뺄셈이 넘칠 수 있어(아주 작은 음수는 비교를 통과함) 1 이상인지 먼저 본다
+        if (equalQuantity < 1) {
+            violations.add(new ApiErrorDetail("equalQuantity", "1 이상이어야 합니다."));
+        } else if (equalQuantity < retailQuantity - equalQuantity || equalQuantity > retailQuantity) {
             violations.add(new ApiErrorDetail("equalQuantity", "일반청약 물량의 절반 이상, 일반청약 물량 이하여야 합니다."));
         }
         if (minQuantity < 1) {

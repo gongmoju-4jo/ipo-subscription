@@ -228,10 +228,12 @@ class IpoRegisterTest {
     @ParameterizedTest(name = "{0}")
     @CsvSource(delimiter = '|', value = {
             "공모가 0                          | offerPrice",
-            "일반청약 물량 0                   | retailQuantity",
+            "일반청약 물량 0 (균등 물량도 0)   | retailQuantity;equalQuantity",
             "균등 물량이 절반 미만 (100 중 49) | equalQuantity",
             "홀수 물량에서 절반 미만 (101 중 50) | equalQuantity",
             "균등 물량이 전체 초과             | equalQuantity",
+            "균등 물량 0                       | equalQuantity",
+            "균등 물량이 음수 극값 (뺄셈 넘침) | equalQuantity",
             "최소 수량 0                       | minQuantity",
             "최대 수량이 최소 수량 미만        | maxQuantity",
             "증거금률 0.50                     | marginRate",
@@ -240,7 +242,7 @@ class IpoRegisterTest {
             "마감 시각이 지금과 같음           | subscriptionEndAt",
             "환불일이 마감일과 같음            | refundDate"
     })
-    @DisplayName("규칙 하나를 어기면 VALIDATION_ERROR이고 details에 그 필드만 나온다")
+    @DisplayName("규칙을 어기면 VALIDATION_ERROR이고 details에 어긴 필드만 나온다")
     void register_throws_whenOneRuleBroken(String title, String field) {
         // given
         Values v = new Values().with(broken(title));
@@ -251,7 +253,7 @@ class IpoRegisterTest {
                 .satisfies(e -> {
                     BusinessException be = (BusinessException) e;
                     assertThat(be.getErrorCode()).isEqualTo(CommonErrorCode.VALIDATION_ERROR);
-                    assertThat(be.getDetails()).extracting(ApiErrorDetail::field).containsExactly(field);
+                    assertThat(be.getDetails()).extracting(ApiErrorDetail::field).containsExactly(field.split(";"));
                 });
     }
 
@@ -316,7 +318,7 @@ class IpoRegisterTest {
     private static Consumer<Values> broken(String title) {
         return switch (title) {
             case "공모가 0" -> x -> x.offerPrice = 0;
-            case "일반청약 물량 0" -> x -> {
+            case "일반청약 물량 0 (균등 물량도 0)" -> x -> {
                 x.retailQuantity = 0;
                 x.equalQuantity = 0;
             };
@@ -331,6 +333,12 @@ class IpoRegisterTest {
             case "균등 물량이 전체 초과" -> x -> {
                 x.retailQuantity = 100;
                 x.equalQuantity = 101;
+            };
+            case "균등 물량 0" -> x -> x.equalQuantity = 0;
+            // 100000 - (-9223372036854725808)이 long 범위를 넘어 같은 값으로 돌아가, 절반 이상, 상한 비교만으로는 통과함
+            case "균등 물량이 음수 극값 (뺄셈 넘침)" -> x -> {
+                x.retailQuantity = 100_000;
+                x.equalQuantity = -9_223_372_036_854_725_808L;
             };
             case "최소 수량 0" -> x -> x.minQuantity = 0;
             case "최대 수량이 최소 수량 미만" -> x -> {

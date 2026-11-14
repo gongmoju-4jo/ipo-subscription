@@ -1,6 +1,6 @@
-package com.gongmoju.account.application.user;
+package com.gongmoju.account.infrastructure.startup;
 
-import com.gongmoju.account.domain.user.UserRepository;
+import com.gongmoju.account.application.user.UserService;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -64,9 +64,6 @@ class AdminSeedRunnerTest {
         private UserService userService;
 
         @Autowired
-        private UserRepository userRepository;
-
-        @Autowired
         private PasswordEncoder passwordEncoder;
 
         @Test
@@ -74,7 +71,7 @@ class AdminSeedRunnerTest {
         void startup_createsAdmin() throws Exception {
             Map<String, Object> row = rowOf(SEED_LOGIN_ID);
             assertThat(row.get("role")).isEqualTo("ADMIN");
-            assertThat(row.get("name")).isEqualTo(AdminSeedRunner.ADMIN_NAME);
+            assertThat(row.get("name")).isEqualTo(UserService.SEED_ADMIN_NAME);
             assertThat(row.get("created_by")).isEqualTo("SYSTEM:account-service");
             assertThat(passwordEncoder.matches(SEED_PASSWORD, (String) row.get("password_hash"))).isTrue();
 
@@ -130,7 +127,7 @@ class AdminSeedRunnerTest {
         }
 
         private AdminSeedRunner runner(String loginId, String password) {
-            return new AdminSeedRunner(userService, userRepository, loginId, password);
+            return new AdminSeedRunner(userService, loginId, password);
         }
 
         private Map<String, Object> rowOf(String loginId) {
@@ -156,7 +153,7 @@ class AdminSeedRunnerTest {
         @CsvSource(value = {"NULL,NULL", "'',''", "'  ','  '"}, nullValues = "NULL")
         @DisplayName("둘 다 비어 있으면 기동하고 아무것도 만들지 않는다")
         void bothBlank_skips(String loginId, String password) {
-            assertThatCode(() -> new AdminSeedRunner(null, null, loginId, password).run(new DefaultApplicationArguments()))
+            assertThatCode(() -> new AdminSeedRunner(null, loginId, password).run(new DefaultApplicationArguments()))
                     .doesNotThrowAnyException();
         }
 
@@ -173,7 +170,7 @@ class AdminSeedRunnerTest {
         }, nullValues = "NULL")
         @DisplayName("하나만 있거나 형식이 틀리면 기동 실패, 메시지에 값은 나오지 않는다")
         void invalid_failsStartup(String loginId, String password, String expectedMessage) {
-            assertThatThrownBy(() -> new AdminSeedRunner(null, null, loginId, password))
+            assertThatThrownBy(() -> new AdminSeedRunner(null, loginId, password))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining(expectedMessage)
                     .satisfies(e -> {
@@ -189,8 +186,8 @@ class AdminSeedRunnerTest {
         @Test
         @DisplayName("경계값: 로그인 ID 4자, 20자와 비밀번호 8자, 20자는 통과")
         void boundary_passes() {
-            assertThatCode(() -> new AdminSeedRunner(null, null, "abcd", "12345678")).doesNotThrowAnyException();
-            assertThatCode(() -> new AdminSeedRunner(null, null, "abcdefghij0123456789", "abcdefghij0123456789"))
+            assertThatCode(() -> new AdminSeedRunner(null, "abcd", "12345678")).doesNotThrowAnyException();
+            assertThatCode(() -> new AdminSeedRunner(null, "abcdefghij0123456789", "abcdefghij0123456789"))
                     .doesNotThrowAnyException();
         }
     }

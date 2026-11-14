@@ -1,35 +1,28 @@
-package com.gongmoju.account.application.user;
+package com.gongmoju.account.infrastructure.startup;
 
-import com.gongmoju.account.domain.user.User;
-import com.gongmoju.account.domain.user.UserRepository;
-import com.gongmoju.common.auth.UserRole;
-import com.gongmoju.common.exception.BusinessException;
-import com.gongmoju.common.exception.CommonErrorCode;
+import com.gongmoju.account.application.user.AdminSeedResult;
+import com.gongmoju.account.application.user.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
-import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * 첫 관리자 시드. 계좌 서비스가 뜰 때 admin-seed.login-id(ADMIN_LOGIN_ID)의 계정이 없으면 ADMIN으로 만든다.
- * 다른 관리자가 있는지와 관계없이 그 로그인 ID의 계정이 있는지만 본다.
+ * 첫 관리자 시드. 계좌 서비스가 뜰 때 admin-seed.login-id(ADMIN_LOGIN_ID)로 {@link UserService#seedAdmin}을 부른다.
+ * 이 클래스는 실행 시점, 설정값 읽기, 형식 검사, 로그만 맡고, 계정이 있는지 보고 만들지는 UserService가 정한다.
  *
  * <ul>
  *   <li>둘 다 비어 있음: 건너뜀 (CI, 로컬 기본)</li>
  *   <li>하나만 있거나 형식 오류: 기동 실패 (어느 값이 문제인지만 알리고 값은 출력하지 않는다)</li>
- *   <li>둘 다 있고 계정 없음: ADMIN으로 생성</li>
- *   <li>둘 다 있고 계정 있음: 아무것도 바꾸지 않음 (USER면 승격하지 않고 WARN)</li>
+ *   <li>둘 다 있음: seedAdmin 호출 (없으면 생성, 있으면 그대로, USER면 승격하지 않고 WARN)</li>
  * </ul>
  */
 @Slf4j
 @Component
 public class AdminSeedRunner implements ApplicationRunner {
-
-    static final String ADMIN_NAME = "관리자";
 
     // 회원가입(SignUpRequest)과 같은 형식 규칙
     private static final Pattern LOGIN_ID_PATTERN = Pattern.compile("^[a-z0-9]{4,20}$");
@@ -37,7 +30,6 @@ public class AdminSeedRunner implements ApplicationRunner {
     private static final int PASSWORD_MAX_LENGTH = 20;
 
     private final UserService userService;
-    private final UserRepository userRepository;
     private final String loginId;
     private final String password;
 
@@ -49,11 +41,9 @@ public class AdminSeedRunner implements ApplicationRunner {
      * @throws IllegalStateException 하나만 있거나 형식이 틀림
      */
     public AdminSeedRunner(UserService userService,
-                           UserRepository userRepository,
                            @Value("${admin-seed.login-id:}") String loginId,
                            @Value("${admin-seed.password:}") String password) {
         this.userService = userService;
-        this.userRepository = userRepository;
         this.loginId = isBlank(loginId) ? null : loginId;
         this.password = isBlank(password) ? null : password;
         validate();
@@ -65,29 +55,12 @@ public class AdminSeedRunner implements ApplicationRunner {
             log.info("ADMIN_LOGIN_ID, ADMIN_PASSWORD가 비어 있어 첫 관리자 계정을 만들지 않습니다.");
             return;
         }
-        Optional<User> existing = userRepository.findByLoginId(loginId);
-        if (existing.isPresent()) {
-            logExisting(existing.get());
-            return;
-        }
-        try {
-            userService.createAdmin(loginId, password, ADMIN_NAME);
-            log.info("첫 관리자 계정을 만들었습니다 (ADMIN_LOGIN_ID).");
-        } catch (BusinessException e) {
-            // 계좌 서비스 여러 대가 동시에 떠서 다른 인스턴스가 먼저 만든 경우
-            if (e.getErrorCode() != CommonErrorCode.DUPLICATE_RESOURCE) {
-                throw e;
-            }
-            userRepository.findByLoginId(loginId).ifPresent(this::logExisting);
-        }
-    }
-
-    private void logExisting(User user) {
-        if (user.getRole() == UserRole.ADMIN) {
-            log.info("ADMIN_LOGIN_ID의 관리자 계정이 이미 있어 그대로 둡니다.");
-        } else {
-            log.warn("ADMIN_LOGIN_ID가 관리자가 아닌 회원({})의 로그인 ID라 승격하지 않았습니다. 다른 ADMIN_LOGIN_ID를 쓰세요.",
-                    user.getRole());
+        AdminSeedResult result = userService.seedAdmin(loginId, password);
+        switch (result) {
+            case CREATED -> log.info("첫 관리자 계정을 만들었습니다 (ADMIN_LOGIN_ID).");
+            case EXISTING_ADMIN -> log.info("ADMIN_LOGIN_ID의 관리자 계정이 이미 있어 그대로 둡니다.");
+            case EXISTING_NON_ADMIN -> log.warn(
+                    "ADMIN_LOGIN_ID가 관리자가 아닌 회원(USER)의 로그인 ID라 승격하지 않았습니다. 다른 ADMIN_LOGIN_ID를 쓰세요.");
         }
     }
 

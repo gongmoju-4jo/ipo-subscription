@@ -87,6 +87,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 | --- | --- |
 | `/api/v1/auth/**`, `/api/v1/users/**`, `/api/v1/accounts/**` | account |
 | `/api/v1/admin/allocations/**` | allocation (아래 `/api/v1/admin/**`보다 먼저 맞춘다) |
+| `/api/v1/admin/users/**` | account (아래 `/api/v1/admin/**`보다 먼저 맞춘다) |
 | `/api/v1/ipos/**`, `/api/v1/subscriptions/**`, `/api/v1/admin/**` | subscription |
 | `/api/v1/allocations/**` | allocation |
 
@@ -109,6 +110,19 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
 - 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
+
+### 관리자 계정
+
+회원가입은 항상 USER다. 관리자(ADMIN)는 첫 1명을 계좌 서비스가 뜰 때 만들고, 그 뒤는 관리자가 만든다.
+
+- 첫 관리자: 계좌 서비스가 뜰 때 `.env`의 `ADMIN_LOGIN_ID` 계정이 없으면 ADMIN으로 만든다 (비밀번호 `ADMIN_PASSWORD`, 이름 "관리자", `AdminSeedRunner`)
+  - 둘 다 비우면 만들지 않는다 (로컬, CI 기본). 하나만 있거나 형식이 틀리면 계좌 서비스가 기동하지 않는다 (회원가입과 같은 규칙: 로그인 ID 영문 소문자, 숫자 4~20자, 비밀번호 8~20자)
+  - 그 로그인 ID가 이미 있으면 아무것도 바꾸지 않는다. `ADMIN_PASSWORD`를 바꿔도 이미 만든 계정의 비밀번호는 그대로다
+  - 그 로그인 ID가 일반 회원(USER)이면 승격하지 않고 WARN 로그만 남긴다
+- 그 뒤 관리자: 관리자로 로그인해 상단바의 [관리자 계정 추가] (`/admin/users/new`) 또는 `POST /api/v1/admin/users`
+  - 회원가입과 같은 항목(`loginId`, `password`, `name`)을 받고 역할은 항상 ADMIN. 누가 만들었는지는 `users.created_by`에 남는다
+  - ADMIN 확인은 게이트웨이(`/api/v1/admin/**`)와 계좌 서비스(`AdminRoleInterceptor`) 둘 다 한다. 본문 검사보다 먼저 403
+- 관리자 승격, 해제, 비밀번호 변경은 없다
 
 ### 접속 대기열
 
@@ -378,8 +392,10 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 
 #### 비밀값
 
-- AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택), `SMOKE_LOGIN_ID`, `SMOKE_PASSWORD`
+- AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택), `SMOKE_LOGIN_ID`, `SMOKE_PASSWORD`, `ADMIN_LOGIN_ID`, `ADMIN_PASSWORD`
 - `SMOKE_LOGIN_ID`(영문 소문자, 숫자 4~20자), `SMOKE_PASSWORD`(8~20자, 작은따옴표 `'` 불가)는 배포 후 스모크 전용 계정이다. 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 이 계정 하나를 계속 쓴다: 처음 배포 때 가입하고 계좌를 하나 연 뒤로는 로그인과 입금(1,000원)만 해서 배포마다 회원이 늘지 않는다. 시연에는 쓰지 않는다 (배포마다 잔고가 늘어난다). `.env`에는 넣지 않는다
+- `ADMIN_LOGIN_ID`(영문 소문자, 숫자 4~20자, `SMOKE_LOGIN_ID`와 다른 값), `ADMIN_PASSWORD`(8~20자, 작은따옴표 `'` 불가)는 첫 관리자 계정이다 ([관리자 계정](#관리자-계정)). 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 서버 주소가 공개돼 있으니 `admin`처럼 짐작하기 쉬운 ID를 피하고 비밀번호는 무작위 값을 쓴다
+  - ⚠️ 첫 배포 때 한 번만 계정을 만든다. 그 뒤 파라미터를 바꿔도 계정의 비밀번호는 바뀌지 않는다
 - 배포할 때마다 서버의 `/opt/ipo/.env`(권한 600)를 다시 만든다. 서버의 `.env`를 손으로 고치지 않는다 (다음 배포 때 덮어쓴다)
 - ⚠️ DB 비밀번호 4개는 첫 배포 뒤 바꾸지 않는다. PostgreSQL 볼륨이 처음 만들어질 때 한 번만 계정을 만들어서, 바꾸면 서비스가 DB에 접속하지 못한다
 - ⚠️ `GRAFANA_ADMIN_PASSWORD`도 Grafana가 처음 뜰 때 한 번만 쓴다. 바꾸려면 Grafana 화면에서 바꾸고 파라미터도 같은 값으로 맞춘다

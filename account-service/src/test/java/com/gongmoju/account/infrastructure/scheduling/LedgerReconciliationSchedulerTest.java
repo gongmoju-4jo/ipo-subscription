@@ -45,7 +45,7 @@ class LedgerReconciliationSchedulerTest {
 
         assertThat(output.getOut())
                 .contains("[원장 대사] 불일치 없음. 실행 시간 ")
-                .contains("MARGIN_BALANCE=0, LEDGER_SUM=0, MARGIN_PENDING_LEDGER=0, MARGIN_STATUS_LEDGER=0");
+                .contains("MARGIN_BALANCE=0, LEDGER_SUM=0, MARGIN_PENDING_LEDGER=0, MARGIN_STATUS_LEDGER=0, LEDGER_MARGIN_ACCOUNT=0");
         assertThat(errorLines(output)).isEmpty();
     }
 
@@ -69,7 +69,7 @@ class LedgerReconciliationSchedulerTest {
                 .contains("[원장 대사] 불일치 검사=MARGIN_PENDING_LEDGER(증거금마다 인출 원장 1줄, 금액 = 증거금) 1건. 불일치 발생 대상 ID: "
                         + marginId)
                 .contains("[원장 대사] 불일치 총 3건. 자동으로 수정하지 않으니 운영자 확인 필요")
-                .contains("MARGIN_BALANCE=0, LEDGER_SUM=2, MARGIN_PENDING_LEDGER=1, MARGIN_STATUS_LEDGER=0")
+                .contains("MARGIN_BALANCE=0, LEDGER_SUM=2, MARGIN_PENDING_LEDGER=1, MARGIN_STATUS_LEDGER=0, LEDGER_MARGIN_ACCOUNT=0")
                 .contains("[원장 대사] 불일치 상세 1/2: 검사=LEDGER_SUM(잔고 = 원장 금액 합계), accountId=" + firstAccountId
                         + ", marginId=null, 예수금=65000, 원장 예수금 합계=75000")
                 .contains("[원장 대사] 불일치 상세 1/1: 검사=MARGIN_PENDING_LEDGER(증거금마다 인출 원장 1줄, 금액 = 증거금), accountId="

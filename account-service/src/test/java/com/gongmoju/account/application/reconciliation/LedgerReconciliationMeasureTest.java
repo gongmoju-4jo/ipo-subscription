@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 
+import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.LEDGER_MARGIN_ACCOUNT;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.LEDGER_SUM;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_BALANCE;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_PENDING_LEDGER;
@@ -44,7 +45,7 @@ class LedgerReconciliationMeasureTest {
                     .withNanoCPUs(2_000_000_000L)
                     .withMemory(1024L * 1024 * 1024));
 
-    // 계좌마다 입금 1건, 증거금 3건(PENDING, POSTED, VOIDED), 원장 7줄. 검사 4개가 모두 조회할 데이터가 있게 구성한다
+    // 계좌마다 입금 1건, 증거금 3건(PENDING, POSTED, VOIDED), 원장 7줄. 모든 검사가 조회할 데이터가 있게 구성한다
     // 금액: 입금 1,000,000 / PENDING 30,000 / POSTED 20,000 (배정 대금 5,000, 환불 15,000) / VOIDED 10,000
     // 결과 잔고: 예수금 965,000, 청약증거금 30,000
     private static final String SEED_SQL = """
@@ -128,6 +129,7 @@ class LedgerReconciliationMeasureTest {
         assertThat(result.count(MARGIN_PENDING_LEDGER)).isEqualTo(1);
         assertThat(result.count(MARGIN_BALANCE)).isEqualTo(1);
         assertThat(result.count(MARGIN_STATUS_LEDGER)).isEqualTo(1);
+        assertThat(result.count(LEDGER_MARGIN_ACCOUNT)).isEqualTo(2);
     }
 
     // 시드는 임시 테이블을 사용해서 트랜잭션 1개(커넥션 1개)에서 실행한다
@@ -142,7 +144,8 @@ class LedgerReconciliationMeasureTest {
         });
     }
 
-    // 계좌 3개에 불일치를 1종류씩 주입한다. 기대 검출: LEDGER_SUM 2, MARGIN_PENDING_LEDGER 1, MARGIN_BALANCE 1, MARGIN_STATUS_LEDGER 1
+    // 계좌 5개에 불일치 4종류를 주입한다
+    // 기대 검출: LEDGER_SUM 2, MARGIN_PENDING_LEDGER 1, MARGIN_BALANCE 1, MARGIN_STATUS_LEDGER 1, LEDGER_MARGIN_ACCOUNT 2
     private void injectMismatches() {
         // 계좌 1: 원장 없이 예수금 1,000 차감 → LEDGER_SUM
         jdbcTemplate.update("""
@@ -159,6 +162,17 @@ class LedgerReconciliationMeasureTest {
         jdbcTemplate.update("""
                 UPDATE margin SET status = 'VOIDED'
                 WHERE status = 'PENDING' AND account_id = (SELECT account_id FROM account WHERE account_number = lpad('3', 12, '0'))""");
+        // 계좌 4, 5: 같은 금액(30,000)인 PENDING 증거금의 인출 원장 연결을 서로 교체 → LEDGER_MARGIN_ACCOUNT 2 (원장 2줄)
+        jdbcTemplate.update("""
+                WITH p AS (
+                    SELECT m.margin_id, a.account_number
+                    FROM margin m JOIN account a ON a.account_id = m.account_id
+                    WHERE m.status = 'PENDING' AND a.account_number IN (lpad('4', 12, '0'), lpad('5', 12, '0'))
+                )
+                UPDATE ledger_entry l
+                SET margin_id = (SELECT p2.margin_id FROM p p1 JOIN p p2 ON p1.account_number <> p2.account_number
+                                 WHERE p1.margin_id = l.margin_id)
+                WHERE l.type = 'MARGIN_PENDING' AND l.margin_id IN (SELECT margin_id FROM p)""");
     }
 
     private void printDataSize(int accounts, long seedMillis) {

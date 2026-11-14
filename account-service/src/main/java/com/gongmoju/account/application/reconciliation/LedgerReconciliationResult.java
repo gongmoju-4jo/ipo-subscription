@@ -5,7 +5,7 @@ import com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck;
 
 import java.util.List;
 
-// 원장 대사 1회 실행 결과. 검사 4개의 불일치를 모두 포함한다 (정상이면 빈 목록)
+// 원장 대사 1회 실행 결과. 모든 검사의 불일치를 포함한다 (정상이면 빈 목록)
 public record LedgerReconciliationResult(List<LedgerMismatch> mismatches) {
 
     public LedgerReconciliationResult {

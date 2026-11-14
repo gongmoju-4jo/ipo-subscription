@@ -22,13 +22,15 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.UUID;
 
+import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.LEDGER_MARGIN_ACCOUNT;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.LEDGER_SUM;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_BALANCE;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_PENDING_LEDGER;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_STATUS_LEDGER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
-// 실제 PostgreSQL(Testcontainers)에서 원장 대사 검사 4개가 정상 흐름은 통과시키고, 불일치는 해당 검사로 검출하는지 확인한다. Docker가 필요하다
+// 실제 PostgreSQL(Testcontainers)에서 원장 대사 검사가 정상 흐름은 통과시키고, 불일치는 해당 검사로 검출하는지 확인한다. Docker가 필요하다
 // 불일치는 서비스 메서드를 거치지 않고 SQL로 직접 생성한다 (실제로는 DB 직접 수정, 버그 코드로 발생하는 상황)
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
@@ -195,17 +197,52 @@ class LedgerReconciliationServiceTest {
         assertThat(result.count(MARGIN_BALANCE)).isZero();
         assertThat(result.count(MARGIN_PENDING_LEDGER)).isZero();
         assertThat(result.count(MARGIN_STATUS_LEDGER)).isZero();
+        assertThat(result.count(LEDGER_MARGIN_ACCOUNT)).isZero();
+    }
+
+    @Test
+    void 원장이_다른_계좌의_증거금에_연결되면_계좌_불일치_검사만_검출한다() {
+        // 다른 계좌에 같은 금액(15,000)의 PENDING 증거금을 생성하고, 두 인출 원장의 margin_id를 서로 교체한다
+        // 계좌별 합계와 증거금별 금액이 모두 일치해서 기존 검사로는 검출 불가
+        UUID otherUserId = UUID.randomUUID();
+        UUID otherAccountId = insertEmptyAccount(otherUserId, "100000000002");
+        depositService.deposit(otherAccountId, otherUserId, 15_000, UUID.randomUUID());
+        UUID otherSubscriptionId = reserve(otherUserId, otherAccountId, 15_000);
+        UUID marginId = marginId(pendingSubscriptionId);
+        UUID otherMarginId = marginId(otherSubscriptionId);
+        jdbcTemplate.update("""
+                UPDATE ledger_entry SET margin_id = CASE margin_id WHEN ? THEN ? ELSE ? END
+                WHERE type = 'MARGIN_PENDING' AND margin_id IN (?, ?)""",
+                marginId, otherMarginId, marginId, marginId, otherMarginId);
+
+        LedgerReconciliationResult result = reconciliationService.reconcile();
+
+        assertThat(result.mismatches()).extracting(LedgerMismatch::check)
+                .containsExactly(LEDGER_MARGIN_ACCOUNT, LEDGER_MARGIN_ACCOUNT);
+        assertThat(result.mismatches()).extracting(LedgerMismatch::accountId, LedgerMismatch::marginId)
+                .containsExactlyInAnyOrder(tuple(accountId, otherMarginId), tuple(otherAccountId, marginId));
+        assertThat(result.mismatches()).filteredOn(m -> m.accountId().equals(accountId)).singleElement()
+                .extracting(LedgerMismatch::detail).asString()
+                .contains("유형=MARGIN_PENDING, 금액=15000, 원장 계좌=" + accountId + ", 증거금 계좌=" + otherAccountId);
     }
 
     private UUID reserve(long amount) {
+        return reserve(userId, accountId, amount);
+    }
+
+    private UUID reserve(UUID ownerId, UUID targetAccountId, long amount) {
         UUID subscriptionId = UUID.randomUUID();
         marginReserveService.reserve(new ReserveMarginCommand(
-                UUID.randomUUID(), subscriptionId, userId, accountId, ipoId, amount));
+                UUID.randomUUID(), subscriptionId, ownerId, targetAccountId, ipoId, amount));
         return subscriptionId;
     }
 
-    // 잔고 0인 계좌. 잔고는 입금 서비스로만 변경해서 원장과 일치시킨다
     private UUID insertEmptyAccount(UUID ownerId) {
+        return insertEmptyAccount(ownerId, "100000000001");
+    }
+
+    // 잔고 0인 계좌. 잔고는 입금 서비스로만 변경해서 원장과 일치시킨다
+    private UUID insertEmptyAccount(UUID ownerId, String accountNumber) {
         UUID id = UUID.randomUUID();
         jdbcTemplate.update("""
                 INSERT INTO users (user_id, login_id, password_hash, name, role, created_at, updated_at, created_by, updated_by)
@@ -213,8 +250,8 @@ class LedgerReconciliationServiceTest {
                 ownerId, "u" + ownerId.toString().substring(0, 8));
         jdbcTemplate.update("""
                 INSERT INTO account (account_id, user_id, request_id, account_number, cash_balance, margin_balance, created_at, updated_at, created_by, updated_by)
-                VALUES (?, ?, ?, '100000000001', 0, 0, now(), now(), 'test', 'test')""",
-                id, ownerId, UUID.randomUUID());
+                VALUES (?, ?, ?, ?, 0, 0, now(), now(), 'test', 'test')""",
+                id, ownerId, UUID.randomUUID(), accountNumber);
         return id;
     }
 

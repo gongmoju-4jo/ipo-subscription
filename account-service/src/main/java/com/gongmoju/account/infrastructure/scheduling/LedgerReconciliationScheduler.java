@@ -52,7 +52,7 @@ class LedgerReconciliationScheduler {
     }
 
     // 요약 WARN 1줄 → 불일치가 있는 검사마다 ERROR 1줄 (건수, 불일치 발생 대상 ID) + 상세 WARN (기대값, 실제값)
-    // ERROR는 검사 단위라 Slack 알림의 ERROR 건수는 최대 검사 수(4)이고, 불일치 건수만큼 증가하지 않는다
+    // ERROR는 검사 단위라 Slack 알림의 ERROR 건수는 최대 검사 종류 수이고, 불일치 건수만큼 증가하지 않는다
     private void logMismatches(LedgerReconciliationResult result, long elapsedMillis) {
         log.warn("[원장 대사] 불일치 총 {}건. 자동으로 수정하지 않으니 운영자 확인 필요. 실행 시간 {}ms, 검사별 불일치 건수: {}",
                 result.mismatches().size(), elapsedMillis, countsByCheck(result));

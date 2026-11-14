@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 import java.util.UUID;
 
+import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.LEDGER_MARGIN_ACCOUNT;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.LEDGER_SUM;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_BALANCE;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_PENDING_LEDGER;
@@ -97,6 +98,17 @@ class LedgerReconciliationJdbcRepository implements LedgerReconciliationReposito
                 ELSE false END, false)
             """;
 
+    // (신규) 원장 계좌 = 연결된 증거금 계좌
+    // 같은 금액의 PENDING 증거금 2개의 인출 원장이 서로 다른 증거금에 연결되면, 계좌별 합계와 증거금별 금액이 모두 일치해서 다른 검사로는 검출 불가
+    // DB 제약이 원장 계좌와 증거금 계좌의 일치를 강제하지 않아서 별도 검사로 추가한다
+    private static final String LEDGER_MARGIN_ACCOUNT_SQL = """
+            SELECT l.ledger_entry_id, l.type, l.amount, l.account_id AS ledger_account_id,
+                   m.margin_id, m.account_id AS margin_account_id
+            FROM ledger_entry l
+            JOIN margin m ON m.margin_id = l.margin_id
+            WHERE l.account_id <> m.account_id
+            """;
+
     private final JdbcTemplate jdbcTemplate;
 
     @Override
@@ -106,6 +118,7 @@ class LedgerReconciliationJdbcRepository implements LedgerReconciliationReposito
             case LEDGER_SUM -> findLedgerSumMismatches();
             case MARGIN_PENDING_LEDGER -> findMarginPendingLedgerMismatches();
             case MARGIN_STATUS_LEDGER -> findMarginStatusLedgerMismatches();
+            case LEDGER_MARGIN_ACCOUNT -> findLedgerMarginAccountMismatches();
         };
     }
 
@@ -150,5 +163,18 @@ class LedgerReconciliationJdbcRepository implements LedgerReconciliationReposito
                         + ", 정산 원장=" + rs.getLong("post")
                         + ", 환불 원장=" + rs.getLong("refund")
                         + ", 반환 원장=" + rs.getLong("void_amount")));
+    }
+
+    // accountId는 원장의 계좌. detail에 증거금의 계좌를 같이 기록해서 어느 계좌끼리 연결됐는지 확인한다
+    private List<LedgerMismatch> findLedgerMarginAccountMismatches() {
+        return jdbcTemplate.query(LEDGER_MARGIN_ACCOUNT_SQL, (rs, rowNum) -> new LedgerMismatch(
+                LEDGER_MARGIN_ACCOUNT,
+                rs.getObject("ledger_account_id", UUID.class),
+                rs.getObject("margin_id", UUID.class),
+                "원장=" + rs.getObject("ledger_entry_id", UUID.class)
+                        + ", 유형=" + rs.getString("type")
+                        + ", 금액=" + rs.getLong("amount")
+                        + ", 원장 계좌=" + rs.getObject("ledger_account_id", UUID.class)
+                        + ", 증거금 계좌=" + rs.getObject("margin_account_id", UUID.class)));
     }
 }

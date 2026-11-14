@@ -180,7 +180,7 @@ class SubscriptionCreateApiTest {
             assertThat(late).isNotDone();
             first.commit();
 
-            // then: 제약 위반 뒤 다시 실행해 이중청약으로 저장하고 202
+            // then: 앞 요청의 커밋을 기다린 뒤 저장이 0행이라, 같은 requestId가 없고 유효 청약이 있어 이중청약으로 저장하고 202
             late.get(10, TimeUnit.SECONDS)
                     .andExpect(status().isAccepted())
                     .andExpect(jsonPath("$.data.subscriptionId").value(SubscriptionIdGenerator.generate(USER_ID, REQUEST_ID).toString()));

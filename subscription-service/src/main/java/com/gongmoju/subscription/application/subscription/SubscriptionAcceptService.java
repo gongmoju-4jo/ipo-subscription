@@ -23,6 +23,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class SubscriptionAcceptService {
 
+    // PENDING 저장 시도 횟수. 충돌한 유효 청약이 확인 전에 끝나 충돌 상대가 사라진 경우 한 번 더 저장함
+    private static final int MAX_SAVE_ATTEMPTS = 2;
+
     private final IpoRepository ipoRepository;
     private final SubscriptionRepository subscriptionRepository;
     private final MarginReserveRequestRecorder marginReserveRequestRecorder;
@@ -66,11 +69,27 @@ public class SubscriptionAcceptService {
         // 재전송, 이중청약을 먼저 조회하지 않고 저장해 본다. 저장하면 정상 접수이고, 0행이면 그때 무엇과 충돌했는지 가린다
         Subscription subscription = Subscription.accept(subscriptionId, command.requestId(), ipo, userId, command.accountId(),
                 command.requestedQuantity(), marginAmount, receivedAt);
-        if (subscriptionRepository.insertIfAbsent(subscription)) {
-            marginReserveRequestRecorder.record(subscription);
-            return AcceptResult.ACCEPTED;
+        return savePending(subscription, userId, command);
+    }
+
+    /**
+     * {@code PENDING}을 저장하고, 0행이면 {@link #resolveConflict}로 충돌을 가림.
+     * 충돌한 유효 청약이 저장과 확인 사이에 끝나(거절, 취소) 충돌 상대가 사라졌으면 한 번 더 저장해 봄. 두 번째도 가릴 수 없으면 모르는 충돌로 예외.
+     */
+    private AcceptResult savePending(Subscription pending, UUID userId, SubscribeCommand command) {
+        for (int attempt = 1; attempt <= MAX_SAVE_ATTEMPTS; attempt++) {
+            if (subscriptionRepository.insertIfAbsent(pending)) {
+                marginReserveRequestRecorder.record(pending);
+                return AcceptResult.ACCEPTED;
+            }
+            Optional<AcceptResult> resolved = resolveConflict(pending, userId, command);
+            if (resolved.isPresent()) {
+                return resolved.get();
+            }
+            log.info("저장이 충돌했지만 충돌한 유효 청약이 그사이 끝나 다시 저장함. requestId={}, userId={}, ipoId={}, attempt={}",
+                    command.requestId(), userId, command.ipoId(), attempt);
         }
-        return resolveConflict(subscription, userId, command);
+        throw new IllegalStateException("청약 저장이 같은 requestId, 이중청약이 아닌 이유로 충돌했습니다. requestId=" + command.requestId());
     }
 
     /**
@@ -100,17 +119,19 @@ public class SubscriptionAcceptService {
      * <ul>
      *   <li>같은 {@code requestId}의 청약이 있으면 재요청 비교 (같은 내용이면 저장하지 않고, 다르면 409)</li>
      *   <li>없으면 같은 회원의 유효 청약({@code uk_subscription_active})과 충돌한 것이라 이중청약으로 {@code REJECTED}만 저장함</li>
-     *   <li>둘 다 아니면 모르는 충돌이라 예외 (나중에 다른 유니크 제약이 생겨도 조용히 넘어가지 않게)</li>
+     *   <li>둘 다 아니면 빈 값. 충돌한 유효 청약이 그사이 끝났거나 모르는 충돌이라, 호출하는 쪽이 다시 저장해 보고 판단함</li>
      * </ul>
      * 충돌한 상대가 커밋 전이면 PostgreSQL이 저장을 그 커밋까지 기다리게 하므로, 0행을 받은 뒤의 조회에서는 상대 행이 보임.
+     * 테이블의 유니크 제약은 PK(회원 ID와 requestId로 만든 청약 ID라 request_id 충돌과 같음), {@code request_id}, {@code uk_subscription_active} 세 개뿐임
+     * ({@code SubscriptionRepositoryTest}가 지킴). 제약을 더하면 이 판단을 다시 봐야 함.
      */
-    private AcceptResult resolveConflict(Subscription pending, UUID userId, SubscribeCommand command) {
+    private Optional<AcceptResult> resolveConflict(Subscription pending, UUID userId, SubscribeCommand command) {
         Optional<Subscription> existing = subscriptionRepository.findByRequestId(command.requestId());
         if (existing.isPresent()) {
-            return replayOrConflict(existing.get(), userId, command);
+            return Optional.of(replayOrConflict(existing.get(), userId, command));
         }
         if (!subscriptionRepository.existsActiveByIpoIdAndUserId(command.ipoId(), userId)) {
-            throw new IllegalStateException("청약 저장이 같은 requestId, 이중청약이 아닌 이유로 충돌했습니다. requestId=" + command.requestId());
+            return Optional.empty();
         }
 
         Subscription rejected = Subscription.reject(pending.getId(), command.requestId(), pending.getIpo(), userId, command.accountId(),
@@ -119,10 +140,10 @@ public class SubscriptionAcceptService {
             // 그사이 같은 requestId의 요청이 먼저 저장함 (REJECTED는 유효 청약 제약에 걸리지 않으므로 request_id 충돌뿐)
             Subscription saved = subscriptionRepository.findByRequestId(command.requestId())
                     .orElseThrow(() -> new IllegalStateException("저장이 충돌했지만 기존 청약을 찾을 수 없습니다. requestId=" + command.requestId()));
-            return replayOrConflict(saved, userId, command);
+            return Optional.of(replayOrConflict(saved, userId, command));
         }
         log.info("이중청약으로 거절함. subscriptionId={}, userId={}, ipoId={}", rejected.getId(), userId, command.ipoId());
-        return AcceptResult.REJECTED_ALREADY_SUBSCRIBED;
+        return Optional.of(AcceptResult.REJECTED_ALREADY_SUBSCRIBED);
     }
 
     /**

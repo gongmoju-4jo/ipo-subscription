@@ -208,9 +208,10 @@ class SubscriptionAcceptServiceTest {
     }
 
     @Test
-    @DisplayName("저장이 같은 requestId도 유효 청약도 아닌 이유로 충돌하면 예외이고 아무것도 더 저장하지 않는다 (모르는 충돌을 넘기지 않음)")
+    @DisplayName("저장이 같은 requestId도 유효 청약도 아닌 이유로 계속 충돌하면 다시 저장해 본 뒤 예외이고 아무것도 더 저장하지 않는다 (모르는 충돌을 넘기지 않음)")
     void accept_throwsIllegalState_whenInsertConflictsForUnknownReason() {
-        // given: 다른 requestId의 REJECTED 청약이 같은 청약 ID를 쓰고 있음 (PK 충돌, request_id와 유효 청약 충돌은 아님)
+        // given: 다른 requestId의 REJECTED 청약이 같은 청약 ID를 쓰고 있음 (PK 충돌, request_id와 유효 청약 충돌은 아님).
+        // 청약 ID는 회원 ID와 requestId로 만들어서 실제로는 생기지 않는 상태를, 모르는 충돌을 만들려고 일부러 만듦
         UUID subscriptionId = UUID.randomUUID();
         acceptService.accept(subscriptionId, userId, receivedAt, command(UUID.randomUUID(), 100));
         jdbcTemplate.update("UPDATE subscription SET status = 'REJECTED', reject_reason = 'ALREADY_SUBSCRIBED' WHERE subscription_id = ?",

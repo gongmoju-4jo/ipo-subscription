@@ -258,6 +258,24 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
+    @DisplayName("subscription 테이블의 유니크 제약은 청약 ID, request_id, 유효 청약(ipo_id, user_id) 세 개뿐이다 (insertIfAbsent의 대상 없는 ON CONFLICT가 이 셋만 전제함)")
+    void subscriptionTable_hasOnlyTheUniqueConstraintsThatInsertIfAbsentAssumes() {
+        // when: 이 테이블의 유니크 인덱스마다 정의를 읽음 (PK, UNIQUE 제약, schema.sql의 부분 유니크 인덱스 모두 유니크 인덱스로 보임)
+        List<String> definitions = jdbcTemplate.queryForList("""
+                SELECT pg_get_indexdef(x.indexrelid)
+                FROM pg_index x
+                JOIN pg_class t ON t.oid = x.indrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE t.relname = 'subscription' AND n.nspname = current_schema() AND x.indisunique""", String.class);
+
+        // then: 셋 외의 유니크 제약을 더하면, 접수가 0행을 같은 requestId 또는 이중청약으로 가리는 판단(SubscriptionAcceptService)을 다시 봐야 함
+        assertThat(definitions).hasSize(3);
+        assertThat(definitions).anySatisfy(d -> assertThat(d).contains("(subscription_id)"));
+        assertThat(definitions).anySatisfy(d -> assertThat(d).contains("(request_id)"));
+        assertThat(definitions).anySatisfy(d -> assertThat(d).contains("uk_subscription_active").contains("(ipo_id, user_id)"));
+    }
+
+    @Test
     @DisplayName("PENDING 청약이 있으면 유효한 청약이 있는 것으로 본다")
     void existsActive_returnsTrue_whenPendingSubscriptionExists() {
         // given

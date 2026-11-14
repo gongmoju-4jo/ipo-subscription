@@ -10,8 +10,6 @@ import com.gongmoju.subscription.domain.subscription.SubscriptionIdGenerator;
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import com.gongmoju.subscription.domain.subscription.SubscriptionStatus;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -24,7 +22,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SubscriptionService {
@@ -43,8 +40,6 @@ public class SubscriptionService {
      * <p>
      * 같은 {@code requestId}, 같은 회원의 유효 청약({@code uk_subscription_active}) 충돌은 저장 단계에서 0행으로 받아 처리해 예외가 나지 않는다.
      * 같은 회원이 다른 {@code requestId}로 거의 동시에 청약해도 늦은 쪽은 앞 청약의 커밋을 기다린 뒤 0행을 받아 {@code REJECTED}로 저장된다.
-     * 그래도 무결성 위반이 나면(예상하지 못한 경우를 위한 안전망) 실패한 트랜잭션은 이어 갈 수 없어서 새 트랜잭션으로 한 번 다시 실행한다.
-     * 다시 실행해도 같은 위반이면 그대로 던진다.
      *
      * @param userId     Gateway가 넘긴 회원 ID
      * @param receivedAt Gateway가 기록한 최초 도착 시각 (D-12)
@@ -53,17 +48,10 @@ public class SubscriptionService {
      * @throws BusinessException     공모주가 없으면 RESOURCE_NOT_FOUND(404), 같은 {@code requestId}로 내용이 다르거나 다른 회원이 쓴 요청이면
      *                               DUPLICATE_RESOURCE(409), 청약 조건 위반은 {@link Ipo#validateSubscription}
      * @throws IllegalStateException 증거금률이 100%가 아니거나 증거금이 {@code long} 범위를 넘는 공모주 (500)
-     * @throws DataIntegrityViolationException 다시 실행해도 무결성 위반이면 그대로 던진다 (공통 처리: 유니크 위반 409, 그 밖은 500)
      */
     public SubscribeResult subscribe(UUID userId, Instant receivedAt, SubscribeCommand command) {
         UUID subscriptionId = SubscriptionIdGenerator.generate(userId, command.requestId());
-        try {
-            acceptService.accept(subscriptionId, userId, receivedAt, command);
-        } catch (DataIntegrityViolationException e) {
-            log.info("청약 저장 중 무결성 위반이라 한 번 다시 실행함. requestId={}, userId={}, ipoId={}",
-                    command.requestId(), userId, command.ipoId());
-            acceptService.accept(subscriptionId, userId, receivedAt, command);
-        }
+        acceptService.accept(subscriptionId, userId, receivedAt, command);
         return new SubscribeResult(subscriptionId, command.requestId());
     }
 

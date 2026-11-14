@@ -2,7 +2,9 @@ package com.gongmoju.account.infrastructure.scheduling;
 
 import com.gongmoju.account.application.reconciliation.LedgerReconciliationResult;
 import com.gongmoju.account.application.reconciliation.LedgerReconciliationService;
+import com.gongmoju.account.domain.reconciliation.LedgerCheckResult;
 import com.gongmoju.account.domain.reconciliation.LedgerMismatch;
+import com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -10,11 +12,11 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.IntStream;
 
+import static com.gongmoju.account.application.reconciliation.LedgerReconciliationService.SAMPLE_LIMIT;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.LEDGER_SUM;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_BALANCE;
 import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck.MARGIN_PENDING_LEDGER;
@@ -24,7 +26,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 // 원장 대사 스케줄러의 로그 기록을 검증한다. 대사 서비스는 가짜 객체(mock)로 대체한다
-// ERROR 로그 건수는 Slack 알림(ErrorLogDetected)의 건수가 되므로, 불일치 건수와 관계없이 1줄인지 확인한다
+// ERROR 로그 건수는 Slack 알림(ErrorLogDetected)의 건수가 되므로, 불일치 건수와 관계없이 검사당 1줄인지 확인한다
 @ExtendWith(OutputCaptureExtension.class)
 class LedgerReconciliationSchedulerTest {
 
@@ -39,7 +41,7 @@ class LedgerReconciliationSchedulerTest {
 
     @Test
     void 불일치가_없으면_INFO로_검사별_건수와_실행_시간을_기록한다(CapturedOutput output) {
-        when(reconciliationService.reconcile()).thenReturn(new LedgerReconciliationResult(List.of()));
+        when(reconciliationService.reconcile()).thenReturn(result());
 
         scheduler.reconcile();
 
@@ -55,10 +57,12 @@ class LedgerReconciliationSchedulerTest {
         UUID firstAccountId = UUID.randomUUID();
         UUID secondAccountId = UUID.randomUUID();
         UUID marginId = UUID.randomUUID();
-        when(reconciliationService.reconcile()).thenReturn(new LedgerReconciliationResult(List.of(
-                new LedgerMismatch(LEDGER_SUM, firstAccountId, null, "예수금=65000, 원장 예수금 합계=75000"),
-                new LedgerMismatch(LEDGER_SUM, secondAccountId, null, "예수금=1000, 원장 예수금 합계=0"),
-                new LedgerMismatch(MARGIN_PENDING_LEDGER, firstAccountId, marginId, "증거금=15000, 인출 원장 2줄"))));
+        when(reconciliationService.reconcile()).thenReturn(result(
+                checkResult(LEDGER_SUM, 2,
+                        new LedgerMismatch(LEDGER_SUM, firstAccountId, null, "예수금=65000, 원장 예수금 합계=75000"),
+                        new LedgerMismatch(LEDGER_SUM, secondAccountId, null, "예수금=1000, 원장 예수금 합계=0")),
+                checkResult(MARGIN_PENDING_LEDGER, 1,
+                        new LedgerMismatch(MARGIN_PENDING_LEDGER, firstAccountId, marginId, "증거금=15000, 인출 원장 2줄"))));
 
         scheduler.reconcile();
 
@@ -77,42 +81,36 @@ class LedgerReconciliationSchedulerTest {
     }
 
     @Test
-    void 이전_검사의_불일치가_상한을_초과해도_이후_검사의_상세를_기록한다(CapturedOutput output) {
-        // 청약증거금 검사 101건 + 잔고 합계 검사 1건. 상한을 전체 기준으로 적용하면 잔고 합계 검사의 상세가 누락된다
-        UUID lastAccountId = UUID.randomUUID();
-        List<LedgerMismatch> mismatches = new ArrayList<>(IntStream.range(0, LedgerReconciliationScheduler.DETAIL_LOG_LIMIT + 1)
-                .mapToObj(i -> new LedgerMismatch(MARGIN_BALANCE, UUID.randomUUID(), null, "번호=" + i))
-                .toList());
-        mismatches.add(new LedgerMismatch(LEDGER_SUM, lastAccountId, null, "예수금=1000, 원장 예수금 합계=0"));
-        when(reconciliationService.reconcile()).thenReturn(new LedgerReconciliationResult(mismatches));
+    void 조회_상한을_초과하면_전체_건수와_조회한_대상만_기록하고_생략_건수를_기록한다(CapturedOutput output) {
+        // 전체 105건 중 조회 상한 100건만 조회된 결과
+        List<LedgerMismatch> samples = samples(LEDGER_SUM, SAMPLE_LIMIT);
+        when(reconciliationService.reconcile()).thenReturn(result(new LedgerCheckResult(LEDGER_SUM, 105, samples)));
 
         scheduler.reconcile();
 
         assertThat(output.getOut())
-                .contains("[원장 대사] 불일치 상세 1건 생략 (검사=MARGIN_BALANCE). 검사별 상세 로그 상한 100건")
-                .contains("[원장 대사] 불일치 상세 1/1: 검사=LEDGER_SUM(잔고 = 원장 금액 합계), accountId=" + lastAccountId
-                        + ", marginId=null, 예수금=1000, 원장 예수금 합계=0");
+                .contains("[원장 대사] 불일치 총 105건.")
+                .contains("불일치 상세 100/105:")
+                .contains("[원장 대사] 불일치 상세 5건 생략 (검사=LEDGER_SUM). 검사별 조회 상한 100건");
+        assertThat(errorLines(output)).singleElement().asString()
+                .contains("105건. 불일치 발생 대상 ID: " + samples.get(0).accountId())
+                .contains(samples.get(99).accountId() + " 외 5건");
     }
 
     @Test
-    void 상세_로그와_불일치_발생_대상_ID는_상한까지만_기록하고_생략_건수를_기록한다(CapturedOutput output) {
-        int total = LedgerReconciliationScheduler.DETAIL_LOG_LIMIT + 5;
-        List<LedgerMismatch> mismatches = IntStream.range(0, total)
-                .mapToObj(i -> new LedgerMismatch(LEDGER_SUM, UUID.randomUUID(), null, "번호=" + i))
-                .toList();
-        when(reconciliationService.reconcile()).thenReturn(new LedgerReconciliationResult(mismatches));
+    void 이전_검사의_불일치가_상한을_초과해도_이후_검사의_상세를_기록한다(CapturedOutput output) {
+        // 청약증거금 검사 전체 101건(조회 100건) + 잔고 합계 검사 1건
+        UUID lastAccountId = UUID.randomUUID();
+        when(reconciliationService.reconcile()).thenReturn(result(
+                new LedgerCheckResult(MARGIN_BALANCE, SAMPLE_LIMIT + 1, samples(MARGIN_BALANCE, SAMPLE_LIMIT)),
+                checkResult(LEDGER_SUM, 1, new LedgerMismatch(LEDGER_SUM, lastAccountId, null, "예수금=1000, 원장 예수금 합계=0"))));
 
         scheduler.reconcile();
 
         assertThat(output.getOut())
-                .contains("불일치 상세 100/105:")
-                .doesNotContain("불일치 상세 101/105:")
-                .contains("[원장 대사] 불일치 상세 5건 생략 (검사=LEDGER_SUM). 검사별 상세 로그 상한 100건");
-        // 불일치 발생 대상 ID는 100개 + "외 5건"
-        assertThat(errorLines(output)).singleElement().asString()
-                .contains("105건. 불일치 발생 대상 ID: " + mismatches.get(0).accountId())
-                .contains(mismatches.get(99).accountId() + " 외 5건")
-                .doesNotContain(mismatches.get(100).accountId().toString());
+                .contains("[원장 대사] 불일치 상세 1건 생략 (검사=MARGIN_BALANCE). 검사별 조회 상한 100건")
+                .contains("[원장 대사] 불일치 상세 1/1: 검사=LEDGER_SUM(잔고 = 원장 금액 합계), accountId=" + lastAccountId
+                        + ", marginId=null, 예수금=1000, 원장 예수금 합계=0");
     }
 
     @Test
@@ -124,6 +122,20 @@ class LedgerReconciliationSchedulerTest {
         assertThat(errorLines(output)).singleElement().asString()
                 .contains("[원장 대사] 실행 실패. 다음 실행 시각에 다시 실행함");
         assertThat(output.getOut()).contains("DB 연결 실패");
+    }
+
+    private static LedgerReconciliationResult result(LedgerCheckResult... checkResults) {
+        return new LedgerReconciliationResult(List.of(checkResults));
+    }
+
+    private static LedgerCheckResult checkResult(LedgerReconciliationCheck check, long totalCount, LedgerMismatch... samples) {
+        return new LedgerCheckResult(check, totalCount, List.of(samples));
+    }
+
+    private static List<LedgerMismatch> samples(LedgerReconciliationCheck check, int count) {
+        return IntStream.range(0, count)
+                .mapToObj(i -> new LedgerMismatch(check, UUID.randomUUID(), null, "번호=" + i))
+                .toList();
     }
 
     private List<String> errorLines(CapturedOutput output) {

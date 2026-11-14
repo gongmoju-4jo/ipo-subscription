@@ -1,12 +1,16 @@
 package com.gongmoju.account.infrastructure.persistence;
 
+import com.gongmoju.account.domain.reconciliation.LedgerCheckResult;
 import com.gongmoju.account.domain.reconciliation.LedgerMismatch;
 import com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck;
 import com.gongmoju.account.domain.reconciliation.LedgerReconciliationRepository;
-import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Repository;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -20,7 +24,6 @@ import static com.gongmoju.account.domain.reconciliation.LedgerReconciliationChe
 // 집계 조회라 JPA 대신 JdbcTemplate을 사용한다. 호출한 트랜잭션의 커넥션을 동일하게 사용한다
 // 검사마다 불일치 행만 조회하고, detail에 원인 확인용 기대값과 실제값을 기록한다
 @Repository
-@RequiredArgsConstructor
 class LedgerReconciliationJdbcRepository implements LedgerReconciliationRepository {
 
     // (2번) 계좌 청약증거금 = PENDING 증거금 금액 합계
@@ -109,51 +112,97 @@ class LedgerReconciliationJdbcRepository implements LedgerReconciliationReposito
             WHERE l.account_id <> m.account_id
             """;
 
+    // 스트리밍 조회의 1회 수신 행 수
+    // PostgreSQL 드라이버는 트랜잭션 안(autocommit 꺼짐)에서 fetchSize가 있으면 결과 전체가 아니라 이 건수씩 수신한다
+    private static final int FETCH_SIZE = 1_000;
+
     private final JdbcTemplate jdbcTemplate;
 
+    // fetchSize는 대사 조회에만 적용하려고 별도 인스턴스로 생성한다. 같은 DataSource라 호출한 트랜잭션의 커넥션을 동일하게 사용한다
+    LedgerReconciliationJdbcRepository(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = new JdbcTemplate(jdbcTemplate.getDataSource());
+        this.jdbcTemplate.setFetchSize(FETCH_SIZE);
+    }
+
     @Override
-    public List<LedgerMismatch> findMismatches(LedgerReconciliationCheck check) {
+    public LedgerCheckResult findMismatches(LedgerReconciliationCheck check, int sampleLimit) {
         return switch (check) {
-            case MARGIN_BALANCE -> findMarginBalanceMismatches();
-            case LEDGER_SUM -> findLedgerSumMismatches();
-            case MARGIN_PENDING_LEDGER -> findMarginPendingLedgerMismatches();
-            case MARGIN_STATUS_LEDGER -> findMarginStatusLedgerMismatches();
-            case LEDGER_MARGIN_ACCOUNT -> findLedgerMarginAccountMismatches();
+            case MARGIN_BALANCE -> sample(check, MARGIN_BALANCE_SQL, sampleLimit, this::marginBalanceMismatch);
+            case LEDGER_SUM -> sample(check, LEDGER_SUM_SQL, sampleLimit, this::ledgerSumMismatch);
+            case MARGIN_PENDING_LEDGER -> sample(check, MARGIN_PENDING_LEDGER_SQL, sampleLimit, this::marginPendingLedgerMismatch);
+            case MARGIN_STATUS_LEDGER -> sample(check, MARGIN_STATUS_LEDGER_SQL, sampleLimit, this::marginStatusLedgerMismatch);
+            case LEDGER_MARGIN_ACCOUNT -> sample(check, LEDGER_MARGIN_ACCOUNT_SQL, sampleLimit, this::ledgerMarginAccountMismatch);
         };
     }
 
-    private List<LedgerMismatch> findMarginBalanceMismatches() {
-        return jdbcTemplate.query(MARGIN_BALANCE_SQL, (rs, rowNum) -> new LedgerMismatch(
+    // 불일치 행을 FETCH_SIZE건씩 수신하면서 전체 건수를 집계하고, sampleLimit건까지만 객체로 변환해 보관한다
+    // 불일치 행을 전부 객체로 보관하면 212만 건 규모에서 계좌 서비스 힙(512MB)을 초과 가능해서 메모리 적재를 제한한다
+    // 트레이드오프: 나눠 수신하는 방식이라 10만 건 정상 상황 실행 시간이 약 13% 증가한다 (측정. 병렬 처리 꺼짐이 그중 약 5%, 나머지 원인 미확인)
+    private LedgerCheckResult sample(LedgerReconciliationCheck check, String sql, int sampleLimit, MismatchMapper mapper) {
+        SampleCollector collector = new SampleCollector(sampleLimit, mapper);
+        jdbcTemplate.query(sql, collector);
+        return new LedgerCheckResult(check, collector.totalCount, collector.samples);
+    }
+
+    @FunctionalInterface
+    private interface MismatchMapper {
+        LedgerMismatch map(ResultSet rs) throws SQLException;
+    }
+
+    // 불일치 행 수신 처리: 건수는 전부 집계하고, 객체 변환과 보관은 sampleLimit건까지만 한다
+    private static final class SampleCollector implements RowCallbackHandler {
+
+        private final int sampleLimit;
+        private final MismatchMapper mapper;
+        private final List<LedgerMismatch> samples = new ArrayList<>();
+        private long totalCount;
+
+        private SampleCollector(int sampleLimit, MismatchMapper mapper) {
+            this.sampleLimit = sampleLimit;
+            this.mapper = mapper;
+        }
+
+        @Override
+        public void processRow(ResultSet rs) throws SQLException {
+            totalCount++;
+            if (samples.size() < sampleLimit) {
+                samples.add(mapper.map(rs));
+            }
+        }
+    }
+
+    private LedgerMismatch marginBalanceMismatch(ResultSet rs) throws SQLException {
+        return new LedgerMismatch(
                 MARGIN_BALANCE,
                 rs.getObject("account_id", UUID.class),
                 null,
                 "청약증거금=" + rs.getLong("margin_balance")
-                        + ", PENDING 증거금 합계=" + rs.getLong("pending_sum")));
+                        + ", PENDING 증거금 합계=" + rs.getLong("pending_sum"));
     }
 
-    private List<LedgerMismatch> findLedgerSumMismatches() {
-        return jdbcTemplate.query(LEDGER_SUM_SQL, (rs, rowNum) -> new LedgerMismatch(
+    private LedgerMismatch ledgerSumMismatch(ResultSet rs) throws SQLException {
+        return new LedgerMismatch(
                 LEDGER_SUM,
                 rs.getObject("account_id", UUID.class),
                 null,
                 "예수금=" + rs.getLong("cash_balance")
                         + ", 원장 예수금 합계=" + rs.getLong("ledger_cash")
                         + ", 청약증거금=" + rs.getLong("margin_balance")
-                        + ", 원장 청약증거금 합계=" + rs.getLong("ledger_margin")));
+                        + ", 원장 청약증거금 합계=" + rs.getLong("ledger_margin"));
     }
 
-    private List<LedgerMismatch> findMarginPendingLedgerMismatches() {
-        return jdbcTemplate.query(MARGIN_PENDING_LEDGER_SQL, (rs, rowNum) -> new LedgerMismatch(
+    private LedgerMismatch marginPendingLedgerMismatch(ResultSet rs) throws SQLException {
+        return new LedgerMismatch(
                 MARGIN_PENDING_LEDGER,
                 rs.getObject("account_id", UUID.class),
                 rs.getObject("margin_id", UUID.class),
                 "증거금=" + rs.getLong("amount")
                         + ", 인출 원장 " + rs.getLong("ledger_count") + "줄"
-                        + ", 인출 원장 합계=" + rs.getLong("ledger_amount")));
+                        + ", 인출 원장 합계=" + rs.getLong("ledger_amount"));
     }
 
-    private List<LedgerMismatch> findMarginStatusLedgerMismatches() {
-        return jdbcTemplate.query(MARGIN_STATUS_LEDGER_SQL, (rs, rowNum) -> new LedgerMismatch(
+    private LedgerMismatch marginStatusLedgerMismatch(ResultSet rs) throws SQLException {
+        return new LedgerMismatch(
                 MARGIN_STATUS_LEDGER,
                 rs.getObject("account_id", UUID.class),
                 rs.getObject("margin_id", UUID.class),
@@ -162,12 +211,12 @@ class LedgerReconciliationJdbcRepository implements LedgerReconciliationReposito
                         + ", posted_amount=" + rs.getObject("posted_amount")
                         + ", 정산 원장=" + rs.getLong("post")
                         + ", 환불 원장=" + rs.getLong("refund")
-                        + ", 반환 원장=" + rs.getLong("void_amount")));
+                        + ", 반환 원장=" + rs.getLong("void_amount"));
     }
 
     // accountId는 원장의 계좌. detail에 증거금의 계좌를 같이 기록해서 어느 계좌끼리 연결됐는지 확인한다
-    private List<LedgerMismatch> findLedgerMarginAccountMismatches() {
-        return jdbcTemplate.query(LEDGER_MARGIN_ACCOUNT_SQL, (rs, rowNum) -> new LedgerMismatch(
+    private LedgerMismatch ledgerMarginAccountMismatch(ResultSet rs) throws SQLException {
+        return new LedgerMismatch(
                 LEDGER_MARGIN_ACCOUNT,
                 rs.getObject("ledger_account_id", UUID.class),
                 rs.getObject("margin_id", UUID.class),
@@ -175,6 +224,6 @@ class LedgerReconciliationJdbcRepository implements LedgerReconciliationReposito
                         + ", 유형=" + rs.getString("type")
                         + ", 금액=" + rs.getLong("amount")
                         + ", 원장 계좌=" + rs.getObject("ledger_account_id", UUID.class)
-                        + ", 증거금 계좌=" + rs.getObject("margin_account_id", UUID.class)));
+                        + ", 증거금 계좌=" + rs.getObject("margin_account_id", UUID.class));
     }
 }

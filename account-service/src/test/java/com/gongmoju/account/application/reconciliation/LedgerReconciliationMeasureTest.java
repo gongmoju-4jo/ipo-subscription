@@ -117,19 +117,29 @@ class LedgerReconciliationMeasureTest {
         List<Long> totalMillis = measure(() -> reconciliationService.reconcile());
         System.out.println("[측정] 전체 대사 실행 시간(ms) 5회=" + totalMillis + ", 중앙값=" + median(totalMillis));
         for (LedgerReconciliationCheck check : LedgerReconciliationCheck.values()) {
-            List<Long> checkMillis = measure(() -> reconciliationRepository.findMismatches(check));
+            List<Long> checkMillis = measure(() -> reconciliationRepository.findMismatches(check, LedgerReconciliationService.SAMPLE_LIMIT));
             System.out.println("[측정] 검사 " + check + " 실행 시간(ms) 5회=" + checkMillis + ", 중앙값=" + median(checkMillis));
         }
 
         injectMismatches();
         LedgerReconciliationResult result = reconciliationService.reconcile();
-        System.out.println("[측정] 불일치 주입 후 검출: 전체 " + result.mismatches().size() + "건, "
+        System.out.println("[측정] 불일치 주입 후 검출: 전체 " + result.totalCount() + "건, "
                 + Arrays.stream(LedgerReconciliationCheck.values()).map(c -> c + "=" + result.count(c)).toList());
         assertThat(result.count(LEDGER_SUM)).isEqualTo(2);
         assertThat(result.count(MARGIN_PENDING_LEDGER)).isEqualTo(1);
         assertThat(result.count(MARGIN_BALANCE)).isEqualTo(1);
         assertThat(result.count(MARGIN_STATUS_LEDGER)).isEqualTo(1);
         assertThat(result.count(LEDGER_MARGIN_ACCOUNT)).isEqualTo(2);
+
+        // 전체 계좌 불일치 (예: 잔고 계산 버그 배포): 건수는 전부 집계하고, 메모리에 적재하는 행은 조회 상한까지만
+        jdbcTemplate.update("UPDATE account SET cash_balance = cash_balance - 1");
+        long allMismatchStart = System.nanoTime();
+        LedgerReconciliationResult allMismatch = reconciliationService.reconcile();
+        long allMismatchMillis = (System.nanoTime() - allMismatchStart) / 1_000_000;
+        System.out.println("[측정] 전체 계좌 불일치: LEDGER_SUM 전체 " + allMismatch.count(LEDGER_SUM) + "건, 조회 "
+                + allMismatch.mismatchesOf(LEDGER_SUM).size() + "건, 실행 시간 " + allMismatchMillis + "ms");
+        assertThat(allMismatch.count(LEDGER_SUM)).isEqualTo(accounts);
+        assertThat(allMismatch.mismatchesOf(LEDGER_SUM)).hasSize(LedgerReconciliationService.SAMPLE_LIMIT);
     }
 
     // 시드는 임시 테이블을 사용해서 트랜잭션 1개(커넥션 1개)에서 실행한다

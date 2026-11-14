@@ -2,6 +2,7 @@ package com.gongmoju.account.infrastructure.scheduling;
 
 import com.gongmoju.account.application.reconciliation.LedgerReconciliationResult;
 import com.gongmoju.account.application.reconciliation.LedgerReconciliationService;
+import com.gongmoju.account.domain.reconciliation.LedgerCheckResult;
 import com.gongmoju.account.domain.reconciliation.LedgerMismatch;
 import com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck;
 import lombok.RequiredArgsConstructor;
@@ -25,9 +26,6 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "ledger.reconciliation", name = "enabled", havingValue = "true", matchIfMissing = true)
 class LedgerReconciliationScheduler {
-
-    // 검사별 상세 로그 라인 수, 불일치 발생 대상 ID 개수 상한. 버그 배포로 전체 계좌가 불일치하는 경우에도 로그 크기가 이 값 기준으로 제한된다
-    static final int DETAIL_LOG_LIMIT = 100;
 
     private final LedgerReconciliationService reconciliationService;
 
@@ -53,43 +51,42 @@ class LedgerReconciliationScheduler {
 
     // 요약 WARN 1줄 → 불일치가 있는 검사마다 ERROR 1줄 (건수, 불일치 발생 대상 ID) + 상세 WARN (기대값, 실제값)
     // ERROR는 검사 단위라 Slack 알림의 ERROR 건수는 최대 검사 종류 수이고, 불일치 건수만큼 증가하지 않는다
+    // 대상 ID, 상세는 조회한 불일치(검사당 최대 SAMPLE_LIMIT건)만 기록하고, 나머지는 생략 건수로 기록한다
     private void logMismatches(LedgerReconciliationResult result, long elapsedMillis) {
         log.warn("[원장 대사] 불일치 총 {}건. 자동으로 수정하지 않으니 운영자 확인 필요. 실행 시간 {}ms, 검사별 불일치 건수: {}",
-                result.mismatches().size(), elapsedMillis, countsByCheck(result));
+                result.totalCount(), elapsedMillis, countsByCheck(result));
 
-        for (LedgerReconciliationCheck check : LedgerReconciliationCheck.values()) {
-            List<LedgerMismatch> ofCheck = result.mismatchesOf(check);
-            if (!ofCheck.isEmpty()) {
+        for (LedgerCheckResult checkResult : result.checkResults()) {
+            if (checkResult.totalCount() > 0) {
+                LedgerReconciliationCheck check = checkResult.check();
                 log.error("[원장 대사] 불일치 검사={}({}) {}건. 불일치 발생 대상 ID: {}",
-                        check, check.getDescription(), ofCheck.size(), targetIds(ofCheck));
-                logDetails(ofCheck);
+                        check, check.getDescription(), checkResult.totalCount(), targetIds(checkResult));
+                logDetails(checkResult);
             }
         }
     }
 
-    // 검사 1개의 상세 WARN. 상한은 검사별로 적용해서, 이전 검사의 불일치가 많아도 이후 검사의 상세가 누락되지 않는다
-    private void logDetails(List<LedgerMismatch> ofCheck) {
-        int logged = Math.min(ofCheck.size(), DETAIL_LOG_LIMIT);
-        for (int i = 0; i < logged; i++) {
-            LedgerMismatch mismatch = ofCheck.get(i);
+    // 검사 1개의 상세 WARN. 번호의 분모는 전체 불일치 건수
+    private void logDetails(LedgerCheckResult checkResult) {
+        List<LedgerMismatch> samples = checkResult.samples();
+        for (int i = 0; i < samples.size(); i++) {
+            LedgerMismatch mismatch = samples.get(i);
             log.warn("[원장 대사] 불일치 상세 {}/{}: 검사={}({}), accountId={}, marginId={}, {}",
-                    i + 1, ofCheck.size(), mismatch.check(), mismatch.check().getDescription(),
+                    i + 1, checkResult.totalCount(), mismatch.check(), mismatch.check().getDescription(),
                     mismatch.accountId(), mismatch.marginId(), mismatch.detail());
         }
-        if (ofCheck.size() > logged) {
-            log.warn("[원장 대사] 불일치 상세 {}건 생략 (검사={}). 검사별 상세 로그 상한 {}건",
-                    ofCheck.size() - logged, ofCheck.get(0).check(), DETAIL_LOG_LIMIT);
+        if (checkResult.omittedCount() > 0) {
+            log.warn("[원장 대사] 불일치 상세 {}건 생략 (검사={}). 검사별 조회 상한 {}건",
+                    checkResult.omittedCount(), checkResult.check(), LedgerReconciliationService.SAMPLE_LIMIT);
         }
     }
 
-    // 예: "a1b2..., c3d4..." / 상한 초과 시 "a1b2..., ... 외 5건"
-    private String targetIds(List<LedgerMismatch> mismatches) {
-        String ids = mismatches.stream()
-                .limit(DETAIL_LOG_LIMIT)
+    // 예: "a1b2..., c3d4..." / 조회 상한 초과 시 "a1b2..., ... 외 5건"
+    private String targetIds(LedgerCheckResult checkResult) {
+        String ids = checkResult.samples().stream()
                 .map(mismatch -> String.valueOf(mismatch.targetId()))
                 .collect(Collectors.joining(", "));
-        int omitted = mismatches.size() - DETAIL_LOG_LIMIT;
-        return omitted > 0 ? ids + " 외 " + omitted + "건" : ids;
+        return checkResult.omittedCount() > 0 ? ids + " 외 " + checkResult.omittedCount() + "건" : ids;
     }
 
     // 예: "MARGIN_BALANCE=0, LEDGER_SUM=1, MARGIN_PENDING_LEDGER=0, MARGIN_STATUS_LEDGER=0"

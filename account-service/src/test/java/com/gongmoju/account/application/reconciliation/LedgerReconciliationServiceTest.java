@@ -201,6 +201,27 @@ class LedgerReconciliationServiceTest {
     }
 
     @Test
+    void 불일치가_조회_상한을_초과하면_전체_건수는_집계하고_조회는_상한까지만_한다() {
+        // 원장 없이 잔고만 있는 계좌 150개 → 잔고 합계 검사 불일치 150건
+        int count = LedgerReconciliationService.SAMPLE_LIMIT + 50;
+        jdbcTemplate.update("""
+                INSERT INTO users (user_id, login_id, password_hash, name, role, created_at, updated_at, created_by, updated_by)
+                SELECT gen_random_uuid(), 'bulk' || n, 'hash', '테스트', 'USER', now(), now(), 'test', 'test'
+                FROM generate_series(1, ?) AS n""", count);
+        jdbcTemplate.update("""
+                INSERT INTO account (account_id, user_id, request_id, account_number, cash_balance, margin_balance, created_at, updated_at, created_by, updated_by)
+                SELECT gen_random_uuid(), u.user_id, gen_random_uuid(), lpad((200000000000 + row_number() OVER ())::text, 12, '0'), 1000, 0,
+                       now(), now(), 'test', 'test'
+                FROM users u WHERE u.login_id LIKE 'bulk%'""");
+
+        LedgerReconciliationResult result = reconciliationService.reconcile();
+
+        assertThat(result.count(LEDGER_SUM)).isEqualTo(count);
+        assertThat(result.mismatchesOf(LEDGER_SUM)).hasSize(LedgerReconciliationService.SAMPLE_LIMIT);
+        assertThat(result.checkResult(LEDGER_SUM).omittedCount()).isEqualTo(50);
+    }
+
+    @Test
     void 원장이_다른_계좌의_증거금에_연결되면_계좌_불일치_검사만_검출한다() {
         // 다른 계좌에 같은 금액(15,000)의 PENDING 증거금을 생성하고, 두 인출 원장의 margin_id를 서로 교체한다
         // 계좌별 합계와 증거금별 금액이 모두 일치해서 기존 검사로는 검출 불가

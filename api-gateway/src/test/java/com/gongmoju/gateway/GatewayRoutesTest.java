@@ -32,15 +32,21 @@ class GatewayRoutesTest {
                 .extracting(Route::getId)
                 .containsExactlyInAnyOrder(
                         "account-service", "subscription-service", "allocation-service", "allocation-service-admin",
+                        "account-service-admin",
                         "account-service-api-docs", "subscription-service-api-docs", "allocation-service-api-docs");
     }
 
-    // 배정 관리자 경로는 배정 서비스로, 나머지 관리자 경로는 그대로 청약 서비스로 간다
-    // 두 라우트에 모두 맞는 경로라 라우트 순서가 바뀌면 배정 관리자 경로가 청약 서비스로 가므로 순서까지 확인한다
+    // 배정 관리자 경로는 배정 서비스로, 관리자 계정 경로는 계좌 서비스로, 나머지 관리자 경로는 그대로 청약 서비스로 간다
+    // 두 라우트에 모두 맞는 경로라 라우트 순서가 바뀌면 청약 서비스로 가므로 순서까지 확인한다
     @Test
-    void 배정_관리자_경로는_배정_서비스로_나머지_관리자_경로는_청약_서비스로_간다() {
+    void 배정_관리자_경로는_배정_서비스로_관리자_계정_경로는_계좌_서비스로_나머지_관리자_경로는_청약_서비스로_간다() {
         assertThat(routeIdFor("/api/v1/admin/allocations/ipos/8b2d0000-0000-4000-8000-000000000001/replay"))
                 .isEqualTo("allocation-service-admin");
+        assertThat(routeIdFor("/api/v1/admin/users")).isEqualTo("account-service-admin");
+        // 경로 이름이 users로 시작하기만 하는 다른 관리자 경로는 계좌 서비스로 가지 않는다
+        assertThat(routeIdFor("/api/v1/admin/usersx")).isEqualTo("subscription-service");
+        // 회원가입은 기존 계좌 라우트 그대로
+        assertThat(routeIdFor("/api/v1/users")).isEqualTo("account-service");
         assertThat(routeIdFor("/api/v1/admin/ipos")).isEqualTo("subscription-service");
         assertThat(routeIdFor("/api/v1/admin")).isEqualTo("subscription-service");
         // 회원용 배정 API는 기존 라우트 그대로

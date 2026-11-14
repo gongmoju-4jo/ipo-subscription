@@ -34,11 +34,15 @@ button, input, select { font: inherit; color: inherit; }
 .topbar-inner { max-width: 1080px; margin: 0 auto; padding: 0 20px; height: 60px; display: flex; align-items: center; gap: 28px; }
 .brand { font-weight: 800; font-size: 18px; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
 .brand-mark { width: 26px; height: 26px; border-radius: 8px; background: var(--text); color: #fff; display: grid; place-items: center; font-size: 14px; }
-.nav { display: flex; gap: 4px; flex: 1; }
+/* 링크마다 글자 크기가 달라도(14px, 15px) 늘이지 않고 가운데 맞춘다. 늘이면 작은 글자 링크만 높이가 달라진다 */
+.nav { display: flex; gap: 4px; flex: 1; align-items: center; }
 .nav a { padding: 8px 12px; border-radius: 10px; color: var(--text-2); font-weight: 600; font-size: 15px; }
 .nav a.active, .nav a:hover { background: var(--surface-2); color: var(--text); }
 .nav .ops-link { margin-left: auto; color: var(--text-3); font-weight: 500; font-size: 14px; }
 .user-chip { font-size: 14px; color: var(--text-2); display: flex; gap: 10px; align-items: center; }
+/* 상단바 오른쪽 링크(시스템 현황, 성과와 로드맵)와 같은 높이, 크기 */
+.admin-link { padding: 8px 12px; border-radius: 10px; color: var(--text-3); font-weight: 500; font-size: 14px; line-height: inherit; }
+.admin-link:hover, .admin-link.active { background: var(--surface-2); color: var(--text); }
 .page { max-width: 1080px; margin: 0 auto; padding: 28px 20px 80px; }
 .page-title { font-size: 26px; font-weight: 800; letter-spacing: -0.03em; margin: 4px 0 6px; }
 .page-sub { color: var(--text-3); margin: 0 0 24px; font-size: 15px; }
@@ -46,7 +50,7 @@ button, input, select { font: inherit; color: inherit; }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 860px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } .nav a { padding: 8px 8px; font-size: 14px; } .topbar-inner { gap: 12px; } }
+@media (max-width: 860px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } .nav a, .admin-link { padding: 8px 8px; font-size: 14px; } .topbar-inner { gap: 12px; } }
 .stack { display: flex; flex-direction: column; gap: 16px; }
 .row { display: flex; align-items: center; gap: 12px; }
 .between { justify-content: space-between; }
@@ -101,6 +105,8 @@ button, input, select { font: inherit; color: inherit; }
 .input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-weak); }
 .hint { font-size: 13px; color: var(--text-3); }
 .error-text { font-size: 14px; color: var(--red); }
+/* 입력칸 아래 경고는 같은 자리의 안내 문구(.hint)와 같은 크기로 */
+.field .error-text { font-size: 13px; }
 
 /* 알림 상자 */
 .notice { border-radius: 12px; padding: 12px 14px; font-size: 14px; line-height: 1.5; }
@@ -265,3 +271,24 @@ pre.code { background: #0f1720; color: #d6e2f0; padding: 12px; border-radius: 10
 .admit-timer strong.admit-timer-soon { color: var(--amber); }
 .admit-timer-hint { margin-left: auto; font-size: 13px; color: var(--text-3); }
 .admit-expired { animation: queue-pop 0.3s ease-out; }
+
+/* 관리자 계정을 만든 뒤 화면 */
+.created { max-width: 420px; margin: 56px auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; animation: created-in 0.35s ease-out both; }
+.created-check { width: 56px; height: 56px; border-radius: 50%; background: var(--green-weak); display: grid; place-items: center; animation: created-pop 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) 0.05s both; }
+.created-check path { fill: none; stroke: var(--green); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 24; stroke-dashoffset: 24; animation: created-draw 0.35s ease-out 0.3s forwards; }
+.created-title { margin-top: 20px; font-size: 22px; font-weight: 800; letter-spacing: -0.03em; }
+.created-id { margin-top: 18px; display: inline-flex; align-items: center; gap: 12px; padding: 12px 14px 12px 20px; border: 1px solid var(--line, #e5e8eb); border-radius: 14px; background: var(--surface, #fff); cursor: pointer; font: inherit; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.created-id > span:first-child { font-family: ui-monospace, Menlo, monospace; font-size: 20px; font-weight: 700; letter-spacing: 0.01em; color: var(--text); }
+.created-id:hover { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-weak); transform: translateY(-1px); }
+.created-id:active { transform: translateY(0); }
+.created-id-hint { font-size: 12px; font-weight: 600; color: var(--text-3); padding: 4px 8px; border-radius: 8px; background: var(--surface-2); transition: background 0.15s, color 0.15s; }
+.created-id.copied .created-id-hint { background: var(--green-weak); color: var(--green); }
+.created-meta { margin-top: 10px; font-size: 14px; color: var(--text-3); }
+.created-actions { margin-top: 36px; display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; }
+.created-actions .btn { width: 100%; max-width: 280px; }
+.link-btn { background: none; border: 0; padding: 4px; font: inherit; font-size: 14px; color: var(--text-3); cursor: pointer; border-radius: 6px; transition: color 0.15s; }
+.link-btn:hover { color: var(--text); }
+@keyframes created-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes created-pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes created-draw { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) { .created, .created-check, .created-check path { animation: none; stroke-dashoffset: 0; } }

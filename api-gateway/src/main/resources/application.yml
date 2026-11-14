@@ -51,6 +51,11 @@ spring:
               uri: lb://allocation-service
               predicates:
                 - Path=/api/v1/admin/allocations/**
+            # 관리자 계정 생성 API. 배정 관리자 API와 같은 이유로 subscription-service 위에 둔다
+            - id: account-service-admin
+              uri: lb://account-service
+              predicates:
+                - Path=/api/v1/admin/users/**
             - id: subscription-service
               uri: lb://subscription-service
               predicates:

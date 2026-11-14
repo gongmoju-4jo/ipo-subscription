@@ -18,6 +18,7 @@ import { DEMO } from './demo/flag';
 import { ADMIN_UI } from './admin/flag';
 import { RequireAdmin } from './admin/RequireAdmin';
 import { AdminIpoCreatePage } from './admin/AdminIpoCreatePage';
+import { AdminUserCreatePage } from './admin/AdminUserCreatePage';
 import './styles/global.css';
 
 const queryClient = new QueryClient({
@@ -51,6 +52,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="subscriptions/:subscriptionId" element={<SubscriptionDetailPage />} />
               <Route path="account" element={<AccountPage />} />
               {ADMIN_UI && <Route path="admin/ipos/new" element={<RequireAdmin><AdminIpoCreatePage /></RequireAdmin>} />}
+              {ADMIN_UI && <Route path="admin/users/new" element={<RequireAdmin><AdminUserCreatePage /></RequireAdmin>} />}
               {DEMO && <Route path="system" element={<SystemPage />} />}
               {DEMO && <Route path="goals" element={<GoalsPage />} />}
             </Route>

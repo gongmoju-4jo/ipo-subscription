@@ -130,6 +130,16 @@ class AuthorizationRulesTest {
         passes(call(HttpMethod.GET, path, JwtTestTokens.valid(secret, userId, "ADMIN")));
     }
 
+    // 관리자 계정 생성(계좌 서비스로 라우팅)도 같은 /api/v1/admin/** 규칙을 받는다. 공개 경로인 회원가입(POST /api/v1/users)과 달리 토큰이 필요하다
+    @Test
+    void 관리자_계정_생성_경로도_관리자_경로_규칙을_받는다() throws Exception {
+        String path = "/api/v1/admin/users";
+
+        call(HttpMethod.POST, path, JwtTestTokens.valid(secret, userId, "USER")).expectStatus().isForbidden();
+        call(HttpMethod.POST, path, null).expectStatus().isUnauthorized();
+        passes(call(HttpMethod.POST, path, JwtTestTokens.valid(secret, userId, "ADMIN")));
+    }
+
     private WebTestClient.ResponseSpec call(HttpMethod method, String path, String token) {
         WebTestClient.RequestHeadersSpec<?> request = webTestClient.method(method).uri(path);
         if (token != null) {

@@ -3,9 +3,9 @@ package com.gongmoju.account.infrastructure.startup;
 import com.gongmoju.account.application.user.AdminSeedResult;
 import com.gongmoju.account.application.user.UserService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.util.regex.Pattern;
@@ -28,6 +28,7 @@ import static com.gongmoju.account.domain.user.UserInputRules.PASSWORD_RULE;
  */
 @Slf4j
 @Component
+@EnableConfigurationProperties(AdminSeedProperties.class)
 public class AdminSeedRunner implements ApplicationRunner {
 
     // 회원가입(SignUpRequest)과 같은 형식 규칙 (UserInputRules)
@@ -39,17 +40,14 @@ public class AdminSeedRunner implements ApplicationRunner {
 
     /**
      * 값 검사는 생성할 때 한다. 형식이 틀리면 빈을 만들지 못해 서비스가 기동하지 않는다.
+     * 값은 @Value가 아니라 {@link AdminSeedProperties}로 받는다 (SpEL로 계산하지 않고 원문 그대로).
      *
-     * @param loginId  첫 관리자 로그인 ID (ADMIN_LOGIN_ID). 비어 있으면 시드하지 않는다
-     * @param password 첫 관리자 비밀번호 원문 (ADMIN_PASSWORD). 저장, 로그에 남기지 않는다
      * @throws IllegalStateException 하나만 있거나 형식이 틀림
      */
-    public AdminSeedRunner(UserService userService,
-                           @Value("${admin-seed.login-id:}") String loginId,
-                           @Value("${admin-seed.password:}") String password) {
+    public AdminSeedRunner(UserService userService, AdminSeedProperties properties) {
         this.userService = userService;
-        this.loginId = isBlank(loginId) ? null : loginId;
-        this.password = isBlank(password) ? null : password;
+        this.loginId = isBlank(properties.loginId()) ? null : properties.loginId();
+        this.password = isBlank(properties.password()) ? null : properties.password();
         validate();
     }
 

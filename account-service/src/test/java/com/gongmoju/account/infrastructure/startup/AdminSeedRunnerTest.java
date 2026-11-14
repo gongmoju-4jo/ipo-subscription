@@ -127,7 +127,7 @@ class AdminSeedRunnerTest {
         }
 
         private AdminSeedRunner runner(String loginId, String password) {
-            return new AdminSeedRunner(userService, loginId, password);
+            return new AdminSeedRunner(userService, new AdminSeedProperties(loginId, password));
         }
 
         private Map<String, Object> rowOf(String loginId) {
@@ -143,6 +143,41 @@ class AdminSeedRunnerTest {
     }
 
     /**
+     * 시드 값은 원문 그대로 쓴다. @Value로 읽으면 값 안의 #{...}를 SpEL로 계산해 다른 비밀번호가 저장됐다.
+     */
+    @Nested
+    @SpringBootTest(properties = {
+            "eureka.client.enabled=false",
+            "spring.datasource.url=jdbc:h2:mem:admin-seed-raw;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+            "spring.datasource.username=sa",
+            "spring.datasource.password=",
+            "spring.sql.init.mode=never",
+            "spring.jpa.hibernate.ddl-auto=create-drop",
+            "admin-seed.login-id=rawseed01",
+            "admin-seed.password=" + RawValue.SPEL_PASSWORD
+    })
+    @DisplayName("값에 #{...}가 있을 때")
+    class RawValue {
+
+        static final String SPEL_PASSWORD = "aa#{12345678}";
+
+        @Autowired
+        private JdbcTemplate jdbcTemplate;
+
+        @Autowired
+        private PasswordEncoder passwordEncoder;
+
+        @Test
+        @DisplayName("SpEL로 계산하지 않고 원문 그대로 비밀번호로 저장한다")
+        void password_storedAsWritten() {
+            String hash = jdbcTemplate.queryForObject(
+                    "SELECT password_hash FROM account.users WHERE login_id = 'rawseed01'", String.class);
+            assertThat(passwordEncoder.matches(SPEL_PASSWORD, hash)).isTrue();
+            assertThat(passwordEncoder.matches("aa12345678", hash)).isFalse();
+        }
+    }
+
+    /**
      * 값 검사는 생성자에서 한다 (빈 생성 실패 = 기동 실패). 저장소를 부르지 않으므로 null을 넘긴다.
      */
     @Nested
@@ -153,7 +188,7 @@ class AdminSeedRunnerTest {
         @CsvSource(value = {"NULL,NULL", "'',''", "'  ','  '"}, nullValues = "NULL")
         @DisplayName("둘 다 비어 있으면 기동하고 아무것도 만들지 않는다")
         void bothBlank_skips(String loginId, String password) {
-            assertThatCode(() -> new AdminSeedRunner(null, loginId, password).run(new DefaultApplicationArguments()))
+            assertThatCode(() -> new AdminSeedRunner(null, new AdminSeedProperties(loginId, password)).run(new DefaultApplicationArguments()))
                     .doesNotThrowAnyException();
         }
 
@@ -170,7 +205,7 @@ class AdminSeedRunnerTest {
         }, nullValues = "NULL")
         @DisplayName("하나만 있거나 형식이 틀리면 기동 실패, 메시지에 값은 나오지 않는다")
         void invalid_failsStartup(String loginId, String password, String expectedMessage) {
-            assertThatThrownBy(() -> new AdminSeedRunner(null, loginId, password))
+            assertThatThrownBy(() -> new AdminSeedRunner(null, new AdminSeedProperties(loginId, password)))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining(expectedMessage)
                     .satisfies(e -> {
@@ -186,8 +221,8 @@ class AdminSeedRunnerTest {
         @Test
         @DisplayName("경계값: 로그인 ID 4자, 20자와 비밀번호 8자, 20자는 통과")
         void boundary_passes() {
-            assertThatCode(() -> new AdminSeedRunner(null, "abcd", "12345678")).doesNotThrowAnyException();
-            assertThatCode(() -> new AdminSeedRunner(null, "abcdefghij0123456789", "abcdefghij0123456789"))
+            assertThatCode(() -> new AdminSeedRunner(null, new AdminSeedProperties("abcd", "12345678"))).doesNotThrowAnyException();
+            assertThatCode(() -> new AdminSeedRunner(null, new AdminSeedProperties("abcdefghij0123456789", "abcdefghij0123456789")))
                     .doesNotThrowAnyException();
         }
     }

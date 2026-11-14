@@ -102,8 +102,9 @@ export function LoginPage() {
         </div>
         <form className="card stack" onSubmit={submit}>
           <div className="tabs" style={{ width: '100%' }}>
-            <button type="button" className={mode === 'login' ? 'on' : ''} style={{ flex: 1 }} onClick={() => switchMode('login')}>로그인</button>
-            <button type="button" className={mode === 'signup' ? 'on' : ''} style={{ flex: 1 }} onClick={() => switchMode('signup')}>회원가입</button>
+            {/* 요청 중에는 탭을 바꾸지 못하게 한다. 가입 중 로그인 탭으로 바꾸면 이름 칸 오류를 보여 줄 칸이 없어 실패 사유가 사라진다 */}
+            <button type="button" className={mode === 'login' ? 'on' : ''} style={{ flex: 1 }} disabled={busy} onClick={() => switchMode('login')}>로그인</button>
+            <button type="button" className={mode === 'signup' ? 'on' : ''} style={{ flex: 1 }} disabled={busy} onClick={() => switchMode('signup')}>회원가입</button>
           </div>
           <div className="field">
             <label htmlFor="loginId">아이디</label>

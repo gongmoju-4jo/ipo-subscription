@@ -222,7 +222,8 @@ function SubmitError({ error }: { error: unknown }) {
       <div>{e ? e.message : '알 수 없는 오류'}</div>
       {unknownResult && (
         <div style={{ fontSize: 13, marginTop: 4 }}>
-          만들어졌을 수 있어요. 같은 로그인 ID로 다시 시도해 "이미 사용 중"이 나오면 만들어진 거예요
+          만들어졌을 수 있어요. 다시 시도해서 "이미 사용 중"이 나오면, 방금 정한 비밀번호로 그 ID에 로그인해 상단에 [관리자 계정 추가]가 보이는지 확인해 주세요
+          {/* "이미 사용 중"만으로는 이번에 만든 관리자인지 알 수 없다 (원래 있던 일반 회원 ID일 수 있음). 관리자 목록 API가 없어 로그인으로 확인한다 */}
         </div>
       )}
     </div>

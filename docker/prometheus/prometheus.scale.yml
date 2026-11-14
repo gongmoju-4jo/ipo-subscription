@@ -1,0 +1,46 @@
+# 수평 확장 재현용 (compose.scale.yml이 prometheus.yml 대신 끼운다).
+# 서비스 이름을 Docker 내부 DNS로 조회하면 인스턴스 IP가 모두 나와서, 인스턴스마다 따로 수집한다.
+# instance 라벨은 "IP:포트"다. 컨테이너가 다시 뜨면 IP가 바뀔 수 있어, 인스턴스를 가려 볼 때는 같은 시간대 안에서만 비교한다.
+# job 이름은 prometheus.yml과 같게 둬서 Grafana 대시보드, 알림 규칙을 그대로 쓴다.
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+
+scrape_configs:
+  - job_name: eureka-server
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["eureka-server:8761"]
+
+  # api-gateway(8080 공개)와 api-gateway-2(포트 비공개)를 같은 job으로 모은다. 지표는 관리 포트(18090)
+  - job_name: api-gateway
+    metrics_path: /actuator/prometheus
+    dns_sd_configs:
+      - names: ["api-gateway", "api-gateway-2"]
+        type: A
+        port: 18090
+        refresh_interval: 10s
+
+  - job_name: account-service
+    metrics_path: /actuator/prometheus
+    dns_sd_configs:
+      - names: ["account-service"]
+        type: A
+        port: 8081
+        refresh_interval: 10s
+
+  - job_name: subscription-service
+    metrics_path: /actuator/prometheus
+    dns_sd_configs:
+      - names: ["subscription-service"]
+        type: A
+        port: 8082
+        refresh_interval: 10s
+
+  - job_name: allocation-service
+    metrics_path: /actuator/prometheus
+    dns_sd_configs:
+      - names: ["allocation-service"]
+        type: A
+        port: 8083
+        refresh_interval: 10s

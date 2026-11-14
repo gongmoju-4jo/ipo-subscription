@@ -6,10 +6,13 @@ import { authApi } from '../api/endpoints';
 // 로그인 상태. 토큰은 탭을 닫으면 사라지도록 sessionStorage에만 둔다 (localStorage에 두지 않음)
 // 사용자 ID는 백엔드가 토큰으로 판단한다. 프론트는 화면 표시용으로만 토큰을 읽는다 (검증은 Gateway)
 
+export type UserRole = 'USER' | 'ADMIN';
+
 interface Session {
   token: string;
   loginId: string;
   expiresAt: number;
+  role: UserRole;
 }
 
 interface AuthValue {
@@ -19,6 +22,17 @@ interface AuthValue {
 }
 
 const KEY = 'ipo.session';
+
+// 토큰의 role로 관리자 메뉴 표시 여부만 결정한다. 서명 검증은 하지 않고, 권한 확인은 Gateway가 한다
+function roleOf(token: string): UserRole {
+  try {
+    const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const json = JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, '='))) as { role?: string };
+    return json.role === 'ADMIN' ? 'ADMIN' : 'USER';
+  } catch {
+    return 'USER';
+  }
+}
 const AuthContext = createContext<AuthValue | null>(null);
 
 function readSession(): Session | null {
@@ -26,7 +40,8 @@ function readSession(): Session | null {
     const raw = sessionStorage.getItem(KEY);
     if (!raw) return null;
     const s = JSON.parse(raw) as Session;
-    return s.expiresAt > Date.now() ? s : null;
+    // role이 없는 이전 형식 세션은 토큰에서 다시 읽는다
+    return s.expiresAt > Date.now() ? { ...s, role: roleOf(s.token) } : null;
   } catch {
     return null;
   }
@@ -57,7 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (loginId: string, password: string) => {
     const res = await authApi.login({ loginId, password });
-    const s: Session = { token: res.accessToken, loginId, expiresAt: Date.now() + res.expiresIn * 1000 };
+    const s: Session = { token: res.accessToken, loginId, expiresAt: Date.now() + res.expiresIn * 1000, role: roleOf(res.accessToken) };
     tokenStore.set(s.token);
     try {
       sessionStorage.setItem(KEY, JSON.stringify(s));

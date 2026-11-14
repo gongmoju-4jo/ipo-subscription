@@ -21,10 +21,13 @@ import lombok.NoArgsConstructor;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-// 공모주. CHECK 제약(1 이상, 균등 물량 범위, 증거금률 범위, 기간)은 ERD_v1.1_DDL.sql 기준으로 schema.sql 또는 생성 로직에서 검증
+// 공모주. CHECK 제약(1 이상, 균등 물량 범위, 증거금률 범위, 기간)은 schema.sql에 있고, 등록(register)에서도 같은 규칙을 확인한다
 @Getter
 @Entity
 @Table(name = "ipo")
@@ -75,6 +78,89 @@ public class Ipo extends BaseEntity {
     @Version
     @Column(nullable = false)
     private long version;
+
+    // 환불일은 마감 시각의 KST 날짜와 비교한다 (schema.sql ck_ipo_refund_date와 같은 기준)
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
+    /**
+     * 관리자가 공모주를 등록한다 (API 명세 3.6, F-18). 상태는 OPEN으로 시작한다.
+     * 값의 범위와 필드끼리의 관계를 모두 확인하고, 어긴 규칙을 한꺼번에 details로 모아 던진다.
+     * 규칙은 schema.sql의 ck_ipo_* 제약과 같고, 증거금률과 마감 시각은 더 좁게 받는다.
+     * 종목명(필수, 30자)은 요청 형식이라 요청 DTO가 확인한다.
+     * <p>
+     * 검사를 통과한 값이 저장(DB 제약)이나 이후 계산에서 실패하지 않게 맞춘다.
+     * <ul>
+     *   <li>금액 계산(청약 금액 = 수량 x 공모가, 배정 대금 합계 = 물량 x 공모가)과 DB 제약의 균등 물량 x 2가 long 범위를 넘지 않게 상한을 둔다</li>
+     *   <li>시각은 DB(TIMESTAMPTZ)와 같은 마이크로초로 잘라서 검사, 저장한다. 나노초를 DB가 반올림하면 검사를 통과한 값이 제약에 걸릴 수 있다</li>
+     *   <li>증거금률은 1만 받으므로 컬럼 자릿수에 맞춰 1.00으로 저장한다 (등록 응답과 조회 응답이 같게)</li>
+     * </ul>
+     *
+     * @param minQuantity 최소 청약 수량 (요청에 없으면 호출하는 쪽에서 기본값 10을 넣는다)
+     * @param marginRate  증거금률. 1(100%)만 받는다. 청약 접수가 100%만 처리하기 때문 (D-18)
+     * @param now         지금 시각. 마감 시각이 이미 지난 공모주는 등록하지 않는다 (시작 시각이 지난 것은 시연에서 바로 청약 중으로 등록하려고 허용)
+     * @throws BusinessException 규칙을 어기면 VALIDATION_ERROR(400), details에 필드별 사유
+     */
+    public static Ipo register(String name, long offerPrice, long retailQuantity, long equalQuantity,
+                               long minQuantity, long maxQuantity, BigDecimal marginRate,
+                               Instant subscriptionStartAt, Instant subscriptionEndAt, LocalDate refundDate,
+                               Instant now) {
+        subscriptionStartAt = subscriptionStartAt.truncatedTo(ChronoUnit.MICROS);
+        subscriptionEndAt = subscriptionEndAt.truncatedTo(ChronoUnit.MICROS);
+
+        List<ApiErrorDetail> violations = new ArrayList<>();
+        if (offerPrice < 1) {
+            violations.add(new ApiErrorDetail("offerPrice", "1 이상이어야 합니다."));
+        }
+        if (retailQuantity < 1) {
+            violations.add(new ApiErrorDetail("retailQuantity", "1 이상이어야 합니다."));
+        } else if (retailQuantity > Long.MAX_VALUE / 2 || (offerPrice >= 1 && retailQuantity > Long.MAX_VALUE / offerPrice)) {
+            violations.add(new ApiErrorDetail("retailQuantity", "공모가와 일반청약 물량이 너무 커서 금액을 계산할 수 없습니다."));
+        }
+        // 균등 물량 x 2 ≥ 일반청약 물량. 일반청약 물량이 범위를 넘은 경우에도 넘치지 않게 빼서 비교한다
+        // 균등 물량이 음수면 뺄셈이 넘칠 수 있어(아주 작은 음수는 비교를 통과함) 1 이상인지 먼저 본다
+        if (equalQuantity < 1) {
+            violations.add(new ApiErrorDetail("equalQuantity", "1 이상이어야 합니다."));
+        } else if (equalQuantity < retailQuantity - equalQuantity || equalQuantity > retailQuantity) {
+            violations.add(new ApiErrorDetail("equalQuantity", "일반청약 물량의 절반 이상, 일반청약 물량 이하여야 합니다."));
+        }
+        if (minQuantity < 1) {
+            violations.add(new ApiErrorDetail("minQuantity", "1 이상이어야 합니다."));
+        }
+        if (maxQuantity < minQuantity) {
+            violations.add(new ApiErrorDetail("maxQuantity", "최소 청약 수량 이상이어야 합니다."));
+        } else if (offerPrice >= 1 && maxQuantity > Long.MAX_VALUE / offerPrice) {
+            violations.add(new ApiErrorDetail("maxQuantity", "공모가와 청약 한도가 너무 커서 청약 금액을 계산할 수 없습니다."));
+        }
+        if (marginRate.compareTo(BigDecimal.ONE) != 0) {
+            violations.add(new ApiErrorDetail("marginRate", "증거금률은 1.00(100%)만 등록할 수 있습니다."));
+        }
+        if (!subscriptionEndAt.isAfter(subscriptionStartAt)) {
+            violations.add(new ApiErrorDetail("subscriptionEndAt", "청약 시작 시각보다 뒤여야 합니다."));
+        }
+        if (!subscriptionEndAt.isAfter(now)) {
+            violations.add(new ApiErrorDetail("subscriptionEndAt", "현재 시각보다 뒤여야 합니다."));
+        }
+        if (!refundDate.isAfter(LocalDate.ofInstant(subscriptionEndAt, KST))) {
+            violations.add(new ApiErrorDetail("refundDate", "청약 마감일(KST)보다 뒤여야 합니다."));
+        }
+        if (!violations.isEmpty()) {
+            throw new BusinessException(CommonErrorCode.VALIDATION_ERROR,
+                    CommonErrorCode.VALIDATION_ERROR.getMessage(), List.copyOf(violations));
+        }
+
+        Ipo ipo = new Ipo();
+        ipo.name = name;
+        ipo.offerPrice = offerPrice;
+        ipo.retailQuantity = retailQuantity;
+        ipo.equalQuantity = equalQuantity;
+        ipo.minQuantity = minQuantity;
+        ipo.maxQuantity = maxQuantity;
+        ipo.marginRate = marginRate.setScale(2);
+        ipo.subscriptionStartAt = subscriptionStartAt;
+        ipo.subscriptionEndAt = subscriptionEndAt;
+        ipo.refundDate = refundDate;
+        return ipo;
+    }
 
     /**
      * 청약을 받을 수 있는지 검증한다 (API 명세 F-02 사전 검증). 상태 → 청약 기간 → 수량 순서로 확인한다.

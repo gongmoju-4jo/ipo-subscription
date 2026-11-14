@@ -11,6 +11,9 @@ import java.util.UUID;
 // 공모주 저장소. 구현은 infrastructure/persistence (JPA)
 public interface IpoRepository {
 
+    // 관리자 공모주 등록(F-18)용
+    Ipo save(Ipo ipo);
+
     Page<Ipo> findAll(Pageable pageable);
 
     Optional<Ipo> findById(UUID ipoId);

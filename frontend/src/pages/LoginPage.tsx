@@ -8,6 +8,7 @@ import { LogoMark } from '../components/Logo';
 type Field = 'loginId' | 'password' | 'passwordConfirm' | 'name';
 type FieldErrors = Partial<Record<Field, string>>;
 
+// 계좌 서비스 UserInputRules와 같게 유지한다 (바꾸면 AdminUserCreatePage 검사도 같이)
 const MAX_LENGTH = 20;
 
 // 가입할 때 20자를 넘는 순간 그 칸 아래에 바로 경고한다 (글자를 막으면 붙여 넣은 비밀번호가 말없이 잘린다)

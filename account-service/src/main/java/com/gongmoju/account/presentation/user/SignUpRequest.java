@@ -5,19 +5,26 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import static com.gongmoju.account.domain.user.UserInputRules.LOGIN_ID_REGEX;
+import static com.gongmoju.account.domain.user.UserInputRules.LOGIN_ID_RULE;
+import static com.gongmoju.account.domain.user.UserInputRules.NAME_MAX_LENGTH;
+import static com.gongmoju.account.domain.user.UserInputRules.PASSWORD_MAX_LENGTH;
+import static com.gongmoju.account.domain.user.UserInputRules.PASSWORD_MIN_LENGTH;
+import static com.gongmoju.account.domain.user.UserInputRules.PASSWORD_RULE;
+
 @Schema(description = "회원가입 요청. 역할(role)은 받지 않고 가입자는 항상 USER")
 public record SignUpRequest(
-        @Schema(description = "로그인 ID (4~20자, 영문 소문자, 숫자)", example = "investor01")
+        @Schema(description = "로그인 ID (" + LOGIN_ID_RULE + ")", example = "investor01")
         @NotBlank(message = "필수값입니다.")
-        @Pattern(regexp = "^[a-z0-9]{4,20}$", message = "4~20자의 영문 소문자, 숫자만 사용할 수 있습니다.")
+        @Pattern(regexp = LOGIN_ID_REGEX, message = LOGIN_ID_RULE + "만 사용할 수 있습니다.")
         String loginId,
-        @Schema(description = "비밀번호 (8자 이상 20자 이하)", example = "password1234")
+        @Schema(description = "비밀번호 (" + PASSWORD_RULE + ")", example = "password1234")
         @NotBlank(message = "필수값입니다.")
-        @Size(min = 8, max = 20, message = "8자 이상 20자 이하여야 합니다.")
+        @Size(min = PASSWORD_MIN_LENGTH, max = PASSWORD_MAX_LENGTH, message = PASSWORD_RULE + "여야 합니다.")
         String password,
-        @Schema(description = "이름 (1~20자)", example = "홍길동")
+        @Schema(description = "이름 (1~" + NAME_MAX_LENGTH + "자)", example = "홍길동")
         @NotBlank(message = "필수값입니다.")
-        @Size(max = 20, message = "20자 이하여야 합니다.")
+        @Size(max = NAME_MAX_LENGTH, message = NAME_MAX_LENGTH + "자 이하여야 합니다.")
         String name
 ) {
 

@@ -10,6 +10,12 @@ import org.springframework.stereotype.Component;
 
 import java.util.regex.Pattern;
 
+import static com.gongmoju.account.domain.user.UserInputRules.LOGIN_ID_REGEX;
+import static com.gongmoju.account.domain.user.UserInputRules.LOGIN_ID_RULE;
+import static com.gongmoju.account.domain.user.UserInputRules.PASSWORD_MAX_LENGTH;
+import static com.gongmoju.account.domain.user.UserInputRules.PASSWORD_MIN_LENGTH;
+import static com.gongmoju.account.domain.user.UserInputRules.PASSWORD_RULE;
+
 /**
  * 첫 관리자 시드. 계좌 서비스가 뜰 때 admin-seed.login-id(ADMIN_LOGIN_ID)로 {@link UserService#seedAdmin}을 부른다.
  * 이 클래스는 실행 시점, 설정값 읽기, 형식 검사, 로그만 맡고, 계정이 있는지 보고 만들지는 UserService가 정한다.
@@ -24,10 +30,8 @@ import java.util.regex.Pattern;
 @Component
 public class AdminSeedRunner implements ApplicationRunner {
 
-    // 회원가입(SignUpRequest)과 같은 형식 규칙
-    private static final Pattern LOGIN_ID_PATTERN = Pattern.compile("^[a-z0-9]{4,20}$");
-    private static final int PASSWORD_MIN_LENGTH = 8;
-    private static final int PASSWORD_MAX_LENGTH = 20;
+    // 회원가입(SignUpRequest)과 같은 형식 규칙 (UserInputRules)
+    private static final Pattern LOGIN_ID_PATTERN = Pattern.compile(LOGIN_ID_REGEX);
 
     private final UserService userService;
     private final String loginId;
@@ -75,10 +79,10 @@ public class AdminSeedRunner implements ApplicationRunner {
             throw new IllegalStateException("ADMIN_LOGIN_ID만 있고 ADMIN_PASSWORD가 비어 있습니다. 둘 다 넣거나 둘 다 비웁니다.");
         }
         if (!LOGIN_ID_PATTERN.matcher(loginId).matches()) {
-            throw new IllegalStateException("ADMIN_LOGIN_ID 형식이 틀렸습니다. 4~20자의 영문 소문자, 숫자만 사용할 수 있습니다.");
+            throw new IllegalStateException("ADMIN_LOGIN_ID 형식이 틀렸습니다. " + LOGIN_ID_RULE + "만 사용할 수 있습니다.");
         }
         if (password.length() < PASSWORD_MIN_LENGTH || password.length() > PASSWORD_MAX_LENGTH) {
-            throw new IllegalStateException("ADMIN_PASSWORD 형식이 틀렸습니다. 8자 이상 20자 이하여야 합니다.");
+            throw new IllegalStateException("ADMIN_PASSWORD 형식이 틀렸습니다. " + PASSWORD_RULE + "여야 합니다.");
         }
     }
 

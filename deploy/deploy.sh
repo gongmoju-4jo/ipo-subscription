@@ -88,6 +88,7 @@ main() {
     grep -q "^${key}='[^']" "$tmp" || missing+=("$key")
   done
   # 스모크 계정 형식은 서비스를 바꾸기 전에 검사한다 (smoke.sh, 회원가입과 같은 규칙)
+  # 로그인 ID, 비밀번호 길이 규칙은 계좌 서비스 UserInputRules와 같게 유지한다 (바꾸면 아래 ADMIN_* 검사, admin_password_ok도 같이)
   # 작은따옴표는 다른 값과 같이 거부한다 (이전 버전 deploy.sh로 롤백할 때도 같은 값으로 배포되도록)
   [[ "$smoke_id" =~ ^[a-z0-9]{4,20}$ ]] || missing+=("SMOKE_LOGIN_ID(영문 소문자, 숫자 4~20자)")
   if (( ${#smoke_pw} < 8 || ${#smoke_pw} > 20 )) || [[ "$smoke_pw" == *"'"* ]]; then

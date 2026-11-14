@@ -35,6 +35,7 @@ function fieldErrorsOf(error: unknown): Partial<Record<keyof Form, string>> {
 }
 
 // 서버 검사 규칙(AdminUserCreateRequest)과 같은 조건을 화면에서 먼저 안내한다
+// 숫자(4~20자, 8~20자, 이름 20자)는 계좌 서비스 UserInputRules와 같게 유지한다 (바꾸면 LoginPage 회원가입 검사도 같이)
 function validate(f: Form): Partial<Record<keyof Form, string>> {
   const e: Partial<Record<keyof Form, string>> = {};
   if (!f.loginId) e.loginId = '로그인 ID를 입력해 주세요';

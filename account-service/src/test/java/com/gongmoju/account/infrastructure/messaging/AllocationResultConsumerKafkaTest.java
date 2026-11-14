@@ -176,11 +176,14 @@ class AllocationResultConsumerKafkaTest {
 
         assertArrivesInDltQuickly(accountId, broken, startedAt);
         // 환불 5,000 (8,000 - 3,000) + 전액 배정 0 → 예수금 10,000
-        await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> assertThat(cashBalance()).isEqualTo(10_000L));
-        assertThat(marginStatus(firstSubscriptionId)).isEqualTo("POSTED");
-        assertThat(marginStatus(lastSubscriptionId)).isEqualTo("POSTED");
-        assertThat(processedCount(firstEventId)).isEqualTo(1);
-        assertThat(processedCount(lastEventId)).isEqualTo(1);
+        // 마지막 정산은 예수금을 변경하지 않아 예수금만으로는 처리 완료를 확인할 수 없으므로, 마지막 처리 기록까지 대기한다
+        await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> {
+            assertThat(cashBalance()).isEqualTo(10_000L);
+            assertThat(marginStatus(firstSubscriptionId)).isEqualTo("POSTED");
+            assertThat(marginStatus(lastSubscriptionId)).isEqualTo("POSTED");
+            assertThat(processedCount(firstEventId)).isEqualTo(1);
+            assertThat(processedCount(lastEventId)).isEqualTo(1);
+        });
         assertThat(outboxEventTypes(accountId))
                 .containsExactly("margin.reserved", "margin.reserved", "margin.settled", "margin.settled");
     }

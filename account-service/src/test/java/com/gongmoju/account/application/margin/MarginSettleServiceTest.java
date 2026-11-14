@@ -262,6 +262,64 @@ class MarginSettleServiceTest {
         assertRolledBack();
     }
 
+    // ---- 배치 정산 (#114) ----
+
+    @Test
+    void 배치로_여러_청약을_한_트랜잭션에서_정산한다() {
+        // 예수금 20,000 → 인출 8,000, 7,000 → 예수금 5,000 / 청약증거금 15,000
+        UUID firstSubscriptionId = reserve(8_000);
+        UUID secondSubscriptionId = reserve(7_000);
+
+        // 첫 번째: 배정 대금 3,000, 환불 5,000 / 두 번째: 전액 배정 7,000
+        marginSettleService.settleBatch(List.of(
+                command(firstSubscriptionId, accountId, 3_000),
+                command(secondSubscriptionId, accountId, 7_000)));
+
+        assertBalance(10_000, 0);
+        assertThat(margin(firstSubscriptionId).get("status")).isEqualTo("POSTED");
+        assertThat(margin(secondSubscriptionId).get("status")).isEqualTo("POSTED");
+        assertThat(settledOutbox()).extracting(row -> row.get("posted_amount")).containsExactly(3_000L, 7_000L);
+        assertThat(settleProcessedCount()).isEqualTo(2);
+    }
+
+    @Test
+    void 배치에_같은_청약이_2번_있으면_두_번째는_잔고_변경_없이_같은_응답을_재발행한다() {
+        UUID subscriptionId = reserve(15_000);
+
+        marginSettleService.settleBatch(List.of(
+                command(subscriptionId, accountId, 6_000),
+                command(subscriptionId, accountId, 6_000))); // 새 eventId
+
+        assertBalance(14_000, 0);
+        assertThat(settleLedger()).extracting(row -> row.get("type")).containsExactly("MARGIN_POST", "REFUND");
+        assertThat(settledOutbox()).extracting(row -> row.get("refund_amount")).containsExactly(9_000L, 9_000L);
+    }
+
+    @Test
+    void 배치에_같은_eventId가_2번_있으면_두_번째는_건너뛴다() {
+        UUID subscriptionId = reserve(15_000);
+        SettleMarginCommand command = command(subscriptionId, accountId, 6_000);
+
+        marginSettleService.settleBatch(List.of(command, command));
+
+        assertBalance(14_000, 0);
+        assertThat(settledOutbox()).hasSize(1);
+        assertThat(settleProcessedCount()).isEqualTo(1);
+    }
+
+    @Test
+    void 배치_중_1건이_실패하면_앞에서_정산한_건까지_전체_롤백한다() {
+        UUID subscriptionId = reserve(15_000);
+
+        // 두 번째는 margin이 없는 청약이라 InvalidEventException
+        assertThatThrownBy(() -> marginSettleService.settleBatch(List.of(
+                command(subscriptionId, accountId, 6_000),
+                command(UUID.randomUUID(), accountId, 6_000))))
+                .isInstanceOf(InvalidEventException.class);
+
+        assertPendingUntouched(subscriptionId);
+    }
+
     // 인출 상태 그대로 (예수금 5,000 / 청약증거금 15,000, PENDING) 정산 쪽 기록이 없어야 한다
     private void assertPendingUntouched(UUID subscriptionId) {
         assertBalance(5_000, 15_000);

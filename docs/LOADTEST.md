@@ -40,6 +40,10 @@
 | `loadtest/precheck.sh` | 회차 시작 전 점검 (Eureka, 토큰 나이, Outbox, DLT, Consumer lag) |
 | `loadtest/run-k6.sh` | 입장 허가 넣기, 시나리오 실행, 원본 저장, 입장 허가 지우기 (`seed/admit.sh`) |
 | `loadtest/s2.sh` | S2 마감 경계 한 회차 실행 (워밍업, 공모주 준비, 대상 공모주 마감 시각 설정, 실행, 판정). 6장 |
+| `loadtest/s6.sh` | S6 장애 주입 한 회차 실행 (기준 상태 복원, 토큰, 사전 점검, 부하 시작, 계좌 서비스 강제 종료와 재시작, 소진 대기, DLT와 환경 기록, 정합성 SQL, 판정). 6장 |
+| `loadtest/verify/s6_judge.py` | S6 한 회차 판정 (회차 유효성, 결과 위반, 장애 구간, DLT 증가와 중복 수신 기록. `s6-judge.txt`) |
+| `loadtest/verify/s6_summary.py` | S6 여러 회차를 한 표로 (회차별 값, 중앙값, 최소~최대. 3회 측정용) |
+| `loadtest/sql/verify-s6.sql` | S6 정합성 검사 23~26번과 상태별 요약 (`verify.sql` 1~22번 다음 번호) |
 | `loadtest/verify/s2_judge.py` | S2 한 회차 판정 (회차 유효성, `verify.sql` 20~22번 결과, 202인데 청약 행이 없는 요청. `s2-judge.txt`) |
 | `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js`, 대량 환불 스냅샷용 청약 시드 `g2.js`(수량은 `g2-quantity.js`) |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
@@ -482,6 +486,7 @@ python loadtest/report.py --run-id $RUN                                         
 | S2 | 마감 경계: 대상 공모주에 회원 1,000명이 1건씩, 마감 시각 앞뒤에 걸쳐 요청하고 배경 공모주로 전체 274건/초 유지 (아래 S2 절) | 대상 1개(측정 중 마감) + 배경 여러 개(`IPO_IDS`) | `users.csv` | 대상: 마감 전 도착 202, 마감 후 422 `SUBSCRIPTION_CLOSED`, 마감 처리 뒤 409 `INVALID_STATUS_TRANSITION`. 배경: 전부 202 |
 | S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약(다른 계좌 청약)은 청약 API가 접수 트랜잭션에서 `REJECTED(ALREADY_SUBSCRIBED)`로 저장 |
 | S4 | Synthetic Data `s4-behavior.csv`: 투자자 1,000명 x 1건, 97명 예수금 부족 (S0과 같은 100명 x 10회) | 새 공모주 | `users-s4.csv` (S4 행동 CSV의 입금액으로 시드) | 전부 202 (잔액 부족 판정은 Consumer) |
+| S6 | 장애 주입: 회원 1,000명이 1건씩, 일정한 도착률(기본 100건/초 × 10초)로 요청하고 부하 도중 계좌 서비스를 강제 종료했다가 재시작 (아래 S6 절) | 새 공모주 | `users.csv` | 전부 202 (접수는 계좌 서비스와 무관) |
 
 - **S1의 조건(요청 속도, 유지 시간, 요청 구성)은 임시 값입니다.** 첫 측정 전에 확정하고, 측정을 시작한 뒤에는 바꾸지 않습니다.
 - S0은 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`). S2는 `RATE`, `PRE`, `POST`로 조정합니다 (아래 S2 절). S3, S4는 요청 수가 행동 CSV 행 수(1,000)와 같아야 해서 줄이면 시작 전에 멈춥니다.
@@ -553,6 +558,38 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 - 서비스를 새로 띄운 직후 첫 단계는 워밍업(JVM, 커넥션 풀)의 영향으로 낮게 나올 수 있어서, 한계에 닿은 속도를 한 번 더 확인합니다.
 - 고른 속도는 `-e STAGES=...`로 넘기거나 `loadtest/k6/s1.js`의 기본값으로 정하고, 측정 전에 확정합니다.
 
+### S6 장애 주입 (`s6.sh`)
+
+부하 도중에 계좌 서비스를 강제 종료(`docker kill`)했다가 다시 띄웠을 때 청약과 증거금의 상태와 변경을 확인한다. 접수 API는 계좌 서비스를 부르지 않아서 장애 중에도 접수(202)는 계속되고, 인출 요청(`margin.reserve-requested`)이 Kafka에 쌓였다가 재시작 뒤 처리됩니다. 계좌 응답이 접수 후 90초(응답 대기 30초 × 최대 3회) 안에 오지 않은 청약은 `COMPENSATING(TIMEOUT)`을 거쳐 `CANCELLED`가 됩니다.
+
+```bash
+WARM=1 OUTAGE=10 bash loadtest/s6.sh --run-id S6-a-r1   # S6-a 짧은 장애 (종료 10초 뒤 재시작, 서비스가 돌아오는 UP까지 약 33초). r2, r3도 같은 방식
+WARM=1 OUTAGE=80 bash loadtest/s6.sh --run-id S6-b-r1   # S6-b 긴 장애 (종료 80초 뒤 재시작, UP까지 약 103초). r2, r3도 같은 방식
+python loadtest/verify/s6_summary.py --runs S6-a-r1 S6-a-r2 S6-a-r3   # 3회를 한 표로 (회차별 값, 중앙값, 최소~최대)
+ALLOW_DIRTY=1 RATE=2 DURATION=6 KILL_AT=1 OUTAGE=10 bash loadtest/s6.sh --run-id S6-smoke   # 스모크 (요청 12건, 본 측정 전 한 번. 결과는 측정 결과로 쓰지 않음)
+```
+
+- 합격 기준: 정합성 위반 0건과 회차 유효 조건입니다 (아래 판정). G1, G2 기준은 적용하지 않습니다 (일부러 장애를 내서 확정과 소진이 길어지는 것이 정상입니다). 같은 조건 3회 중앙값은 기준선으로 기록만 합니다.
+- 요청 배치: S0은 1,000건이 1~2초에 끝나 "부하 시작 N초 뒤 종료"를 맞출 수 없어서, 같은 건수를 일정한 도착률(`constant-arrival-rate`)로 `DURATION`초에 걸쳐 보냅니다. 회원은 공모주 하나에 한 번씩만 청약하므로 요청 수(`RATE × DURATION`)는 회원 수 이하여야 하고, 모두 새 공모주 하나에 청약합니다 (이중청약 없음). 기본은 S0~S4와 같은 1,000건(100건/초 × 10초)입니다. 건수는 `RATE`, `DURATION`으로 바꿀 수 있지만, 바뀌면 시간 초과 시점이 달라져 S6-b의 `OUTAGE`도 다시 정해야 합니다 (아래).
+- run_id: `s2.sh`와 같은 "시나리오-변형-r회차" 형식(`S6-a-r1`, `S6-b-r1`)입니다.
+- 흐름: 이 커밋으로 빌드, 배포하고 jar를 확인(`s2.sh`와 같은 방식) → `baseline.sh restore`로 기준 상태 복원 → 토큰 재발급 → (`WARM=1`이면 워밍업) → 사전 점검(`precheck.sh`. 실패하면 종료 코드 9) → 시작 전 DLT 건수 기록 → 부하 시작 → 시작 `KILL_AT`초 뒤 `docker kill ipo-account-service` → `OUTAGE`초 뒤 `docker start` → healthy 확인 → k6 종료 → 소진 대기 → 끝 DLT 건수 기록 → `verify.sh`, `verify-s6.sql` → 판정.
+- 워밍업: 정식 측정은 `WARM=1`로 합니다. 복원 뒤 `s2.sh`와 같은 워밍업(`warmup.py`, 응답 시간 추세가 평평해질 때까지)을 하고, 소진과 30초 대기 뒤 시작합니다. 워밍업 결과는 `results/<run_id>/warmup.csv`, `results/<run_id>-W/`에 남고 `s6-judge.txt`에 "워밍업: 함 (N초, M건/초)"이 표시됩니다.
+- 계좌 컨테이너는 `restart` 정책이 없어 `kill`하면 죽은 채로 남고, 재시작은 `docker start`로 합니다 (`compose up`은 컨테이너를 다시 만들어 jar 확인과 시작 시각이 달라집니다). 스크립트가 중간에 멈춰도 계좌 서비스가 멈춘 채면 다시 띄웁니다.
+- 시각: `events.txt`의 시각은 모두 컨테이너 시계(epoch ms)입니다. `k6_start_ms`(부하 시작), `kill_ms`(종료 직후. `docker kill`이 약 1.7초 걸려 `KILL_AT`보다 늦음), `restart_ms`(재시작 명령 직후), `up_ms`(healthy 확인. 헬스체크 간격만큼 늦게 잡힘). 장애 시간은 종료→재시작 명령과 종료→UP 둘 다 `s6-judge.txt`에 나옵니다. `OUTAGE`는 "종료 뒤 재시작 명령까지"이고 서비스가 실제로 돌아오는 UP은 약 23초 더 걸립니다.
+- S6-b의 `OUTAGE`: 시간 초과 보상은 접수 후 90초(응답 대기 30초 × 3회)에 시작하지만, 시간 초과 스케줄러(`saga.timeout.*`)가 `interval`(5초, 실제 약 5.3초)마다 오래된 순으로 `batch-size`(100)건씩만 처리해서 요청이 많으면 늦어집니다. 200건은 접수 약 90초, 1,000건은 종료 기준 약 95~106초에 첫 보상이 시작됩니다. 그래서 1,000건 기준 S6-b는 `OUTAGE=80`입니다. 70초는 보상이 시작되기 전에 서비스가 돌아와 `TIMEOUT`이 0건이고(기획서의 60초도 같음), 80초 근처에서 재시작 뒤 확정과 시간 초과가 섞입니다. 80초 근처는 스케줄러가 복구 직전에 몇 번째 묶음을 처리했는지에 따라 `TIMEOUT` 건수가 달라지고, 0건이면 `s6-judge.txt`에 경고가 나옵니다. 회차는 무효가 아니므로 버리지 말고 "보상 경로 미검증 회차"로 기록하고 다시 측정합니다. 스케줄러 설정을 바꾸면 결과가 달라지므로 `env.txt`의 `saga_timeout`으로 해석합니다.
+- 여러 회차 요약: 같은 조건으로 3회 돌린 뒤 `python loadtest/verify/s6_summary.py --runs ...`로 회차별 값과 중앙값, 최소~최대를 한 표로 봅니다. 무효 회차는 표에 남기고 중앙값에서 뺍니다. 워밍업 조건이 섞이면 알려 줍니다.
+- `lag.csv`: `margin.reserve-requested` 랙을 `LAG_INTERVAL`마다 기록합니다 (조회 실패 샘플은 건너뜀). Kafka-UI 캡처와 함께 증거로 씁니다.
+- 판정 (`results/<run_id>/s6-judge.txt`)
+  - 입력 오류 (종료 코드 1, 판정하지 않음): 판정에 필요한 파일이나 값이 없거나 요청 수가 맞지 않음
+  - 회차 무효 (종료 코드 3, 다시 실행): 밀린 요청(`dropped_iterations`), k6 응답 검사 실패, 401, 202가 아닌 응답, 종료 전 또는 종료 이후에 접수된 청약이 없음(종료가 부하 도중이 아님), 장애 중 인출 요청 랙이 쌓이지 않음
+  - 경고 (판정에는 영향 없음): 종료→UP이 시간 초과 기준 90초 이상인데 `CANCELLED(TIMEOUT)`이 0건이면 "시간 초과 보상 경로를 검증하지 못함", DLT가 늘었으면 "DLT로 간 메시지가 N건 있음"이 `s6-judge.txt` 끝에 표시됩니다
+  - 결과 위반 (종료 코드 4, 회차는 유효): 청약 행 수 ≠ 요청 수, `CONFIRMED + CANCELLED(TIMEOUT)` ≠ 요청 수, `verify-s6.sql` 23~26번 위반, 202를 받았는데 청약 행이 없음, 기존 `verify.sql` 2, 3, 5, 6, 17번 위반과 4번 확정 수 ≠ 인출 수. 종료 코드 0은 위반 없음
+  - 기록용 (판정에 쓰지 않음): 선행 반환 기록(`margin_void_intent`) 수, DLT 증가, `processed_event`가 같은 `eventId`를 걸러낸 인출 요청 수
+- `verify-s6.sql`: 정합성 검사 23~26번(취소 청약에 묶인 돈, 선행 반환 기록, 늦은 인출 차단, 멈춘 SAGA)과 상태별 건수, `TIMEOUT` 취소 건수, 반환 기록 수 요약입니다. 검사별 설명은 파일 머리말에 있습니다.
+- 결과 파일: `results/<run_id>/`에 `s6-judge.txt`, `precheck.txt`, `dlt-start.txt`, `dlt-end.txt`, `events.txt`, `lag.csv`, `sql_result.txt`, `sql_result_s6.txt`, `env.txt`(커밋, 설정, 시간 초과 설정, jar sha256, Docker 자원과 JVM 옵션 등 실행 환경), `account-service.log`와 `subscription-service.log`(이번 회차 부하 시작 5초 전부터), k6 원본이 있습니다. 호스트 PC의 CPU 모델은 환경 기록표에 직접 적습니다.
+- 그 밖의 종료 코드: 5 커밋하지 않은 변경 또는 컨테이너 jar가 로컬 jar와 다름 / 9 사전 점검 실패(`precheck.txt`) / 14 기준 상태 복원 실패
+- 한계: 로컬 단일 머신, 계좌 서비스 인스턴스 1개, k6도 같은 머신에서 실행하는 로컬 시뮬레이션입니다.
+
 ## 7. 결과 파일
 
 `loadtest/results/{run_id}/`에 저장됩니다. 정식 측정은 `loadtest/results/{batch}/`에 묶음 파일이 따로 생기고, 실행마다 `{batch}-W`(워밍업), `{batch}-S0-r1`, `{batch}-S1-{속도}-r{반복}` 폴더가 생깁니다.
@@ -614,6 +651,10 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 | `IGNORE_GROUPS` | `subscription-requested` | `official.sh`, `s2.sh` (소진 대기의 lag 합에서 뺄 Consumer 그룹. 읽는 Consumer가 없어진 접수 그룹에 남은 메시지가 소진 대기를 막지 않게 한다. 다른 그룹 lag은 그대로 세고, 빈 값이면 모두 센다) |
 | `STATS_INTERVAL` | `5` | `official.sh`, `g2_run.sh` (docker stats 기록 간격 초, 조회 시간 포함. `0`이면 기록하지 않음. 개선 전후는 같은 값) |
 | `SKIP_BUILD`, `ALLOW_DIRTY` | `0`, `0` | `official.sh`, `s2.sh` (빌드·배포 건너뛰기, 커밋 안 한 변경 허용. 둘 다 `env.txt`에 남고 `ALLOW_DIRTY=1` 결과는 정식 결과로 쓰지 않음) |
+| `KILL_AT`, `OUTAGE` | `3`, `10` | `s6.sh` (부하 시작 뒤 계좌 서비스 종료까지 초, 종료 뒤 재시작 명령까지 초. `KILL_AT`은 `DURATION`보다 작아야 함. 서비스가 돌아오는 UP은 `OUTAGE`보다 약 23초 늦음) |
+| `WARM` | `0` | `s6.sh` (1이면 부하 전에 워밍업. `s2.sh`의 기본 1과 다름. `WARM_RATE`, `WARM_MIN`, `WARM_MAX` 등은 `s2.sh`와 같은 기본값) |
+| `LAG_INTERVAL`, `UP_TIMEOUT` | `2`, `300` | `s6.sh` (랙 기록 사이 쉬는 초(조회 시간이 더해짐), 재시작 뒤 healthy까지 제한 초) |
+| `RATE`, `DURATION` | `100`, `10` | `s6.sh` (S6 도착률 건/초, 부하 초. `RATE × DURATION`은 회원 수 이하. `s2.sh`의 `RATE`와 기본값이 다르다) |
 | `IPO_IDS` | 없음 | `s1.js` (`-e IPO_IDS=...`, 6장) |
 | `BEHAVIOR_CSV` | `../synthetic/<시나리오>-behavior.csv` | `s3.js`, `s4.js` (`-e BEHAVIOR_CSV=...`, 행동 CSV 경로. k6 스크립트 기준 상대 경로) |
 | `S4_PREFIX` | `lb` | `official.sh` → `s4.js`, `judge.py --s4-prefix` (잔액 부족 묶음의 loginId 접두사. 회원 CSV가 이 묶음이 아니면 시작 전에 멈춤) |
@@ -634,7 +675,7 @@ loadtest/find-limit.sh --rates "100 200 400 800 1600" --duration 10s
 
 ## 9. 스크립트 테스트
 
-`official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `admit.sh`, `k6/g2-quantity.js`, `g2_estimate.py`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`, `s2.sh`, `s2_judge.py`를 고치면 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
+`official.sh`, `g2_run.sh`, `baseline.sh`, `seed_users_sql.sh`, `g2_ipo.sh`, `new_ipo.sh`, `admit.sh`, `k6/g2-quantity.js`, `g2_estimate.py`, `judge.py`, `warmup.py`, `docker_stats.py`, `consumer_stats.py`, `autovacuum.py`, `synthetic/`, `s2.sh`, `s2_judge.py`, `s6.sh`, `s6_judge.py`, `s6_summary.py`, `verify-s6.sql`을 고치면 측정 전에 테스트를 돌립니다. Docker, DB 없이 돌고 1분 안에 끝납니다.
 
 ```bash
 bash loadtest/tests/test_g2_run.sh        # 대량 환불 회차 실행기 (인자, ipo-ids.txt, 스냅샷 검사, 환불 대기의 정지·상한·실패, verify.sql 출력 읽기(실제 출력 고정 데이터 포함), 판정, manifest, 멱등성 검사의 Kafka 출력 읽기와 실패 처리)
@@ -649,6 +690,9 @@ python loadtest/tests/test_g2_estimate.py   # 212만 건 추정 (규칙 경계 r
 python loadtest/tests/test_judge.py       # 판정 (G1, G2 경계값, 무효 회차, S1 한계 지점, 실제 조회 경로의 인자, S3, S4 정합성과 S0 대비)
 bash loadtest/tests/test_s2.sh            # S2 셸 함수 (Kafka lag, 필수 Consumer 그룹 없음, 소진 대기, 마감 대기, 커밋 안 된 변경 거부, 마감 유예 확인, 공모주 생성, 요청 계획 반올림, jar 비교, 판정에 계획 요청 수 전달). 조회 실패를 0이나 마감으로 넘기지 않는지 확인
 python loadtest/tests/test_s2_judge.py    # S2 판정 (요청 수가 계획과 다르거나 stage 없는 로그 행은 입력 오류, 회차 무효 조건(배경은 202만, k6 응답 검사 실패), 마감되지 않은 공모주, sql_result.txt 20~22번 읽기와 입력 오류, 202인데 행 없음)
+bash loadtest/tests/test_s6.sh            # S6 셸 함수 (기본값, 설정 검사, 로그 보관 시작 시각, 시간 초과 설정 읽기, 토픽 목록, DLT 건수 읽기, 실행 환경 기록, 인출 요청 토픽 랙, 시각 대기, healthy 대기, 멈춘 계좌 서비스 다시 띄우기)
+python loadtest/tests/test_s6_summary.py  # S6 여러 회차 요약 (중앙값, 최소~최대, 무효 회차 제외, 워밍업 조건 섞임, DLT 열, 읽지 못한 회차)
+python loadtest/tests/test_s6_judge.py    # S6 판정 (회차 무효 조건, 결과 위반, 입력 오류(요청 수 불일치, stage, 이벤트 시각, 없는 검사 결과), DLT 증가와 중복 수신 기록, 종료 코드 0, 3, 4, 1)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)
 python loadtest/tests/test_autovacuum.py  # 실행별 autovacuum 차이 (새 테이블, 기록 없는 실행, 통계 초기화, 형식 오류)

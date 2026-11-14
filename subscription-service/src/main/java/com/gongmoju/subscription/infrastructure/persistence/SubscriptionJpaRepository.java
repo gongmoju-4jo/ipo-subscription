@@ -35,7 +35,8 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
 
     /**
      * 네이티브 쿼리는 JPA Auditing과 {@code @Version}을 거치지 않으므로 {@code created_*}, {@code updated_*}, {@code version}을 직접 채움.
-     * {@code ON CONFLICT} 대상을 {@code request_id}로 명시하여 다른 UNIQUE 위반({@code uk_subscription_active})은 예외로 전파됨. 트랜잭션 안에서 호출해야 함.
+     * {@code ON CONFLICT}에 대상을 적지 않아 {@code request_id}와 {@code uk_subscription_active}(같은 회원의 유효 청약) 충돌 모두 0행으로 끝남.
+     * 무엇과 충돌했는지는 호출하는 쪽이 0행일 때만 조회해 가림. 트랜잭션 안에서 호출해야 함.
      */
     @Modifying
     @Query(value = """
@@ -46,7 +47,7 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
                     :marginAmount, :status, CAST(:rejectReason AS VARCHAR), :attempts,
                     CAST(:lastRequestedAt AS TIMESTAMPTZ), :receivedAt, 0,
                     :now, :auditor, :now, :auditor)
-            ON CONFLICT (request_id) DO NOTHING""", nativeQuery = true)
+            ON CONFLICT DO NOTHING""", nativeQuery = true)
     int insertIfAbsent(@Param("id") UUID id, @Param("requestId") UUID requestId, @Param("ipoId") UUID ipoId,
                        @Param("userId") UUID userId, @Param("accountId") UUID accountId,
                        @Param("requestedQuantity") long requestedQuantity, @Param("marginAmount") long marginAmount,

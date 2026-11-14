@@ -41,9 +41,10 @@ public class SubscriptionService {
      * 이중청약이면 {@code REJECTED}로 저장하고, 같은 {@code requestId}로 같은 내용이 다시 오면 새로 저장하지 않는다. 세 경우 모두 같은 청약 ID를 돌려준다.
      * 트랜잭션은 {@link SubscriptionAcceptService#accept(UUID, UUID, Instant, SubscribeCommand)}가 건다.
      * <p>
-     * 같은 회원이 다른 {@code requestId}로 거의 동시에 청약하면 늦은 쪽이 {@code uk_subscription_active} 위반으로 실패한다.
-     * 실패한 트랜잭션은 이어 갈 수 없어서 새 트랜잭션으로 한 번 다시 실행하고, 다시 실행하면 앞 청약을 보고 {@code REJECTED}로 저장된다.
-     * 제약 이름은 가리지 않는다. 같은 {@code requestId} 충돌은 저장 단계에서 처리해 예외가 나지 않고, 다른 무결성 위반은 다시 실행해도 같은 예외로 끝난다.
+     * 같은 {@code requestId}, 같은 회원의 유효 청약({@code uk_subscription_active}) 충돌은 저장 단계에서 0행으로 받아 처리해 예외가 나지 않는다.
+     * 같은 회원이 다른 {@code requestId}로 거의 동시에 청약해도 늦은 쪽은 앞 청약의 커밋을 기다린 뒤 0행을 받아 {@code REJECTED}로 저장된다.
+     * 그래도 무결성 위반이 나면(예상하지 못한 경우를 위한 안전망) 실패한 트랜잭션은 이어 갈 수 없어서 새 트랜잭션으로 한 번 다시 실행한다.
+     * 다시 실행해도 같은 위반이면 그대로 던진다.
      *
      * @param userId     Gateway가 넘긴 회원 ID
      * @param receivedAt Gateway가 기록한 최초 도착 시각 (D-12)
@@ -59,7 +60,7 @@ public class SubscriptionService {
         try {
             acceptService.accept(subscriptionId, userId, receivedAt, command);
         } catch (DataIntegrityViolationException e) {
-            log.info("청약 저장 중 무결성 위반이라 한 번 다시 실행함 (같은 회원의 동시 청약). requestId={}, userId={}, ipoId={}",
+            log.info("청약 저장 중 무결성 위반이라 한 번 다시 실행함. requestId={}, userId={}, ipoId={}",
                     command.requestId(), userId, command.ipoId());
             acceptService.accept(subscriptionId, userId, receivedAt, command);
         }

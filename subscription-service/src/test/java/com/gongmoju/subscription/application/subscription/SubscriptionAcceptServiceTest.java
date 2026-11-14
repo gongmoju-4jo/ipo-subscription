@@ -208,6 +208,23 @@ class SubscriptionAcceptServiceTest {
     }
 
     @Test
+    @DisplayName("저장이 같은 requestId도 유효 청약도 아닌 이유로 충돌하면 예외이고 아무것도 더 저장하지 않는다 (모르는 충돌을 넘기지 않음)")
+    void accept_throwsIllegalState_whenInsertConflictsForUnknownReason() {
+        // given: 다른 requestId의 REJECTED 청약이 같은 청약 ID를 쓰고 있음 (PK 충돌, request_id와 유효 청약 충돌은 아님)
+        UUID subscriptionId = UUID.randomUUID();
+        acceptService.accept(subscriptionId, userId, receivedAt, command(UUID.randomUUID(), 100));
+        jdbcTemplate.update("UPDATE subscription SET status = 'REJECTED', reject_reason = 'ALREADY_SUBSCRIBED' WHERE subscription_id = ?",
+                subscriptionId);
+
+        // when, then
+        assertThatThrownBy(() -> acceptService.accept(subscriptionId, UUID.randomUUID(), receivedAt, command(UUID.randomUUID(), 100)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("이중청약이 아닌 이유로 충돌");
+        assertThat(subscriptionCount()).isEqualTo(1);
+        assertThat(outboxCount()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("API: 같은 회원의 유효 청약이 이미 있으면 REJECTED(ALREADY_SUBSCRIBED)로 저장하고 인출 요청은 기록하지 않는다")
     void acceptApi_rejects_whenUserAlreadyHasActiveSubscription() {
         // given

@@ -63,13 +63,14 @@ public class SubscriptionAcceptService {
             throw e;
         }
 
-        boolean alreadySubscribed = subscriptionRepository.existsActiveByIpoIdAndUserId(command.ipoId(), userId);
-        Subscription subscription = alreadySubscribed
-                ? Subscription.reject(subscriptionId, command.requestId(), ipo, userId, command.accountId(),
-                command.requestedQuantity(), marginAmount, receivedAt, RejectReason.ALREADY_SUBSCRIBED)
-                : Subscription.accept(subscriptionId, command.requestId(), ipo, userId, command.accountId(),
+        // 재전송, 이중청약을 먼저 조회하지 않고 저장해 본다. 저장하면 정상 접수이고, 0행이면 그때 무엇과 충돌했는지 가린다
+        Subscription subscription = Subscription.accept(subscriptionId, command.requestId(), ipo, userId, command.accountId(),
                 command.requestedQuantity(), marginAmount, receivedAt);
-        return save(subscription, alreadySubscribed, userId, command);
+        if (subscriptionRepository.insertIfAbsent(subscription)) {
+            marginReserveRequestRecorder.record(subscription);
+            return AcceptResult.ACCEPTED;
+        }
+        return resolveConflict(subscription, userId, command);
     }
 
     /**
@@ -95,22 +96,33 @@ public class SubscriptionAcceptService {
     }
 
     /**
-     * 새 청약을 저장함. 이중청약이면 {@code REJECTED}로만 저장하고, 아니면 {@code PENDING}으로 저장한 뒤 증거금 인출 요청을 Outbox에 기록함.
-     * 같은 {@code requestId}의 요청이 동시에 먼저 저장했으면 그 행을 다시 읽어 재요청 비교를 이어 감.
+     * {@code PENDING} 저장이 충돌했을 때(0행) 무엇과 충돌했는지 가림. 정상 접수에서는 부르지 않음.
+     * <ul>
+     *   <li>같은 {@code requestId}의 청약이 있으면 재요청 비교 (같은 내용이면 저장하지 않고, 다르면 409)</li>
+     *   <li>없으면 같은 회원의 유효 청약({@code uk_subscription_active})과 충돌한 것이라 이중청약으로 {@code REJECTED}만 저장함</li>
+     *   <li>둘 다 아니면 모르는 충돌이라 예외 (나중에 다른 유니크 제약이 생겨도 조용히 넘어가지 않게)</li>
+     * </ul>
+     * 충돌한 상대가 커밋 전이면 PostgreSQL이 저장을 그 커밋까지 기다리게 하므로, 0행을 받은 뒤의 조회에서는 상대 행이 보임.
      */
-    private AcceptResult save(Subscription subscription, boolean alreadySubscribed, UUID userId, SubscribeCommand command) {
-        if (!subscriptionRepository.insertIfAbsent(subscription)) {
-            Subscription saved = subscriptionRepository.findByRequestId(subscription.getRequestId())
-                    .orElseThrow(() -> new IllegalStateException("저장이 충돌했지만 기존 청약을 찾을 수 없습니다. requestId=" + subscription.getRequestId()));
+    private AcceptResult resolveConflict(Subscription pending, UUID userId, SubscribeCommand command) {
+        Optional<Subscription> existing = subscriptionRepository.findByRequestId(command.requestId());
+        if (existing.isPresent()) {
+            return replayOrConflict(existing.get(), userId, command);
+        }
+        if (!subscriptionRepository.existsActiveByIpoIdAndUserId(command.ipoId(), userId)) {
+            throw new IllegalStateException("청약 저장이 같은 requestId, 이중청약이 아닌 이유로 충돌했습니다. requestId=" + command.requestId());
+        }
+
+        Subscription rejected = Subscription.reject(pending.getId(), command.requestId(), pending.getIpo(), userId, command.accountId(),
+                command.requestedQuantity(), pending.getMarginAmount(), pending.getReceivedAt(), RejectReason.ALREADY_SUBSCRIBED);
+        if (!subscriptionRepository.insertIfAbsent(rejected)) {
+            // 그사이 같은 requestId의 요청이 먼저 저장함 (REJECTED는 유효 청약 제약에 걸리지 않으므로 request_id 충돌뿐)
+            Subscription saved = subscriptionRepository.findByRequestId(command.requestId())
+                    .orElseThrow(() -> new IllegalStateException("저장이 충돌했지만 기존 청약을 찾을 수 없습니다. requestId=" + command.requestId()));
             return replayOrConflict(saved, userId, command);
         }
-        if (alreadySubscribed) {
-            log.info("이중청약으로 거절함. subscriptionId={}, userId={}, ipoId={}",
-                    subscription.getId(), subscription.getUserId(), subscription.getIpo().getId());
-            return AcceptResult.REJECTED_ALREADY_SUBSCRIBED;
-        }
-        marginReserveRequestRecorder.record(subscription);
-        return AcceptResult.ACCEPTED;
+        log.info("이중청약으로 거절함. subscriptionId={}, userId={}, ipoId={}", rejected.getId(), userId, command.ipoId());
+        return AcceptResult.REJECTED_ALREADY_SUBSCRIBED;
     }
 
     /**

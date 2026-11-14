@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 
 // 원장 대사 검사 종류. 괄호 안 번호는 loadtest/sql/verify.sql의 검사 번호
 // 검사를 추가하면 이곳에 값을 추가하고 LedgerReconciliationRepository 구현에 SQL을 추가한다 (switch 누락은 컴파일 오류)
+// 한계: 원장의 거래 후 잔고(cash_balance_after, margin_balance_after)는 검사하지 않는다. 원장 순서 기준이 created_at뿐이라 같은 시각 원장의 순서를 판단할 수 없기 때문이다 (#158)
 @Getter
 @RequiredArgsConstructor
 public enum LedgerReconciliationCheck {

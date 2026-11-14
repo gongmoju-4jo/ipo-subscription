@@ -1,0 +1,50 @@
+# 수평 확장 재현용: 서비스 인스턴스를 2개씩 띄운다. docker-compose.yml에 덮어써서 쓴다 (단독 실행 불가).
+#   ./gradlew build -x test && docker-compose -f docker-compose.yml -f compose.scale.yml up -d --build
+#   자원 상한을 같이 걸 때: docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml up -d --build
+# 끌 때도 같은 -f 목록으로 down 한다 (빼면 api-gateway-2가 남는다).
+# 단일 인스턴스로 돌아갈 때는 이 파일을 빼고 `up -d --remove-orphans` 한다. 늘어난 인스턴스는 지워지고 이름이 ipo-account-service 등으로 돌아오지만,
+# api-gateway-2는 --remove-orphans 없이는 계속 떠서 입장 스케줄러가 두 벌 돈다.
+# loadtest/official.sh, g2_run.sh는 고정 컨테이너 이름(ipo-account-service 등)을 쓰므로 이 파일과 같이 쓰면 그 이름을 찾지 못한다.
+#
+# - 계좌, 청약, 배정: 고정 컨테이너 이름을 풀고 2개씩 띄운다 (scale). 서비스 포트를 PC에 열지 않아 포트가 겹치지 않는다.
+#   개수를 바꾸려면 `--scale account-service=3`처럼 명령에서 덮어쓴다. 이름은 ipo-subscription-account-service-1, -2 ...
+# - 게이트웨이: 8080을 PC에 열고 있어서 그대로 2개를 띄우면 포트가 겹친다. 포트를 열지 않는 api-gateway-2를 따로 둔다.
+#   외부 요청은 계속 api-gateway(8080) 하나로만 들어간다. api-gateway-2는 입장 스케줄러, 공모주 목록 캐시가 두 벌 도는 상황을 만드는 용도다.
+# - Prometheus: 서비스 이름을 DNS로 찾아 모든 인스턴스를 수집하는 설정으로 바꾼다 (docker/prometheus/prometheus.scale.yml).
+# - Eureka: 서비스가 IP로 등록하므로(prefer-ip-address) 인스턴스마다 따로 등록된다. 대시보드(8761)에서 2개씩 보이면 정상.
+#
+# 자원 (compose.perf.yml과 같이 쓸 때): 상한 합계가 CPU 14, 메모리 약 13.75GB로 perf 기준 PC(CPU 10, 메모리 12GB)보다 크다.
+# 상한은 "이 이상 못 씀"이라 합계가 넘어도 뜨지만, 부하 중 실제 사용량이 Docker 메모리를 넘으면 컨테이너가 강제 종료된다. `docker stats`로 본다.
+#
+# DB 커넥션: Hikari 풀이 청약 30, 계좌 10, 배정 10이라 2개씩이면 100개를 잡으려 한다.
+# PostgreSQL max_connections(100)에서 슈퍼유저 예약(3)을 빼면 97개라 일부 인스턴스는 풀을 다 채우지 못한다.
+services:
+  account-service:
+    container_name: !reset null
+    scale: 2
+
+  subscription-service:
+    container_name: !reset null
+    scale: 2
+
+  allocation-service:
+    container_name: !reset null
+    scale: 2
+
+  # api-gateway와 같은 설정. 포트만 열지 않는다 (헬스체크, 지표는 컨테이너 안 관리 포트 18090)
+  # extends는 docker-compose.yml만 읽어서 compose.perf.yml의 상한이 따라오지 않는다. 그래서 perf의 api-gateway 값을 여기 같이 적는다
+  # (perf 없이 띄워도 이 인스턴스만 상한이 걸린다. 입장 스케줄러 재현 용도라 영향 없음). perf 값을 바꾸면 여기도 같이 바꾼다
+  api-gateway-2:
+    extends:
+      file: docker-compose.yml
+      service: api-gateway
+    container_name: ipo-api-gateway-2
+    ports: !reset []
+    cpus: 1.0
+    mem_limit: 1g
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
+
+  prometheus:
+    volumes:
+      - ./docker/prometheus/prometheus.scale.yml:/etc/prometheus/prometheus.yml:ro

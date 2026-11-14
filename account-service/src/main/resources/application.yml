@@ -90,6 +90,13 @@ jwt:
   # 로그인 응답의 expiresIn과 같은 값 (초)
   expires-in-seconds: 3600
 
+# 첫 관리자 시드 (AdminSeedRunner). 기동할 때 이 로그인 ID의 계정이 없으면 ADMIN으로 만든다
+# 둘 다 비우면 건너뛰고, 하나만 있거나 형식(회원가입과 같은 규칙)이 틀리면 기동할 때 실패한다
+admin-seed:
+  login-id: ${ADMIN_LOGIN_ID:}
+  # 비밀번호 원문. 출력하거나 로그에 남기지 않는다
+  password: ${ADMIN_PASSWORD:}
+
 eureka:
   client:
     service-url:

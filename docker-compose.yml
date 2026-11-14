@@ -177,6 +177,9 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       EUREKA_URL: http://eureka-server:8761/eureka/
       JWT_SECRET: ${JWT_SECRET:-}
+      # 첫 관리자 계정. 비어 있으면 만들지 않는다
+      ADMIN_LOGIN_ID: ${ADMIN_LOGIN_ID:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy

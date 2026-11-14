@@ -396,7 +396,7 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 
 - AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택), `SMOKE_LOGIN_ID`, `SMOKE_PASSWORD`, `ADMIN_LOGIN_ID`, `ADMIN_PASSWORD`
 - `SMOKE_LOGIN_ID`(영문 소문자, 숫자 4~20자), `SMOKE_PASSWORD`(8~20자, 작은따옴표 `'` 불가)는 배포 후 스모크 전용 계정이다. 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 이 계정 하나를 계속 쓴다: 처음 배포 때 가입하고 계좌를 하나 연 뒤로는 로그인과 입금(1,000원)만 해서 배포마다 회원이 늘지 않는다. 시연에는 쓰지 않는다 (배포마다 잔고가 늘어난다). `.env`에는 넣지 않는다
-- `ADMIN_LOGIN_ID`(영문 소문자, 숫자 4~20자, `SMOKE_LOGIN_ID`와 다른 값), `ADMIN_PASSWORD`(8~20자, 공백 없는 영문, 숫자, 특수문자. `$`, 작은따옴표 `'` 불가)는 첫 관리자 계정이다 ([관리자 계정](#관리자-계정)). 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 서버 주소가 공개돼 있으니 `admin`처럼 짐작하기 쉬운 ID를 피하고 비밀번호는 무작위 값을 쓴다
+- `ADMIN_LOGIN_ID`(영문 소문자, 숫자 4~20자, `SMOKE_LOGIN_ID`와 다른 값), `ADMIN_PASSWORD`(8~20자, 공백 없는 영문, 숫자, 특수문자. `$`, 작은따옴표 `'`, 역슬래시 `\` 불가)는 첫 관리자 계정이다 ([관리자 계정](#관리자-계정)). 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 서버 주소가 공개돼 있으니 `admin`처럼 짐작하기 쉬운 ID를 피하고 비밀번호는 무작위 값을 쓴다
   - ⚠️ 첫 배포 때 한 번만 계정을 만든다. 그 뒤 파라미터를 바꿔도 계정의 비밀번호는 바뀌지 않는다
 - 배포할 때마다 서버의 `/opt/ipo/.env`(권한 600)를 다시 만든다. 서버의 `.env`를 손으로 고치지 않는다 (다음 배포 때 덮어쓴다)
 - ⚠️ DB 비밀번호 4개는 첫 배포 뒤 바꾸지 않는다. PostgreSQL 볼륨이 처음 만들어질 때 한 번만 계정을 만들어서, 바꾸면 서비스가 DB에 접속하지 못한다

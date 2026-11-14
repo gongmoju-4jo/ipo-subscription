@@ -88,7 +88,13 @@ saga:
     response-timeout: PT30S  # 마지막 요청 시각에서 설정 시간이 지나면 응답이 없음으로 판정 (이벤트 명세에서 30초 확정. 같은 Consumer 재시도 합계 7초보다 길어야 함)
     max-attempts: 3          # 총 인출 요청 횟수. 접수 90초 뒤 시간 초과 보상 (임시값, 부하 테스트 뒤 조정)
     batch-size: 100          # 한 번에 처리하는 최대 건수 (오래된 순)
-    alert-interval: PT5M     # 재요청 최대 횟수에 도달 시 ERROR 로그 기록 간격 (마감 스케줄러의 ipo.close.alert-after와 동일 값)
+    alert-interval: PT5M     # 증거금 반환이 오래 걸리는 청약의 ERROR 로그 기록 간격 (마감 스케줄러의 ipo.close.alert-after와 동일 값)
+
+  void-retry:  # 증거금 반환 재요청. 최대 횟수 없이 간격을 늘려 가며 응답이 올 때까지 재요청 (실행 간격, 사용 여부, 알림 간격은 saga.timeout.*와 같이 사용)
+    initial-interval: PT30S  # 첫 재요청 대기 시간. 요청할 때마다 2배 (30초, 60초, 120초, 240초 ...) (임시값, 부하 테스트 뒤 조정)
+    max-interval: PT5M       # 재요청 대기 시간 상한. 해당 간격으로 계속 재요청 (임시값)
+    alert-attempts: 5        # 요청 횟수가 해당 값 이상일 때 응답 없으면 알림 로그 대상 (보상 시작 약 7분 30초 뒤) (임시값)
+    batch-size: 100          # 한 번에 처리하는 최대 건수 (오래된 순)
 
 eureka:
   client:

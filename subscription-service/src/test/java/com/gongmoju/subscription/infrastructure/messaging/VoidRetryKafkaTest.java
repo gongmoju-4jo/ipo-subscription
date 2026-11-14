@@ -42,8 +42,9 @@ import static org.awaitility.Awaitility.await;
 /**
  * 실제 스케줄러, Outbox 발행기, Kafka, PostgreSQL(Testcontainers)로 반환 재요청을 처음부터 끝까지 검증함. Docker 필요.
  * 반환 응답이 오지 않는 COMPENSATING, CANCEL_REQUESTED를 스케줄러가 찾아 반환 요청을 같은 해제 사유로 다시 발행하고, 응답(margin.voided)이 오면
- * 취소되는 흐름과, 재요청 때문에 같은 응답이 한 번 더 와도 중복으로 정상 종료하는 흐름, 최대 횟수에 이르면 재요청하지 않는 것을 확인함.
- * 시험이 짧게 끝나도록 최대 횟수는 2, 응답 시간은 10초로 줄임. 처리 대상은 마지막 요청 시각을 1분 전으로 만들어 바로 걸리게 함.
+ * 취소되는 흐름과, 재요청 때문에 같은 응답이 한 번 더 와도 중복으로 정상 종료하는 흐름, 요청 횟수가 이전 최대 횟수(3)를 넘어도 재요청을 계속하는 것을 확인함.
+ * 시험이 짧게 끝나도록 재요청 대기 시간은 20초에서 시작해 60초 상한으로 줄임(요청 횟수 1, 2, 3 이상일 때 20초, 40초, 60초). 처리 대상은 마지막 요청 시각을 5분 전으로 만들어 바로 걸리게 하고,
+ * 재요청 직후 다시 걸려 메시지가 늘지 않도록 시험 시간(수 초)보다 긴 대기 시간을 둠.
  * 메시지 키를 테스트마다 다른 계좌 ID로 구분해서 같은 토픽을 공유해도 서로 영향이 없음.
  */
 @Testcontainers
@@ -54,8 +55,8 @@ import static org.awaitility.Awaitility.await;
         "outbox.publisher.enabled=true",
         "saga.timeout.enabled=true",
         "saga.timeout.interval=PT1S",
-        "saga.timeout.response-timeout=PT10S",
-        "saga.timeout.max-attempts=2"
+        "saga.void-retry.initial-interval=PT20S",
+        "saga.void-retry.max-interval=PT60S"
 })
 @DisplayName("반환 재요청 (스케줄러, Kafka, PostgreSQL)")
 class VoidRetryKafkaTest {
@@ -191,22 +192,24 @@ class VoidRetryKafkaTest {
     }
 
     @Test
-    @DisplayName("요청 횟수가 최대 횟수에 이른 COMPENSATING은 반환 요청을 더 발행하지 않고 상태, 요청 횟수, Outbox를 그대로 둔다")
-    void doesNotRetry_whenMaxAttemptsReached() throws Exception {
-        // given
-        insertVoiding("COMPENSATING", "CONFIRM_FAILED", 2);
+    @DisplayName("요청 횟수가 이전 최대 횟수(3)를 넘어도(3) 대기 시간(60초 상한)이 지났으면 반환 요청을 계속 발행하고, 요청 횟수가 1 늘며 상태는 그대로이다")
+    void keepsRetrying_whenAttemptsExceedFormerMax() throws Exception {
+        // given: 요청 횟수 3의 대기 시간은 60초이고 마지막 요청이 5분 전이라 대기 시간이 지남
+        insertVoiding("COMPENSATING", "CONFIRM_FAILED", 3);
 
-        // when: 응답 시간(10초)이 이미 지났고 스케줄러가 1초마다 도므로 몇 주기를 지켜봄
-        List<ConsumerRecord<String, String>> published = readTopic(VOID_REQUESTED, accountId.toString(), Duration.ofSeconds(6), 1);
+        // when
+        List<ConsumerRecord<String, String>> published = readTopic(VOID_REQUESTED, accountId.toString(), Duration.ofSeconds(30), 1);
 
         // then
-        assertThat(published).isEmpty();
+        assertThat(published).hasSize(1);
+        JsonNode message = objectMapper.readTree(published.get(0).value());
+        assertThat(message.get("reason").asText()).isEqualTo("CONFIRM_FAILED");
+        assertThat(message.get("subscriptionId").asText()).isEqualTo(subscriptionId.toString());
         assertThat(status()).isEqualTo("COMPENSATING");
-        assertThat(attempts()).isEqualTo(2);
-        assertThat(outboxCount(VOID_REQUESTED)).isZero();
+        assertThat(attempts()).isEqualTo(4);
     }
 
-    // 마지막 요청 시각을 1분 전으로 만들어 응답 시간(10초)이 이미 지난 청약을 만든다. 반환 요청 Outbox가 없어서(발행 완료로 간주) 조회 대상이 된다
+    // 마지막 요청 시각을 5분 전으로 만들어 재요청 대기 시간(요청 횟수 3까지 최대 60초)이 이미 지난 청약을 만든다. 반환 요청 Outbox가 없어서(발행 완료로 간주) 조회 대상이 된다
     private void insertVoiding(String status, String cancelReason, int attempts) {
         jdbcTemplate.update("""
                 INSERT INTO subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,
@@ -215,7 +218,7 @@ class VoidRetryKafkaTest {
                 VALUES (?, ?, ?, ?, ?, 100, ?, ?, ?, ?, ?, now() - interval '10 minutes',
                         0, now(), 'test', now(), 'test')""",
                 subscriptionId, UUID.randomUUID(), ipoId, UUID.randomUUID(), accountId, MARGIN_AMOUNT, status, cancelReason,
-                attempts, Timestamp.from(Instant.now().minusSeconds(60)));
+                attempts, Timestamp.from(Instant.now().minusSeconds(300)));
     }
 
     // 확보한 증거금이 없던 시간 초과 반환은 amount 0이 정상이고, 그 외 사유는 증거금 전액이어야 한다 (이벤트 명세 margin.voided 절)

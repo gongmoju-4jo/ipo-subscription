@@ -277,7 +277,7 @@ docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml up
   - Prometheus(http://localhost:9090/targets): 서비스마다 대상 2개 UP
   - `docker stats --no-stream`: 인스턴스별 메모리. perf와 같이 쓰면 상한 합계가 CPU 14, 메모리 약 13.75GB로 3-3절 기준 PC(CPU 10, 메모리 12GB)보다 큽니다. 상한은 넘을 수 없는 값일 뿐이라 뜨기는 하지만, 실제 사용량이 Docker 메모리를 넘으면 컨테이너가 강제 종료됩니다 (부하 없을 때 합계 약 6.2GB)
 - 서비스 계정 DB 커넥션이 기동만으로 한도에 닿습니다. Hikari 풀(청약 30, 계좌 10, 배정 10)이 2개씩이면 100개인데, PostgreSQL `max_connections` 100에서 슈퍼유저 예약 3개를 빼면 97개라 일부 인스턴스는 풀을 다 채우지 못합니다
-- `official.sh`, `g2_run.sh`는 고정 컨테이너 이름(`ipo-account-service` 등)을 써서 이 구성에서는 컨테이너를 찾지 못합니다. 인스턴스별 로그는 `docker-compose logs {서비스 이름}`(인스턴스가 앞에 표시됨)이나 위 컨테이너 이름으로 봅니다
+- `official.sh`, `g2_run.sh`는 고정 컨테이너 이름(`ipo-account-service` 등)을 써서 이 구성에서는 컨테이너를 찾지 못합니다. 인스턴스별 로그는 실행할 때와 같은 `-f` 목록으로 `docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml logs {서비스 이름}`(인스턴스가 앞에 표시됨)이나 위 컨테이너 이름으로 봅니다
 - 끌 때는 같은 `-f` 목록으로 `stop`이나 `down`을 합니다
 - 단일 인스턴스로 돌아갈 때는 `compose.scale.yml`을 빼고 `--remove-orphans`를 붙입니다. 붙이지 않으면 `api-gateway-2`가 계속 떠서 입장 스케줄러가 두 벌 돕니다
 

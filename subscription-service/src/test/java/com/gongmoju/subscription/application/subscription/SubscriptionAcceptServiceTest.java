@@ -143,7 +143,7 @@ class SubscriptionAcceptServiceTest {
     }
 
     @Test
-    @DisplayName("API: 접수된 요청이 마감 뒤에 같은 내용으로 다시 와도 상태, 기간 검증보다 먼저 확인해 접수된 것으로 응답한다")
+    @DisplayName("API: 접수된 요청이 마감 뒤에 같은 내용으로 다시 오면 상태, 기간 검증에서 거절되지 않고 접수된 것으로 응답한다")
     void acceptApi_ignoresRepeat_evenAfterIpoClosed() {
         // given
         SubscribeCommand command = command(UUID.randomUUID(), 100);
@@ -155,6 +155,22 @@ class SubscriptionAcceptServiceTest {
 
         // then
         assertThat(result).isEqualTo(AcceptResult.DUPLICATE_IGNORED);
+        assertThat(subscriptionCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("API: 마감 뒤에 같은 requestId로 내용이 다르게 오면 마감 거절이 아니라 409 DUPLICATE_RESOURCE이다")
+    void acceptApi_conflicts_whenRequestIdReusedWithDifferentContentAfterIpoClosed() {
+        // given
+        UUID requestId = UUID.randomUUID();
+        accept(userId, receivedAt, command(requestId, 100));
+        jdbcTemplate.update("UPDATE ipo SET status = 'CLOSED', subscription_end_at = now() - interval '10 seconds' WHERE ipo_id = ?", ipoId);
+
+        // when, then
+        assertThatThrownBy(() -> accept(userId, Instant.now(), command(requestId, 200)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.DUPLICATE_RESOURCE);
         assertThat(subscriptionCount()).isEqualTo(1);
     }
 

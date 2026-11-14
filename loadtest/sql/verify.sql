@@ -12,6 +12,7 @@ SELECT status, reject_reason, count(*) FROM subscription.subscription WHERE ipo_
 SELECT a.account_id FROM account.account a LEFT JOIN account.margin m ON m.account_id = a.account_id AND m.status = 'PENDING' GROUP BY a.account_id, a.margin_balance HAVING a.margin_balance <> COALESCE(SUM(m.amount), 0);
 \endif
 
+-- 원장 대사 배치(#132)는 이 검사를 마지막 원장 대신 원장 금액 합계로 비교한다 (created_at이 같은 원장 2줄의 오탐 방지)
 \echo '== 3. 잔고 = 마지막 원장의 거래 후 잔고 (기대: 0행. 위반이 나오면 created_at 동률인지 먼저 확인)'
 \if :{?skip_global}
 \echo '(건너뜀: 전체 계좌 기준이라 같은 실행의 첫 공모주 결과(verify-1)와 같다)'
@@ -41,7 +42,7 @@ SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM confirmed_
 SELECT MIN(received_at), MAX(confirmed_at), MAX(confirmed_at) - MIN(received_at) FROM subscription.subscription WHERE ipo_id = :ipo AND status = 'CONFIRMED';
 
 -- 11~15: 배정, 정산 뒤 정합성 (G4). 모두 위반만 행으로 나온다 (기대 0행). 배정 전이면 대상이 없어 0행
---   [계좌 단독] account 스키마만 읽는다 → 계좌 서비스 대사 배치로 그대로 옮길 수 있다
+--   [계좌 단독] account 스키마만 읽는다 → 계좌 서비스 원장 대사 배치(#132)가 2, 3, 11, 12번을 기반으로 구현됨
 --   [서비스 간] subscription, allocation 스키마도 읽는다 → 배치에서는 서비스 계정 권한이 없어 이벤트나 API로 받은 값과 비교해야 한다
 --   배정 라운드가 DONE이고 공모주가 ALLOCATED가 아니면 대상이 없어 0행이 나와 통과로 오해할 수 있으므로 건너뛴다고 출력한다
 SELECT EXISTS (SELECT 1 FROM allocation.allocation_round WHERE ipo_id = :ipo AND status = 'DONE') AND EXISTS (SELECT 1 FROM subscription.ipo WHERE ipo_id = :ipo AND status = 'ALLOCATED') AS alloc_done \gset

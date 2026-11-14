@@ -77,6 +77,14 @@ outbox:
     alert-threshold: 5
     send-timeout: 5s
 
+# 원장 대사 (#132). 계좌 잔고, 증거금, 원장 일치 여부를 조회만 하고, 불일치는 ERROR 로그로 기록한다
+ledger:
+  reconciliation:
+    # false면 스케줄 실행을 비활성화한다
+    enabled: true
+    # 실행 시각 (KST, 초 분 시 일 월 요일). 기본 새벽 4시 하루 1회. 측정, 시연 때는 .env의 LEDGER_RECONCILIATION_CRON으로 변경 (예: 매분 "0 * * * * *")
+    cron: ${LEDGER_RECONCILIATION_CRON:0 0 4 * * *}
+
 logging:
   level:
     # 운영 기본 INFO. 로컬에서 처리 단계를 보려면 .env에 ACCOUNT_LOG_LEVEL=DEBUG

@@ -143,7 +143,7 @@ class SubscriptionAcceptServiceTest {
     }
 
     @Test
-    @DisplayName("API: 접수된 요청이 마감 뒤에 같은 내용으로 다시 와도 상태, 기간 검증보다 먼저 확인해 접수된 것으로 응답한다")
+    @DisplayName("API: 접수된 요청이 마감 뒤에 같은 내용으로 다시 오면 상태, 기간 검증에서 거절되지 않고 접수된 것으로 응답한다")
     void acceptApi_ignoresRepeat_evenAfterIpoClosed() {
         // given
         SubscribeCommand command = command(UUID.randomUUID(), 100);
@@ -155,6 +155,22 @@ class SubscriptionAcceptServiceTest {
 
         // then
         assertThat(result).isEqualTo(AcceptResult.DUPLICATE_IGNORED);
+        assertThat(subscriptionCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("API: 마감 뒤에 같은 requestId로 내용이 다르게 오면 마감 거절이 아니라 409 DUPLICATE_RESOURCE이다")
+    void acceptApi_conflicts_whenRequestIdReusedWithDifferentContentAfterIpoClosed() {
+        // given
+        UUID requestId = UUID.randomUUID();
+        accept(userId, receivedAt, command(requestId, 100));
+        jdbcTemplate.update("UPDATE ipo SET status = 'CLOSED', subscription_end_at = now() - interval '10 seconds' WHERE ipo_id = ?", ipoId);
+
+        // when, then
+        assertThatThrownBy(() -> accept(userId, Instant.now(), command(requestId, 200)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(CommonErrorCode.DUPLICATE_RESOURCE);
         assertThat(subscriptionCount()).isEqualTo(1);
     }
 
@@ -189,6 +205,24 @@ class SubscriptionAcceptServiceTest {
                 .extracting(e -> ((BusinessException) e).getErrorCode())
                 .isEqualTo(CommonErrorCode.DUPLICATE_RESOURCE);
         assertThat(subscriptionCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("저장이 같은 requestId도 유효 청약도 아닌 이유로 계속 충돌하면 다시 저장해 본 뒤 예외이고 아무것도 더 저장하지 않는다 (모르는 충돌을 넘기지 않음)")
+    void accept_throwsIllegalState_whenInsertConflictsForUnknownReason() {
+        // given: 다른 requestId의 REJECTED 청약이 같은 청약 ID를 쓰고 있음 (PK 충돌, request_id와 유효 청약 충돌은 아님).
+        // 청약 ID는 회원 ID와 requestId로 만들어서 실제로는 생기지 않는 상태를, 모르는 충돌을 만들려고 일부러 만듦
+        UUID subscriptionId = UUID.randomUUID();
+        acceptService.accept(subscriptionId, userId, receivedAt, command(UUID.randomUUID(), 100));
+        jdbcTemplate.update("UPDATE subscription SET status = 'REJECTED', reject_reason = 'ALREADY_SUBSCRIBED' WHERE subscription_id = ?",
+                subscriptionId);
+
+        // when, then
+        assertThatThrownBy(() -> acceptService.accept(subscriptionId, UUID.randomUUID(), receivedAt, command(UUID.randomUUID(), 100)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("이중청약이 아닌 이유로 충돌");
+        assertThat(subscriptionCount()).isEqualTo(1);
+        assertThat(outboxCount()).isEqualTo(1);
     }
 
     @Test

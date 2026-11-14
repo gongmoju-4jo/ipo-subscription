@@ -19,8 +19,8 @@ public interface SubscriptionRepository {
     Optional<Subscription> findByIdAndUserId(UUID subscriptionId, UUID userId);
 
     /**
-     * {@code INSERT ... ON CONFLICT (request_id) DO NOTHING} 기반 저장. 같은 {@code requestId}의 청약이 없을 때만 저장하며, 저장하면 {@code true}, 이미 있으면 {@code false}를 반환함.
-     * 다른 UNIQUE 위반({@code uk_subscription_active})은 삼키지 않고 예외로 전파함.
+     * {@code INSERT ... ON CONFLICT DO NOTHING} 기반 저장. 저장하면 {@code true}, UNIQUE 충돌이면 저장하지 않고 {@code false}를 반환함.
+     * 충돌은 같은 {@code requestId}의 청약, 또는 같은 회원, 같은 종목의 유효 청약({@code uk_subscription_active}, {@code PENDING}을 저장할 때)이며 둘을 구분하지 않음.
      */
     boolean insertIfAbsent(Subscription subscription);
 
@@ -35,7 +35,8 @@ public interface SubscriptionRepository {
     Optional<Subscription> findByRequestId(UUID requestId);
 
     /**
-     * 이중청약 판정용 조회. 같은 회원이 같은 종목에 유효한 청약({@code REJECTED}, {@code CANCELLED}가 아닌 것)을 보유했는지 확인함.
+     * 이중청약 확인용 조회. 같은 회원이 같은 종목에 유효한 청약({@code REJECTED}, {@code CANCELLED}가 아닌 것)을 보유했는지 확인함.
+     * 접수에서는 저장이 충돌하고 같은 {@code requestId}가 없을 때만 씀.
      */
     boolean existsActiveByIpoIdAndUserId(UUID ipoId, UUID userId);
 

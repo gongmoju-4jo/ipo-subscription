@@ -156,6 +156,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       EUREKA_URL: http://eureka-server:8761/eureka/
       JWT_SECRET: ${JWT_SECRET:-}
+      # 정산 Consumer batch size (#114). 측정에서 값을 변경할 때만 .env에 입력한다
+      MARGIN_SETTLE_BATCH_SIZE: ${MARGIN_SETTLE_BATCH_SIZE:-100}
     depends_on:
       postgres:
         condition: service_healthy

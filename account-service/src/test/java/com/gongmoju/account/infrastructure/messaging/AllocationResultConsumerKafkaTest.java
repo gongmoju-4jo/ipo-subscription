@@ -1,6 +1,7 @@
 package com.gongmoju.account.infrastructure.messaging;
 
 import com.gongmoju.account.application.margin.MarginReserveService;
+import com.gongmoju.account.application.margin.MarginSettleService;
 import com.gongmoju.account.application.margin.ReserveMarginCommand;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -15,7 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -68,6 +71,9 @@ class AllocationResultConsumerKafkaTest {
 
     @Autowired
     private MarginReserveService marginReserveService;
+
+    @Autowired
+    private KafkaListenerEndpointRegistry listenerRegistry;
 
     private final List<UUID> userIds = new ArrayList<>();
     private final List<UUID> accountIds = new ArrayList<>();
@@ -148,12 +154,51 @@ class AllocationResultConsumerKafkaTest {
         assertThat(processedCount(eventId)).isZero();
     }
 
+    @Test
+    void 정상_메시지_사이에_잘못된_메시지가_있으면_잘못된_메시지만_DLT로_가고_나머지는_1번씩_정산한다() throws Exception {
+        // 예수금 20,000 → 인출 8,000, 7,000 → 예수금 5,000
+        UUID firstSubscriptionId = reserve(8_000);
+        UUID lastSubscriptionId = reserve(7_000);
+        UUID firstEventId = UUID.randomUUID();
+        UUID lastEventId = UUID.randomUUID();
+        String broken = "{not json";
+
+        // 리스너를 멈춘 상태에서 같은 계좌(같은 파티션)로 3건을 전송한 후 다시 시작해서, 3건이 한 배치로 수신되게 한다
+        // 배치 실패 → 1건씩 처리 → 2번째(잘못된 메시지) 위치 전달 → 첫 번째 오프셋 커밋, 2번째 DLT, 3번째 다시 수신
+        MessageListenerContainer container = settleListenerContainer();
+        container.stop();
+        await().atMost(30, TimeUnit.SECONDS).until(() -> !container.isRunning());
+        send(accountId, json(firstEventId, firstSubscriptionId, accountId, "1", "2", "3", "3000"));
+        send(accountId, broken);
+        send(accountId, json(lastEventId, lastSubscriptionId, accountId, "1", "2", "3", "7000"));
+        long startedAt = System.nanoTime();
+        container.start();
+
+        assertArrivesInDltQuickly(accountId, broken, startedAt);
+        // 환불 5,000 (8,000 - 3,000) + 전액 배정 0 → 예수금 10,000
+        await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> assertThat(cashBalance()).isEqualTo(10_000L));
+        assertThat(marginStatus(firstSubscriptionId)).isEqualTo("POSTED");
+        assertThat(marginStatus(lastSubscriptionId)).isEqualTo("POSTED");
+        assertThat(processedCount(firstEventId)).isEqualTo(1);
+        assertThat(processedCount(lastEventId)).isEqualTo(1);
+        assertThat(outboxEventTypes(accountId))
+                .containsExactly("margin.reserved", "margin.reserved", "margin.settled", "margin.settled");
+    }
+
     private void assertArrivesInDltQuickly(UUID key, String originalPayload, long startedAtNanos) {
         List<ConsumerRecord<String, String>> dlt = readDlt(key, NO_RETRY_LIMIT, 1);
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);
         assertThat(dlt).hasSize(1);
         assertThat(dlt.get(0).value()).isEqualTo(originalPayload);
         assertThat(elapsedMillis).isLessThan(NO_RETRY_LIMIT.toMillis() + 2_000);
+    }
+
+    // 정산 Consumer 그룹의 리스너 컨테이너
+    private MessageListenerContainer settleListenerContainer() {
+        return listenerRegistry.getListenerContainers().stream()
+                .filter(container -> MarginSettleService.CONSUMER_NAME.equals(container.getGroupId()))
+                .findFirst()
+                .orElseThrow();
     }
 
     // 인출 서비스로 PENDING margin을 만든다

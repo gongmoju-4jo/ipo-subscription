@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -34,6 +35,15 @@ public class MarginSettleService {
     private final LedgerEntryRepository ledgerEntryRepository;
     private final MarginEventPublisher marginEventPublisher;
     private final ProcessedEventRepository processedEventRepository;
+
+    // 배정 결과 여러 건을 트랜잭션 1개로 정산한다 (#114). 건마다 커밋할 때 발생하는 WAL 쓰기 대기를 커밋 1번으로 감소시킨다
+    // 건마다 settle()과 같은 규칙으로 처리한다. 같은 클래스 안 호출이라 settle()마다 새 트랜잭션을 시작하지 않고 이 트랜잭션 안에서 실행된다
+    // 1건이라도 실패하면 전체를 롤백한다. 실패 건 확인과 재처리는 호출한 Consumer가 settle()을 1건씩 호출해서 처리한다
+    // 같은 청약이 한 배치에 2번 있으면, 첫 번째 정산 결과가 같은 트랜잭션에 반영된 상태라 두 번째는 재요청(POSTED, VOIDED) 경로로 처리된다
+    @Transactional
+    public void settleBatch(List<SettleMarginCommand> commands) {
+        commands.forEach(this::settle);
+    }
 
     @Transactional
     public void settle(SettleMarginCommand command) {

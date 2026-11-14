@@ -65,6 +65,13 @@ spring:
       # 토픽 파티션 수(docker/kafka/create-topics.sh 기본값 6)와 같은 수. 파티션보다 많으면 남는 Consumer는 일하지 않는다
       concurrency: 6
 
+# 증거금 정산 Consumer (allocation.result) 배치 리스너 (#114)
+margin:
+  settle:
+    # 1번 수신, 트랜잭션 1개, 커밋 1번에 처리하는 최대 메시지 수 (리스너의 max.poll.records)
+    # 클수록 커밋 횟수가 감소하지만, 같은 배치의 계좌 행 잠금 보유 시간과 실패 시 1건씩 재처리하는 건수가 증가한다
+    batch-size: ${MARGIN_SETTLE_BATCH_SIZE:100}
+
 # Outbox 발행기 (서비스 3개가 같은 키)
 outbox:
   publisher:

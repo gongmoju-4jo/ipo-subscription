@@ -255,6 +255,36 @@ ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/g2-B-10k bash loadtest/baseline
 - meta에는 청약 수가 든 상태 줄과 `allow_subscriptions` 줄이 남습니다. `restore`, `check`는 옵션 없이 meta의 상태(청약 수 포함)와 비교합니다
 - `ALLOW_SUBSCRIPTIONS`는 `1`일 때만 켜집니다. 다른 값이면 기본 `save`처럼 청약 있는 DB를 거부합니다
 
+### 3-5. 인스턴스 2개로 띄우기 (수평 확장)
+
+서비스를 인스턴스 2개씩 띄워 단일 인스턴스를 전제로 한 동작(스케줄러, Consumer, DB 커넥션, 게이트웨이 캐시)을 확인할 때 씁니다. `compose.scale.yml`을 마지막에 덮어씁니다.
+
+```bash
+./gradlew build -x test
+docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml up -d --build   # 자원 상한 없이 띄울 때는 compose.perf.yml을 뺀다
+```
+
+| 대상 | 인스턴스 | 컨테이너 이름 |
+| --- | --- | --- |
+| 계좌, 청약, 배정 | 2개씩 (`scale: 2`). 개수는 `--scale account-service=3`처럼 바꾼다 | `ipo-subscription-account-service-1`, `-2` 등 (`{프로젝트 폴더명}-{서비스}-{번호}`) |
+| 게이트웨이 | `api-gateway`(8080 공개) + `api-gateway-2`(포트 비공개) | `ipo-api-gateway`, `ipo-api-gateway-2` |
+
+- 외부 요청은 계속 `api-gateway`(8080) 하나로만 들어갑니다. `api-gateway-2`는 입장 스케줄러와 청약 중 공모주 목록 갱신이 두 벌 도는 상황을 만듭니다
+- `api-gateway-2`는 `compose.perf.yml`의 `api-gateway`와 같은 상한(CPU 1.0, 메모리 1g, 힙 512m)이 `compose.scale.yml`에 따로 적혀 있습니다. perf 값을 바꾸면 같이 바꿉니다
+- Prometheus는 `docker/prometheus/prometheus.scale.yml`로 바뀌어 서비스 이름을 DNS로 조회해 인스턴스를 모두 수집합니다. job 이름이 같아 대시보드, 알림 규칙을 그대로 씁니다. 인스턴스는 `instance` 라벨(`IP:포트`)로 구분합니다 (컨테이너를 다시 만들면 IP가 바뀔 수 있습니다)
+- 확인
+  - Eureka(http://localhost:8761): 서비스마다 인스턴스 2개
+  - Prometheus(http://localhost:9090/targets): 서비스마다 대상 2개 UP
+  - `docker stats --no-stream`: 인스턴스별 메모리. perf와 같이 쓰면 상한 합계가 CPU 14, 메모리 약 13.75GB로 3-3절 기준 PC(CPU 10, 메모리 12GB)보다 큽니다. 상한은 넘을 수 없는 값일 뿐이라 뜨기는 하지만, 실제 사용량이 Docker 메모리를 넘으면 컨테이너가 강제 종료됩니다 (부하 없을 때 합계 약 6.2GB)
+- 서비스 계정 DB 커넥션이 기동만으로 한도에 닿습니다. Hikari 풀(청약 30, 계좌 10, 배정 10)이 2개씩이면 100개인데, PostgreSQL `max_connections` 100에서 슈퍼유저 예약 3개를 빼면 97개라 일부 인스턴스는 풀을 다 채우지 못합니다
+- `official.sh`, `g2_run.sh`는 고정 컨테이너 이름(`ipo-account-service` 등)을 써서 이 구성에서는 컨테이너를 찾지 못합니다. 인스턴스별 로그는 `docker-compose logs {서비스 이름}`(인스턴스가 앞에 표시됨)이나 위 컨테이너 이름으로 봅니다
+- 끌 때는 같은 `-f` 목록으로 `stop`이나 `down`을 합니다
+- 단일 인스턴스로 돌아갈 때는 `compose.scale.yml`을 빼고 `--remove-orphans`를 붙입니다. 붙이지 않으면 `api-gateway-2`가 계속 떠서 입장 스케줄러가 두 벌 돕니다
+
+  ```bash
+  docker-compose -f docker-compose.yml -f compose.perf.yml up -d --remove-orphans
+  ```
+
 ## 4. 정식 측정 (official.sh)
 
 S0, S1 각각에서 G1(처리량, 응답, 오류)과 G2(접수→확정 시간, 소진 시간)를 판정할 수 있게 한 번에 실행합니다. 커밋한 뒤, 3장 준비(시드, 자원 상한, 기준 스냅샷)를 마친 상태에서 실행합니다.

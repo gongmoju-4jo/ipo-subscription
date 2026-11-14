@@ -139,7 +139,8 @@ class LedgerReconciliationMeasureTest {
         System.out.println("[측정] 전체 계좌 불일치: LEDGER_SUM 전체 " + allMismatch.count(LEDGER_SUM) + "건, 조회 "
                 + allMismatch.mismatchesOf(LEDGER_SUM).size() + "건, 실행 시간 " + allMismatchMillis + "ms");
         assertThat(allMismatch.count(LEDGER_SUM)).isEqualTo(accounts);
-        assertThat(allMismatch.mismatchesOf(LEDGER_SUM)).hasSize(LedgerReconciliationService.SAMPLE_LIMIT);
+        // 계좌 수가 조회 상한보다 적으면 보관 건수는 계좌 수
+        assertThat(allMismatch.mismatchesOf(LEDGER_SUM)).hasSize(Math.min(accounts, LedgerReconciliationService.SAMPLE_LIMIT));
     }
 
     // 시드는 임시 테이블을 사용해서 트랜잭션 1개(커넥션 1개)에서 실행한다

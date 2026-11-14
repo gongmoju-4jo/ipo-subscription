@@ -6,6 +6,7 @@
 # 하는 일
 #   1. 레포를 배포할 커밋으로 맞춘다 (compose 파일, docker/ 아래 설정 파일이 이미지와 같은 커밋이 되도록)
 #   2. Parameter Store(PARAM_PATH)의 비밀값으로 .env를 만든다 (권한 600)
+#      첫 관리자 계정(ADMIN_LOGIN_ID, ADMIN_PASSWORD)도 여기서 형식을 검사한다. account-service가 기동할 때 이 계정이 없으면 만든다
 #   3. ECR에 로그인해 이미지를 받고 docker compose up -d
 #   4. 서비스 5개가 healthy가 될 때까지 기다린다. 실패하면 상태와 로그를 출력하고 종료 코드 1
 #   5. 서버 안에서 게이트웨이(127.0.0.1:80)로 스모크 (deploy/smoke.sh). 계정은 Parameter Store의 SMOKE_LOGIN_ID, SMOKE_PASSWORD
@@ -30,7 +31,7 @@ main() {
   local health_timeout="${HEALTH_TIMEOUT:-300}"
   local smoke_url="${SMOKE_BASE_URL:-http://127.0.0.1:80}"   # 서버 안의 게이트웨이 (compose.prod.yml의 80 → 8080)
   local services=(eureka-server api-gateway account-service subscription-service allocation-service)
-  local required=(DB_PASSWORD ACCOUNT_DB_PASSWORD SUBSCRIPTION_DB_PASSWORD ALLOCATION_DB_PASSWORD JWT_SECRET GRAFANA_ADMIN_PASSWORD)
+  local required=(DB_PASSWORD ACCOUNT_DB_PASSWORD SUBSCRIPTION_DB_PASSWORD ALLOCATION_DB_PASSWORD JWT_SECRET GRAFANA_ADMIN_PASSWORD ADMIN_LOGIN_ID ADMIN_PASSWORD)
 
   cd "$app_dir"
 
@@ -49,7 +50,7 @@ main() {
   chmod 600 "$tmp"
   # 값은 화면에 출력하지 않는다
   # Compose는 따옴표 없는 .env 값의 $를 변수로 바꾼다. 작은따옴표로 감싸 값을 그대로 넘기고, 작은따옴표가 든 값은 받지 않는다
-  local params name value invalid=() smoke_id="" smoke_pw=""
+  local params name value invalid=() smoke_id="" smoke_pw="" admin_id="" admin_pw=""
   params="$(aws ssm get-parameters-by-path --region "$region" --path "$param_path" --with-decryption \
     --query 'Parameters[].[Name,Value]' --output text)"
   while IFS=$'\t' read -r name value; do
@@ -58,6 +59,9 @@ main() {
     case "${name##*/}" in
       SMOKE_LOGIN_ID) smoke_id="$value"; continue ;;
       SMOKE_PASSWORD) smoke_pw="$value"; continue ;;
+      # 첫 관리자 계정은 .env에도 넣는다 (아래에서 형식만 따로 검사)
+      ADMIN_LOGIN_ID) admin_id="$value" ;;
+      ADMIN_PASSWORD) admin_pw="$value" ;;
     esac
     if [[ "$value" == *"'"* ]]; then
       invalid+=("${name##*/}")
@@ -80,6 +84,17 @@ main() {
   [[ "$smoke_id" =~ ^[a-z0-9]{4,20}$ ]] || missing+=("SMOKE_LOGIN_ID(영문 소문자, 숫자 4~20자)")
   if (( ${#smoke_pw} < 8 || ${#smoke_pw} > 20 )) || [[ "$smoke_pw" == *"'"* ]]; then
     missing+=("SMOKE_PASSWORD(8~20자, 작은따옴표 불가)")
+  fi
+  # 첫 관리자 계정 형식도 서비스를 바꾸기 전에 검사한다 (형식이 틀리면 account-service가 기동하지 않는다)
+  if [[ -n "$admin_id" ]] && [[ ! "$admin_id" =~ ^[a-z0-9]{4,20}$ ]]; then
+    missing+=("ADMIN_LOGIN_ID(영문 소문자, 숫자 4~20자)")
+  fi
+  if [[ -n "$admin_pw" ]] && (( ${#admin_pw} < 8 || ${#admin_pw} > 20 )); then
+    missing+=("ADMIN_PASSWORD(8~20자)")
+  fi
+  # 스모크 계정은 일반 회원으로 가입하므로 같은 로그인 ID면 관리자가 만들어지지 않는다
+  if [[ -n "$admin_id" && "$admin_id" == "$smoke_id" ]]; then
+    missing+=("ADMIN_LOGIN_ID(SMOKE_LOGIN_ID와 달라야 함)")
   fi
   if (( ${#missing[@]} > 0 )); then
     rm -f "$tmp"

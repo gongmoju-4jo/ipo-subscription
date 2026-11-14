@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -47,6 +48,42 @@ public class MarginReserveService {
      */
     @Transactional
     public void reserve(ReserveMarginCommand command) {
+        reserveOne(command);
+    }
+
+    /**
+     * 여러 건을 한 트랜잭션(커밋 1번)으로 처리한다. 인출 Consumer가 밀린 메시지를 묶어서 호출한다 (#162).
+     * <p>
+     * 건별 처리 본문은 {@link #reserve}와 같다. 한 건이라도 예외가 나면 전체가 롤백되고(처리 기록 포함) 예외가 그대로 전달된다.
+     * 호출한 쪽이 건별 {@link #reserve}로 다시 처리해서 실패한 건만 가려낸다.
+     * 거절(예수금 부족, 계좌 없음)은 예외가 아니라 응답 이벤트를 남기는 정상 결과라 롤백하지 않는다.
+     * <p>
+     * 바깥 트랜잭션 없이 호출해야 한다. 호출한 쪽에 트랜잭션이 있으면 이 메서드가 끝나도 커밋되지 않는다.
+     *
+     * @param commands 처리할 요청 (수신한 순서)
+     * @return 처리 결과 건수
+     */
+    @Transactional
+    public ReserveBatchResult reserveAll(List<ReserveMarginCommand> commands) {
+        int reserved = 0;
+        int rejected = 0;
+        int skipped = 0;
+        for (ReserveMarginCommand command : commands) {
+            switch (reserveOne(command)) {
+                case RESERVED -> reserved++;
+                case REJECTED -> rejected++;
+                case SKIPPED -> skipped++;
+            }
+            // 건마다 DB로 보내고 비운다. 비우지 않으면 배치 크기만큼 엔티티가 영속성 컨텍스트에 쌓여
+            // 뒤 건의 변경 감지(flush마다 관리 중인 엔티티 전체를 비교)가 느려진다.
+            // 같은 계좌의 다음 건은 계좌 락 조회가 DB에서 다시 읽어서 앞 건의 변경이 보인다
+            marginRepository.flushAndClear();
+        }
+        return new ReserveBatchResult(reserved, rejected, skipped);
+    }
+
+    // 건 하나의 처리 본문. 트랜잭션은 호출한 메서드(reserve, reserveAll)가 연다
+    private Outcome reserveOne(ReserveMarginCommand command) {
         // 1. processed_event로 같은 eventId 재수신이면 처리 없이 종료한다.
         //   - 조회 후 저장이 아니라 삽입 한 번으로 판단해서, 같은 eventId가 동시에 수신되어도 1건만 처리된다.
         //   - 이후 단계가 예외로 롤백되면 이 기록도 같이 롤백되어 재시도 때 다시 처리된다.
@@ -54,7 +91,7 @@ public class MarginReserveService {
 
             log.info("[증거금 인출] 중복 수신, 건너뜀. eventId={}, subscriptionId={}",
                     command.eventId(), command.subscriptionId());
-            return;
+            return Outcome.SKIPPED;
         }
 
         // 2. 계좌 락: 기존 margin 조회보다 먼저 건다.
@@ -71,7 +108,7 @@ public class MarginReserveService {
                     command.eventId(), command.subscriptionId(), command.accountId());
 
             reject(command, MarginReserveFailReason.ACCOUNT_NOT_FOUND);
-            return;
+            return Outcome.REJECTED;
         }
 
         if (!account.isOwnedBy(command.userId())) {
@@ -79,7 +116,7 @@ public class MarginReserveService {
                     command.eventId(), command.subscriptionId(), command.accountId(), command.userId());
 
             reject(command, MarginReserveFailReason.ACCOUNT_NOT_FOUND);
-            return;
+            return Outcome.REJECTED;
         }
 
         log.debug("[증거금 인출] 계좌 락 획득. accountId={}, cashBalance={}, marginBalance={}",
@@ -92,7 +129,7 @@ public class MarginReserveService {
         //   존재하는 경우
         if (existingMargin.isPresent()) {
             handleExistingMargin(command, existingMargin.get());
-            return;
+            return Outcome.SKIPPED;
         }
 
         // 5. 선행 반환 기록:
@@ -102,7 +139,7 @@ public class MarginReserveService {
         if (marginVoidIntentRepository.existsBySubscriptionId(command.subscriptionId())) {
             log.warn("[증거금 인출] 선행 반환 기록이 있어 인출 안 함, 응답 없음. eventId={}, subscriptionId={}, accountId={}",
                     command.eventId(), command.subscriptionId(), command.accountId());
-            return;
+            return Outcome.SKIPPED;
         }
 
         // 6. 예수금 검사: 예수금 차감 전에 먼저 검사해서 거절을 커밋한다.
@@ -111,7 +148,7 @@ public class MarginReserveService {
             log.info("[증거금 인출] 거절 INSUFFICIENT_BALANCE(예수금 부족). eventId={}, subscriptionId={}, accountId={}, amount={}, cashBalance={}",
                     command.eventId(), command.subscriptionId(), command.accountId(), command.amount(), account.getCashBalance());
             reject(command, MarginReserveFailReason.INSUFFICIENT_BALANCE);
-            return;
+            return Outcome.REJECTED;
         }
 
         // 7. 증거금 상태를 관리하는 margin 저장
@@ -137,6 +174,17 @@ public class MarginReserveService {
         // 트랜잭션 커밋 전 로그. 커밋이 실패하면 롤백 후 재시도되고 에러 로그가 별도로 기록된다
         log.info("[증거금 인출] 인출 저장 (커밋 전). eventId={}, subscriptionId={}, accountId={}, marginId={}, amount={}",
                 command.eventId(), command.subscriptionId(), command.accountId(), margin.getId(), command.amount());
+        return Outcome.RESERVED;
+    }
+
+    // 건 하나의 처리 결과. 배치 처리 로그(인출, 거절, 건너뜀 건수)용
+    private enum Outcome {
+        // 인출함
+        RESERVED,
+        // 거절 응답(margin.reserve-failed)을 남김
+        REJECTED,
+        // 중복 수신, 재요청, 선행 반환 기록으로 인출하지 않음
+        SKIPPED
     }
 
     /**

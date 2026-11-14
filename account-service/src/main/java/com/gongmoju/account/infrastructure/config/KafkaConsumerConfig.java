@@ -4,7 +4,11 @@ import com.gongmoju.account.global.exception.InvalidEventException;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerContainerFactoryConfigurer;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
@@ -26,6 +30,28 @@ class KafkaConsumerConfig {
     // DLT 전송은 문자열 값 KafkaTemplate이라 원본 JSON이 그대로 쌓인다 (원 토픽으로 재발행하면 같은 eventId로 다시 처리됨)
     @Bean
     DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, String> kafkaTemplate) {
+        return createErrorHandler(kafkaTemplate);
+    }
+
+    // 증거금 인출 Consumer 전용 배치 리스너 컨테이너 팩토리 (#162). 리스너가 containerFactory 이름으로 지정한다
+    // Boot의 configurer로 spring.kafka.* 설정(concurrency, auto-startup 등)은 기본 팩토리와 같게 받고, 배치 리스너와 오프셋 커밋만 바꾼다
+    // 에러 핸들러는 빈으로 등록하지 않는다. CommonErrorHandler 빈이 2개가 되면 Boot가 기본 팩토리에 핸들러를 넣지 않아 반환, 정산 Consumer의 재시도와 DLT 설정이 사라진다
+    // 같은 값(재시도 1초, 2초, 4초, 재시도 없는 예외, .DLT)을 쓰려고 핸들러 생성 코드를 하나로 공유한다
+    @Bean
+    ConcurrentKafkaListenerContainerFactory<Object, Object> marginReserveBatchListenerContainerFactory(
+            ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
+            ConsumerFactory<Object, Object> consumerFactory,
+            KafkaTemplate<String, String> kafkaTemplate) {
+        ConcurrentKafkaListenerContainerFactory<Object, Object> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        configurer.configure(factory, consumerFactory);
+        factory.setBatchListener(true);
+        // 배치 처리(DB 커밋)가 끝난 뒤 오프셋을 배치당 1번 커밋한다
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.BATCH);
+        factory.setCommonErrorHandler(createErrorHandler(kafkaTemplate));
+        return factory;
+    }
+
+    private DefaultErrorHandler createErrorHandler(KafkaTemplate<String, String> kafkaTemplate) {
         ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(MAX_RETRIES);
         backOff.setInitialInterval(INITIAL_INTERVAL_MS);
         backOff.setMultiplier(MULTIPLIER);

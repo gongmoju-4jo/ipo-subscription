@@ -65,6 +65,12 @@ spring:
       # 토픽 파티션 수(docker/kafka/create-topics.sh 기본값 6)와 같은 수. 파티션보다 많으면 남는 Consumer는 일하지 않는다
       concurrency: 6
 
+# 증거금 인출 Consumer 배치 (#162). 밀린 메시지를 묶어 한 트랜잭션으로 처리한다
+margin-reserve:
+  batch:
+    # 한 번에 받는 최대 건수 (이 리스너에만 적용. 기다려서 모으지 않고 이미 밀려 있는 만큼만 받는다)
+    max-poll-records: 100
+
 # Outbox 발행기 (서비스 3개가 같은 키)
 outbox:
   publisher:

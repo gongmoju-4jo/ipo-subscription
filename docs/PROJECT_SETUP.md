@@ -123,6 +123,8 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
   - 회원가입과 같은 항목(`loginId`, `password`, `name`)을 받고 역할은 항상 ADMIN. 누가 만들었는지는 `users.created_by`에 남는다
   - ADMIN 확인은 게이트웨이(`/api/v1/admin/**`)와 계좌 서비스(`AdminRoleInterceptor`) 둘 다 한다. 본문 검사보다 먼저 403
 - 관리자 승격, 해제, 비밀번호 변경은 없다
+- `.env`의 두 값을 바꾼 뒤에는 IntelliJ는 계좌 서비스 재시작, Docker는 `docker-compose up -d account-service` (`restart`로는 환경변수가 바뀌지 않는다)
+- `ADMIN_PASSWORD`에 `$`를 쓰지 않는다. Spring이 값 안의 `${...}`를 다른 설정으로 바꾸려 해서, 기동이 실패하고 오류 로그에 값이 그대로 찍힌다
 
 ### 접속 대기열
 
@@ -394,7 +396,7 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 
 - AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택), `SMOKE_LOGIN_ID`, `SMOKE_PASSWORD`, `ADMIN_LOGIN_ID`, `ADMIN_PASSWORD`
 - `SMOKE_LOGIN_ID`(영문 소문자, 숫자 4~20자), `SMOKE_PASSWORD`(8~20자, 작은따옴표 `'` 불가)는 배포 후 스모크 전용 계정이다. 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 이 계정 하나를 계속 쓴다: 처음 배포 때 가입하고 계좌를 하나 연 뒤로는 로그인과 입금(1,000원)만 해서 배포마다 회원이 늘지 않는다. 시연에는 쓰지 않는다 (배포마다 잔고가 늘어난다). `.env`에는 넣지 않는다
-- `ADMIN_LOGIN_ID`(영문 소문자, 숫자 4~20자, `SMOKE_LOGIN_ID`와 다른 값), `ADMIN_PASSWORD`(8~20자, 작은따옴표 `'` 불가)는 첫 관리자 계정이다 ([관리자 계정](#관리자-계정)). 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 서버 주소가 공개돼 있으니 `admin`처럼 짐작하기 쉬운 ID를 피하고 비밀번호는 무작위 값을 쓴다
+- `ADMIN_LOGIN_ID`(영문 소문자, 숫자 4~20자, `SMOKE_LOGIN_ID`와 다른 값), `ADMIN_PASSWORD`(8~20자, 공백 없는 영문, 숫자, 특수문자. `$`, 작은따옴표 `'` 불가)는 첫 관리자 계정이다 ([관리자 계정](#관리자-계정)). 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 서버 주소가 공개돼 있으니 `admin`처럼 짐작하기 쉬운 ID를 피하고 비밀번호는 무작위 값을 쓴다
   - ⚠️ 첫 배포 때 한 번만 계정을 만든다. 그 뒤 파라미터를 바꿔도 계정의 비밀번호는 바뀌지 않는다
 - 배포할 때마다 서버의 `/opt/ipo/.env`(권한 600)를 다시 만든다. 서버의 `.env`를 손으로 고치지 않는다 (다음 배포 때 덮어쓴다)
 - ⚠️ DB 비밀번호 4개는 첫 배포 뒤 바꾸지 않는다. PostgreSQL 볼륨이 처음 만들어질 때 한 번만 계정을 만들어서, 바꾸면 서비스가 DB에 접속하지 못한다
@@ -852,6 +854,11 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
 - **account-service 또는 api-gateway가 기동할 때 `JWT_SECRET` 오류**
   - `.env`의 `JWT_SECRET`이 비어 있거나, Base64가 아니거나, 디코딩 후 32바이트 미만 → [JWT 키](#-jwt-키)대로 값을 채움
 
+- **account-service가 기동할 때 `ADMIN_LOGIN_ID` 또는 `ADMIN_PASSWORD` 오류 (`adminSeedRunner`)**
+  - 둘 중 하나만 있음, 로그인 ID 형식(영문 소문자, 숫자 4~20자), 비밀번호 길이(8~20자) 오류 → 둘 다 채우거나 둘 다 비운다. 오류 메시지에 어느 값이 문제인지 나온다
+  - `Could not resolve placeholder`가 나오면 `ADMIN_PASSWORD`에 `$`가 들어간 것 → `$` 없는 값으로 바꾼다. 이 오류 로그에는 비밀번호가 그대로 찍히니 이슈, 메신저에 붙이지 않는다
+  - 바꾼 뒤 Docker는 `docker-compose up -d account-service` ([관리자 계정](#관리자-계정))
+
 - **Gateway(8080)로 호출하면 `401`, 서비스 포트로 직접 호출하면 정상**
   - 정상. Gateway는 `Authorization: Bearer {accessToken}`이 필요 (공개 경로 제외). 만료는 `TOKEN_EXPIRED`이니 다시 로그인
 
@@ -880,6 +887,7 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
 - **Docker에서 서비스가 `unhealthy`이거나 `starting`에서 안 넘어감**
   - `docker-compose logs {서비스 이름}`에서 `APPLICATION FAILED`나 `ERROR`를 확인한다
   - `JWT_SECRET`(account, gateway) 또는 서비스별 DB 비밀번호가 `.env`에 비어 있거나 형식이 틀리면 기동에 실패한다 → [JWT 키](#-jwt-키), [DB와 설정](#10-db와-설정)
+  - account-service는 `ADMIN_LOGIN_ID`, `ADMIN_PASSWORD` 형식이 틀려도 기동에 실패한다 → [관리자 계정](#관리자-계정)
   - 서비스는 postgres, kafka, `kafka-init`(토픽 생성 완료), eureka-server가 준비된 뒤에 시작한다. 앞 단계가 `healthy`인지 `docker-compose ps`로 본다
 
 - **`docker-compose up`을 쳤더니 이미지 빌드 오류 (`build/libs/*.jar` 없음)**

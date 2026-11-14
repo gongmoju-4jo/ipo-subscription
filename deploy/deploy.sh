@@ -16,6 +16,14 @@
 # down -v는 쓰지 않는다 (DB, Kafka 데이터가 지워진다)
 # 레포 checkout으로 이 파일 자신이 바뀔 수 있어서, bash가 파일 전체를 읽은 뒤 실행되도록 main 함수로 감쌌다
 
+# 첫 관리자 비밀번호는 공백 없는 ASCII 출력 문자 8~20자만 받는다 (계좌 서비스 검사와 같은 길이 기준)
+#   - Spring이 값 안의 ${...}를 다른 설정 이름으로 바꾸려 해서, 실패하면 기동이 멈추고 오류 로그에 값이 그대로 찍힌다. 그래서 $를 받지 않는다
+#   - 실행 환경의 언어 설정이 C면 bash는 길이를 바이트로 세서 한글 등은 서비스(글자 수)와 결과가 달라진다. 그래서 ASCII만 받는다
+admin_password_ok() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[!-~]{8,20}$ ]] && [[ "$1" != *'$'* ]] && [[ "$1" != *"'"* ]]
+}
+
 main() {
   set -euo pipefail
 
@@ -89,8 +97,8 @@ main() {
   if [[ -n "$admin_id" ]] && [[ ! "$admin_id" =~ ^[a-z0-9]{4,20}$ ]]; then
     missing+=("ADMIN_LOGIN_ID(영문 소문자, 숫자 4~20자)")
   fi
-  if [[ -n "$admin_pw" ]] && (( ${#admin_pw} < 8 || ${#admin_pw} > 20 )); then
-    missing+=("ADMIN_PASSWORD(8~20자)")
+  if [[ -n "$admin_pw" ]] && ! admin_password_ok "$admin_pw"; then
+    missing+=("ADMIN_PASSWORD(8~20자, 공백 없는 영문, 숫자, 특수문자. \$와 작은따옴표 불가)")
   fi
   # 스모크 계정은 일반 회원으로 가입하므로 같은 로그인 ID면 관리자가 만들어지지 않는다
   if [[ -n "$admin_id" && "$admin_id" == "$smoke_id" ]]; then

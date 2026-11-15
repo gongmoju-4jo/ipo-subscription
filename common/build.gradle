@@ -44,8 +44,8 @@ dependencies {
     // 스케줄러 락 자동 설정 테스트용 (인스턴스 2개가 같은 PostgreSQL의 shedlock 표를 공유)
     testImplementation 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'
     testImplementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.10.0'
-    // 분산 추적 수집 제외 규칙 테스트용
-    testImplementation 'io.micrometer:micrometer-tracing'
+    // 분산 추적 수집 제외 규칙, Outbox 추적 문맥 테스트용 (Brave로 실제 span, Kafka 헤더 확인)
+    testImplementation 'io.micrometer:micrometer-tracing-bridge-brave'
 
     // 자동 설정 DB 테스트용 (테스트 전용 앱 + PostgreSQL)
     testRuntimeOnly 'org.postgresql:postgresql'

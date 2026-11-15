@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
  *       실패한 행이 조회 구간을 채워도 뒤의 정상 행이 발행된다.</li>
  *   <li>더 보낼 행이 없거나 Kafka가 응답하지 않는 것으로 보이면 실행을 끝내고 interval만큼 쉰다.</li>
  *   <li>Kafka 호출은 DB 트랜잭션 밖에서 하고, 결과 반영(발행 완료, 실패 횟수)만 짧은 트랜잭션으로 한다.</li>
+ *   <li>행에 저장된 추적 문맥이 있으면 그 문맥 안에서 보낸다 ({@link OutboxTraceContext}). 발행 순서, 실패 처리는 문맥과 관계없다.</li>
  * </ul>
  * 단일 인스턴스를 전제로 한다. 인스턴스가 여러 개면 같은 행을 중복 조회할 수 있다.
  */
@@ -44,17 +45,28 @@ class OutboxPublisher {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final TransactionTemplate transactionTemplate;
     private final OutboxPublisherProperties properties;
+    private final OutboxTraceContext traceContext;
 
     OutboxPublisher(OutboxJpaRepository outboxRepository,
                     OutboxMessageFactory messageFactory,
                     KafkaTemplate<String, String> kafkaTemplate,
                     TransactionTemplate transactionTemplate,
                     OutboxPublisherProperties properties) {
+        this(outboxRepository, messageFactory, kafkaTemplate, transactionTemplate, properties, OutboxTraceContext.NONE);
+    }
+
+    OutboxPublisher(OutboxJpaRepository outboxRepository,
+                    OutboxMessageFactory messageFactory,
+                    KafkaTemplate<String, String> kafkaTemplate,
+                    TransactionTemplate transactionTemplate,
+                    OutboxPublisherProperties properties,
+                    OutboxTraceContext traceContext) {
         this.outboxRepository = outboxRepository;
         this.messageFactory = messageFactory;
         this.kafkaTemplate = kafkaTemplate;
         this.transactionTemplate = transactionTemplate;
         this.properties = properties;
+        this.traceContext = traceContext;
     }
 
     /**
@@ -172,7 +184,11 @@ class OutboxPublisher {
                 continue;
             }
             try {
-                inFlight.add(new InFlight(outbox, kafkaTemplate.send(outbox.getTopic(), outbox.getMessageKey(), message)));
+                String payload = message;
+                CompletableFuture<SendResult<String, String>> future = traceContext.inStoredContext(
+                        outbox.getTraceParent(), outbox.getTopic(),
+                        () -> kafkaTemplate.send(outbox.getTopic(), outbox.getMessageKey(), payload));
+                inFlight.add(new InFlight(outbox, future));
                 consecutiveSendFailures = 0;
             } catch (Exception e) {
                 // 전송 호출이 막히거나 실패한다. 행마다 max.block.ms씩 기다리지 않도록, 연달아 실패하면 남은 전송을 멈춘다

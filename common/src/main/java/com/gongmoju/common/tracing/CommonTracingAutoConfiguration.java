@@ -18,6 +18,7 @@ import org.springframework.context.annotation.Bean;
  * 그대로 두면 요청이 없어도 몇 초마다 trace가 쌓여 Zipkin 목록을 덮는다.
  * 관측을 만들지 않으므로 그 관측의 지표(예: {@code tasks_scheduled_execution}, 부모 없는 {@code spring_kafka_template})도 남지 않는다.
  * 대시보드, 알림이 쓰는 지표(HTTP 서버 요청, Kafka 리스너)는 수신 쪽이라 그대로 남는다.
+ * 예외로 Outbox 발행({@link #OUTBOX_PUBLISH_OBSERVATION})은 주기 작업 안이지만 저장된 요청 문맥을 이어서 보내므로 만든다.
  * <p>
  * {@code /actuator/**} 요청(Prometheus 수집, 헬스체크)과 추적 문맥 없이 들어온 {@code /internal/**} 요청(게이트웨이의 주기 호출)은
  * 관측은 그대로 두고(지표 유지) span만 Zipkin으로 보내지 않는다.
@@ -28,8 +29,14 @@ import org.springframework.context.annotation.Bean;
 @ConditionalOnClass(name = "io.micrometer.tracing.Tracer")
 public class CommonTracingAutoConfiguration {
 
+    /**
+     * Outbox 발행 관측 이름. 발행기는 주기 작업이라 부모 관측이 없지만, 저장된 요청 문맥을 이어서 보내므로 따로 허용한다
+     * (common {@code TracingOutboxTraceContext})
+     */
+    public static final String OUTBOX_PUBLISH_OBSERVATION = "outbox.publish";
+
     @Bean
-    ObservationPredicate rootObservationPredicate() {
+    public ObservationPredicate rootObservationPredicate() {
         return CommonTracingAutoConfiguration::startsFromOutside;
     }
 
@@ -45,7 +52,7 @@ public class CommonTracingAutoConfiguration {
      * 그러지 않으면 주기 작업 안의 Kafka 발행이 부모 span 없이 새 trace로 Zipkin에 쌓인다
      */
     static boolean startsFromOutside(String name, Observation.Context context) {
-        return hasRealParent(context) || context instanceof ReceiverContext<?>;
+        return hasRealParent(context) || context instanceof ReceiverContext<?> || OUTBOX_PUBLISH_OBSERVATION.equals(name);
     }
 
     private static boolean hasRealParent(Observation.Context context) {

@@ -173,12 +173,20 @@ jobs:
           docker push "$image"
 
       # 서버의 레포를 먼저 배포 커밋으로 맞춘 뒤 그 커밋의 deploy.sh를 실행한다
-      # web이 없는 커밋(이전 커밋으로 롤백)이면 남아 있는 web을 먼저 지운다
+      # web이 없는 커밋(이전 커밋으로 롤백)이면 web을 먼저 멈춘다
       #   그 커밋의 deploy.sh는 compose에 없는 컨테이너를 정리하지 않아, web이 80을 쥔 채로 남으면 게이트웨이가 80을 열지 못한다
+      #   지우지 않고 멈추기만 하는 이유: 그 deploy.sh가 서비스를 바꾸기 전(값 검사, ECR 로그인, pull)에 실패하면
+      #   게이트웨이는 아직 127.0.0.1:8080에만 열려 있어 80, 443을 받을 곳이 없어진다. 그때는 web을 다시 띄운다
+      #   그 밖의 경우(성공, 또는 이전 게이트웨이가 80을 잡은 뒤 실패)는 web을 지운다
+      #   멈춘 web을 남겨 두면 나중에 web이 있는 커밋을 배포할 때 compose가 그 컨테이너를 재사용하며 포트가 연결되지 않았다 (로컬 실험)
       - name: EC2 배포 (SSM Run Command)
         run: |
           # SSM Run Command는 HOME이 비어 있는 환경에서 root로 실행되어 git, docker 설정 위치를 정해 준다
-          cmd="export HOME=/root && cd /opt/ipo && git fetch --quiet origin && git checkout --quiet --detach $SHA && { grep -q 'container_name: ipo-web' compose.prod.yml || docker rm -f ipo-web > /dev/null 2>&1 || true; } && ECR_REGISTRY=$ECR_REGISTRY AWS_REGION=$AWS_REGION bash deploy/deploy.sh $SHA"
+          # 서버의 sh가 실행한다. 작은따옴표 구간의 $는 서버에서 풀리고, 큰따옴표 구간의 $SHA 등은 여기서 풀린다
+          cmd="export HOME=/root && cd /opt/ipo && git fetch --quiet origin && git checkout --quiet --detach $SHA || exit 1"
+          cmd+='; web_stopped=0; if ! grep -q "container_name: ipo-web" compose.prod.yml && docker stop ipo-web > /dev/null 2>&1; then web_stopped=1; fi'
+          cmd+="; ECR_REGISTRY=$ECR_REGISTRY AWS_REGION=$AWS_REGION bash deploy/deploy.sh $SHA"
+          cmd+='; rc=$?; if [ "$web_stopped" = 1 ]; then if [ "$rc" -ne 0 ] && docker start ipo-web > /dev/null 2>&1; then echo "배포가 서비스를 바꾸기 전에 실패해 멈춰 둔 web(ipo-web)을 다시 띄웠습니다"; else docker rm -f ipo-web > /dev/null 2>&1; fi; fi; exit $rc'
           params="$(jq -cn --arg c "$cmd" '{commands: [$c], executionTimeout: ["900"]}')"
           command_id="$(aws ssm send-command \
             --instance-ids "$EC2_INSTANCE_ID" \

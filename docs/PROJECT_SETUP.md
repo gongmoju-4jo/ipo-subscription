@@ -442,7 +442,7 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 - 외부에 열린 것은 web(Caddy) 하나다 (80, 443). 설정은 `frontend/Caddyfile`
   - `/api/**`와 Swagger 경로는 게이트웨이(서버 안 `127.0.0.1:8080`)로 넘기고, 나머지는 프론트 화면을 준다. 프론트와 API가 같은 주소라 CORS 설정이 없다
   - http는 https로 넘긴다. 인증서는 Caddy가 Let's Encrypt에서 자동으로 받고 갱신한다 (DNS가 서버를 가리키고 80, 443이 열려 있어야 한다)
-  - `/ops`(시연용 운영 조회 서버), `/prom`(Prometheus)은 404다. 프론트의 해당 화면은 "확인 불가"로 나온다
+  - `/ops`(시연용 운영 조회 서버), `/prom`(Prometheus)은 404다. 배포 화면은 시연 기능(API 기록 창, 처리 상세, DLT, 시스템 현황 등)을 빼고 빌드한다 (`frontend/Dockerfile`의 `VITE_DEMO=false`). 관리자 화면은 들어 있고 ADMIN 계정에만 보인다
 - 📌 HTTPS여도 공개 서버라 **시연용 테스트 계정만 쓴다**
 - 게이트웨이(8080), 서비스 포트(8081~8083), Eureka, PostgreSQL, Kafka, Prometheus, Grafana는 외부에 열지 않는다 (서비스 포트를 열면 `X-User-Id` 헤더만으로 게이트웨이 인증을 우회할 수 있다)
 - ⚠️ 인증서는 볼륨 `caddy-data`에 있다. 지우지 않는다. 지우면 다시 발급받는데, 같은 도메인은 7일에 5번까지만 발급된다 (Let's Encrypt 한도)

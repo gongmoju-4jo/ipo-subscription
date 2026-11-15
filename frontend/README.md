@@ -23,11 +23,13 @@ npm run ops          # (선택) 시연용 운영 조회 서버 http://127.0.0.1:
 
 - 라우팅은 `Caddyfile`
   - `/api/**`, 통합 Swagger 경로 → 게이트웨이
-  - `/ops`, `/prom` → 404 (운영 조회 서버, Prometheus는 배포하지 않는다. 화면은 "확인 불가")
+  - `/ops`, `/prom` → 404 (운영 조회 서버, Prometheus는 배포하지 않는다)
   - 나머지 → `dist/`. 없는 경로는 `index.html`을 줘서 `/accounts` 같은 화면 주소에서 새로고침해도 열린다
   - 빌드 파일(`/assets/*`)은 1년 캐시, 그 외는 매번 새로 확인 (`no-cache`)
 - 인증서: 환경변수 `SITE_DOMAIN`의 인증서를 Let's Encrypt에서 자동으로 받는다. 비우면 `localhost`로 뜨고 Caddy 자체 인증서를 쓴다
-- 시연 기능, 관리자 화면 스위치는 빌드할 때 정한다: `docker build --build-arg VITE_DEMO=false --build-arg VITE_ADMIN_UI=false ...` (배포는 기본값, 둘 다 켬)
+- 시연 기능, 관리자 화면 스위치는 빌드할 때 정한다. 이미지 기본값은 **시연 기능 끔**(`VITE_DEMO=false`), 관리자 화면 켬
+  - 시연 기능(API 기록 창, 처리 상세, DLT, 설계 포인트, 시스템 현황, 성과 화면)은 운영 조회 서버, Prometheus를 부르거나 내부 설계를 보여 줘서 배포 화면에 넣지 않는다. 끄면 해당 코드가 빌드 결과에서 빠진다
+  - 로컬에서 시연 기능까지 넣어 보려면 `docker build --build-arg VITE_DEMO=true ...`
 - `ops-server/`, `.env`는 이미지에 넣지 않는다 (`.dockerignore`)
 - 로컬에서 이미지 확인 (백엔드를 Docker로 띄운 상태)
 

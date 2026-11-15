@@ -2,7 +2,7 @@
 # - SITE_DOMAIN의 인증서를 Let's Encrypt에서 자동으로 받고 갱신한다. http는 https로 넘긴다
 #   localhost로 띄우면 Caddy 자체 인증서를 쓴다 (로컬 확인용, 브라우저 경고는 정상)
 # - /api, 통합 Swagger는 게이트웨이로 넘기고, 나머지는 프론트 빌드 결과(dist)를 준다
-# - /ops(운영 조회 서버), /prom(Prometheus)은 배포 환경에서 열지 않는다. 화면은 "확인 불가"로 나온다
+# - /ops(운영 조회 서버), /prom(Prometheus)은 배포 환경에서 열지 않는다. 배포 이미지는 시연 기능을 빼고 빌드해서 이 경로를 부르는 화면이 없다
 {$SITE_DOMAIN:localhost} {
 	encode zstd gzip
 

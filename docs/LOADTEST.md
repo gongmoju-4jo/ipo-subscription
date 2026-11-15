@@ -603,9 +603,17 @@ bash loadtest/baseline.sh restore
 bash loadtest/seed/s7_ipo.sh
 ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/baseline-s7 bash loadtest/baseline.sh save
 
-# 비교: 코드마다 같은 날 한 번씩 (경쟁률이 없는 코드는 EXPECT_RATE=0)
-EXPECT_RATE=0 bash loadtest/s7.sh --batch S7-dev      # develop
-bash loadtest/s7.sh --batch S7-db                      # 경쟁률 브랜치
+# 비교: 코드마다 같은 날 한 번씩. s7.sh는 지금 체크아웃한 코드를 빌드하므로 코드마다 브랜치를 바꿔 실행한다
+# ① 경쟁률이 없는 코드: 경쟁률 머지 전 커밋(ab55c65)에는 S7 도구가 없어서, 도구만 얹은 측정용 브랜치를 만들어 커밋한다
+#    (도구 파일만 복사하면 커밋하지 않은 파일이 생겨 종료 코드 5로 멈춘다. ALLOW_DIRTY=1 결과는 측정값으로 쓰지 않는다)
+#    바뀌는 것은 loadtest/뿐이라 빌드되는 서비스 코드는 ab55c65와 같다. 측정용 브랜치는 내 PC에서만 쓰고 푸시하지 않는다
+git switch -c measure/s7-base ab55c65
+git checkout develop -- loadtest/
+git commit -m "[test] S7 측정용: 경쟁률 없는 코드에 S7 도구만 추가"
+EXPECT_RATE=0 bash loadtest/s7.sh --batch S7-base     # 경쟁률이 없어 목록 항목의 competitionRate 검사를 끈다
+# ② 경쟁률 코드: 측정할 브랜치마다 바꿔서 (예: DB 합산은 develop, Redis는 그 기능 브랜치)
+git switch develop
+bash loadtest/s7.sh --batch S7-db
 ALLOW_DIRTY=1 WARM=0 RATE=5 LIST_RATES=5 REPS=1 DURATION=10s GAP=5 bash loadtest/s7.sh --batch S7-smoke   # 스모크 (결과는 측정값으로 쓰지 않음)
 ```
 
@@ -613,6 +621,7 @@ ALLOW_DIRTY=1 WARM=0 RATE=5 LIST_RATES=5 REPS=1 DURATION=10s GAP=5 bash loadtest
 - 이름: 공모주 이름(`<이름>-l<목록 속도>-r<회차>-<번호>`)이 30자를 넘으면 시작 전에 멈춥니다. 기본값이면 `--batch`는 19자 이하이고, `DURATION`, `REPS`, `LIST_RATES`를 키우면 더 짧아야 합니다. 이미 있는 결과 폴더 이름이면 멈춥니다. Windows는 폴더 이름의 대소문자를 구분하지 않아 `S7-smoke`와 `s7-smoke`도 같은 이름입니다.
 - 볼 것: 요청 종류별(`kind`: `subscribe`, `list`) 응답 시간과 밀린 요청(`요약.md`), 청약 서비스 Hikari(`report.md`), 컨테이너 CPU(`자원.md`, Redis 포함), 쿼리별 호출 수와 시간(`slow-queries-<run>.txt`)
 - 판정: 밀린 요청(`dropped_iterations`)이 있으면 정한 속도를 보내지 못한 회차라 k6 종료 코드가 99입니다. `s7.sh`는 종료 코드를 `진행.log`에 남기고 다음 실행을 계속합니다. 청약은 G1 합격선(평균 500ms 이하, 실패 1% 미만)을 걸고, 목록은 실패 1% 미만만 걸고 응답 시간은 값만 남깁니다. 공통 합격선 `http_reqs rate>=200`도 걸려 있어 스모크(초당 약 10건)는 99로 끝나는 것이 정상입니다.
+- 중앙값: S1, S6과 달리 밀린 요청이 있는 회차도 `요약.md`의 목록 속도별 중앙값에 넣고, 밀린 회차 수(`n/N`)를 같이 적습니다. S7에서는 서버가 느려져 정한 속도를 보내지 못한 것 자체가 결과라서(예: 조회마다 DB 합산), 빼면 무너진 결과가 요약에서 사라집니다. 밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값이라 밀리지 않은 회차와 같은 조건이 아닙니다.
 - 워밍업: 무너진 상태(응답 수십 초)로 고정돼도 `warmup.py`가 평평하다고 판정할 수 있어, 마지막 구간 응답 시간을 `진행.log`에 남깁니다.
 - Redis CPU: k6 시작 직후 `run-k6.sh`가 입장 허가를 Redis에 한꺼번에 넣어 Redis CPU가 상한(0.5코어)까지 오릅니다. 그 구간은 빼고 봅니다.
 - 결과 파일: `results/<이름>/`에 `진행.log`, `env.txt`, `manifest.csv`, `docker-stats.raw`, `docker-stats.csv`, `자원.md`, `요약.md`, `slow-queries-<run>.txt`, 실행마다 `results/<이름>-l<목록 속도>-r<회차>/`(k6 원본, `report.md`), 워밍업 `results/<이름>-W/`

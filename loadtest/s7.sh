@@ -213,11 +213,15 @@ print("| 실행 | 밀린 요청 | 청약 요청 | 목록 요청 | 청약 avg / p
 for L in sorted(rows, key=int):
     for r in rows[L]:
         print(f"| {r[0]} | {r[1]:g} | {num(r[2])} | {num(r[3])} | {ms(r[4])} / {ms(r[5])} | {ms(r[6])} / {ms(r[7])} |")
+# 밀린 요청이 있는 회차도 중앙값에 넣는다. S7에서는 서버가 느려져 속도를 못 낸 것 자체가 결과라서 빼면 무너진 결과가 요약에서 사라진다.
+# 대신 밀린 회차 수를 같이 적는다 (밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값)
 print("\n## 목록 속도별 중앙값\n")
-print("| 목록 건/초 | 밀린 요청 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n| --- | --- | --- | --- |")
+print("밀린 회차도 포함한다. 밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값이라 밀리지 않은 회차와 같은 조건이 아니다.\n")
+print("| 목록 건/초 | 밀린 회차 | 밀린 요청 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n| --- | --- | --- | --- | --- |")
 for L in sorted(rows, key=int):
     rs = rows[L]
-    print(f"| {L} | {num(med([r[1] for r in rs]))} | {ms(med([r[4] for r in rs]))} / {ms(med([r[5] for r in rs]))} | {ms(med([r[6] for r in rs]))} / {ms(med([r[7] for r in rs]))} |")
+    dropped_runs = sum(1 for r in rs if r[1] > 0)
+    print(f"| {L} | {dropped_runs}/{len(rs)} | {num(med([r[1] for r in rs]))} | {ms(med([r[4] for r in rs]))} / {ms(med([r[5] for r in rs]))} | {ms(med([r[6] for r in rs]))} / {ms(med([r[7] for r in rs]))} |")
 PYEOF
   say "== 끝: $OUT (요약.md, 자원.md, 실행별 report.md)"
 }

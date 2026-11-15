@@ -708,6 +708,7 @@ python loadtest/tests/test_s6_summary.py  # S6 여러 회차 요약 (중앙값, 
 python loadtest/tests/test_s6_judge.py    # S6 판정 (회차 무효 조건, 결과 위반, 입력 오류(요청 수 불일치, stage, 이벤트 시각, 없는 검사 결과), DLT 증가와 중복 수신 기록, 종료 코드 0, 3, 4, 1)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)
+python loadtest/tests/test_consumer_stats_promql.py # 인출 Consumer 리스너 조회식을 promtool로 실행 (새 형식 error → result 변환, 예전 형식, 다른 리스너 제외, 수집 시각). Docker가 필요하고 없으면 건너뛴다
 python loadtest/tests/test_autovacuum.py  # 실행별 autovacuum 차이 (새 테이블, 기록 없는 실행, 통계 초기화, 형식 오류)
 python loadtest/tests/test_synthetic.py   # 행동 CSV 규칙과 기대 결과, 생성 코드 재실행 결과가 커밋한 CSV와 같은지, 생성 코드가 응답 원문과 같은지
 ```

@@ -21,6 +21,8 @@ dependencies {
     // 6.x가 Spring 6.2(Boot 3.5) 기준 마지막 버전. 7.x는 Spring 7(Boot 4)용이라 쓰지 않는다
     compileOnly 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'
     compileOnly 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.10.0'
+    // 분산 추적 수집 제외 규칙 (CommonTracingAutoConfiguration). 서비스가 micrometer-tracing-bridge-brave를 implementation으로 가지고 있어야 함
+    compileOnly 'io.micrometer:micrometer-tracing'
     compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'
     // CommonSwaggerAutoConfiguration (OpenAPI 모델). 버전은 서비스의 springdoc과 맞춤
     compileOnly 'org.springdoc:springdoc-openapi-starter-common:2.8.17'
@@ -42,6 +44,9 @@ dependencies {
     // 스케줄러 락 자동 설정 테스트용 (인스턴스 2개가 같은 PostgreSQL의 shedlock 표를 공유)
     testImplementation 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'
     testImplementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.10.0'
+    // 분산 추적 수집 제외 규칙, Outbox 추적 문맥 테스트용 (Brave로 실제 span, Kafka 헤더 확인)
+    testImplementation 'io.micrometer:micrometer-tracing-bridge-brave'
+
     // 자동 설정 DB 테스트용 (테스트 전용 앱 + PostgreSQL)
     testRuntimeOnly 'org.postgresql:postgresql'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'

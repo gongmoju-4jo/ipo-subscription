@@ -2,6 +2,9 @@ package com.gongmoju.common.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManagerFactory;
+import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.tracing.Tracer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurationPackage;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -52,8 +55,26 @@ public class CommonOutboxAutoConfiguration {
                                     OutboxMessageFactory messageFactory,
                                     KafkaTemplate<String, String> kafkaTemplate,
                                     TransactionTemplate transactionTemplate,
-                                    OutboxPublisherProperties properties) {
-        return new OutboxPublisher(outboxRepository, messageFactory, kafkaTemplate, transactionTemplate, properties);
+                                    OutboxPublisherProperties properties,
+                                    ObjectProvider<OutboxTraceContext> traceContext) {
+        return new OutboxPublisher(outboxRepository, messageFactory, kafkaTemplate, transactionTemplate, properties,
+                traceContext.getIfAvailable(() -> OutboxTraceContext.NONE));
+    }
+
+    /**
+     * Micrometer Tracing이 있으면 Outbox 행에 추적 문맥을 저장하고 발행 때 이어 붙인다 ({@link TracingOutboxTraceContext}).
+     * 없으면 등록하지 않고, 발행기와 저장 리스너는 문맥 없이 지금처럼 동작한다.
+     * Tracer 빈은 이 설정보다 늦게 만들어질 수 있어 빈 조건 대신 쓸 때 꺼낸다 (ObjectProvider)
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.tracing.Tracer")
+    static class TracingConfig {
+
+        @Bean
+        @ConditionalOnMissingBean
+        OutboxTraceContext outboxTraceContext(ObjectProvider<Tracer> tracer, ObjectProvider<ObservationRegistry> observationRegistry) {
+            return new TracingOutboxTraceContext(tracer, observationRegistry);
+        }
     }
 
     /**

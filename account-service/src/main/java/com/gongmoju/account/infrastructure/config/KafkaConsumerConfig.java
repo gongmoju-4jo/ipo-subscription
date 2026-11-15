@@ -66,6 +66,12 @@ public class KafkaConsumerConfig {
         // 리스너 메서드가 정상 종료하면(배치 트랜잭션 커밋 후) 배치 전체 오프셋을 커밋한다
         // application.yml의 ack-mode: record는 1건 리스너용이라 배치 팩토리에서는 BATCH로 변경한다
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.BATCH);
+        // 배치 리스너의 리스너 타이머(spring.kafka.listener, 태그 name, result)를 끈다
+        // spring-kafka 3.3은 배치 리스너의 관측(observation)을 지원하지 않아 이 타이머를 쓰는데, 1건 리스너는 관측을 켜서(#165, 분산 추적)
+        // 같은 이름의 타이머를 다른 태그(spring.kafka.listener.id, error)로 만든다. Prometheus는 같은 이름에 다른 태그 구성을 받지 않아,
+        // 이 타이머가 먼저 등록되면 1건 리스너(증거금 인출 등)의 지표가 빠진다 (loadtest/verify/consumer_stats.py가 쓰는 지표)
+        // 정산 배치의 처리량, 랙은 Kafka 클라이언트 지표(kafka_consumer_fetch_manager_*)로 본다
+        factory.getContainerProperties().setMicrometerEnabled(false);
         return factory;
     }
 }

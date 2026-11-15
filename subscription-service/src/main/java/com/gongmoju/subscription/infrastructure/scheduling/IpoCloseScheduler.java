@@ -14,8 +14,10 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 // 마감 시각 + 대기 시간이 지난 OPEN 공모주를 주기적으로 마감한다 (F-13, D-16)
 // 마감 조건: 대기 시간 경과(마감 대상 조회) → 진행 중 청약 0건(IpoCloseService가 공모주 행을 잠근 뒤 트랜잭션 안에서 확인)
@@ -45,10 +47,10 @@ class IpoCloseScheduler {
     }
 
     // 이전 실행이 끝난 뒤 interval만큼 쉬고 다시 실행한다 (실행이 겹치지 않는다)
-    // 락: lockAtMostFor는 실행 중 인스턴스가 죽었을 때 풀리기까지의 시간(가장 긴 실행보다 넉넉히), lockAtLeastFor는 interval(5초)보다 조금 짧게.
-    // lockAtLeastFor가 없으면 A가 끝나자마자 B가 실행해 인스턴스 수만큼 돈다. interval을 바꾸면 lockAtLeastFor도 같이 맞춘다 (PROJECT_SETUP 5장)
+    // 락: lockAtMostFor는 실행 중 인스턴스가 죽었을 때 풀리기까지의 시간(가장 긴 실행보다 넉넉히), lockAtLeastFor는 interval보다 조금 짧게.
+    // lockAtLeastFor가 없으면 A가 끝나자마자 B가 실행해 인스턴스 수만큼 돈다. interval이 설정값이라 lockAtLeastFor도 설정값으로 둔다 (PROJECT_SETUP 5장)
     @Scheduled(fixedDelayString = "${ipo.close.interval:PT5S}")
-    @SchedulerLock(name = "IpoCloseScheduler.closeDueIpos", lockAtMostFor = "PT1M", lockAtLeastFor = "PT4S")
+    @SchedulerLock(name = "IpoCloseScheduler.closeDueIpos", lockAtMostFor = "PT1M", lockAtLeastFor = "${ipo.close.lock-at-least-for:PT4S}")
     void closeDueIpos() {
         closeDueIpos(Instant.now());
     }
@@ -56,6 +58,9 @@ class IpoCloseScheduler {
     // 테스트에서 현재 시각을 지정하려고 나눈다
     void closeDueIpos(Instant now) {
         List<Ipo> due = ipoRepository.findByStatusAndSubscriptionEndAtLessThanEqual(IpoStatus.OPEN, now.minus(properties.gracePeriod()));
+        // 더는 마감 대상이 아닌 공모주의 알림 시각은 지운다. 락을 잡는 인스턴스가 바뀌면 다른 인스턴스가 마감해서, 이 인스턴스에서는 CLOSED로 지울 기회가 없다
+        Set<UUID> dueIds = due.stream().map(Ipo::getId).collect(Collectors.toSet());
+        lastAlertAt.keySet().retainAll(dueIds);
         for (Ipo ipo : due) {
             close(ipo, now);
         }

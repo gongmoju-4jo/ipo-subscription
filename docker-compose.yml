@@ -174,6 +174,8 @@ services:
       DB_NAME: ${DB_NAME:-ipo}
       # 자기 계정의 비밀번호만 전달한다 (관리자 DB_PASSWORD는 전달하지 않는다)
       ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-}
+      # 정산 Consumer batch size (#114). 측정에서 값을 변경할 때만 .env에 입력한다
+      MARGIN_SETTLE_BATCH_SIZE: ${MARGIN_SETTLE_BATCH_SIZE:-100}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       EUREKA_URL: http://eureka-server:8761/eureka/
       JWT_SECRET: ${JWT_SECRET:-}

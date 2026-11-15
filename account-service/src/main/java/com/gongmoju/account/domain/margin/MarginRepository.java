@@ -1,5 +1,7 @@
 package com.gongmoju.account.domain.margin;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -12,8 +14,9 @@ public interface MarginRepository {
     Optional<Margin> findBySubscriptionId(UUID subscriptionId);
 
     /**
-     * 쌓인 변경을 DB로 보내고(아직 커밋 전) 영속성 컨텍스트를 비운다. 한 트랜잭션에서 여러 건을 처리할 때 건마다 호출해서
-     * 컨텍스트가 커지지 않게 한다. 호출 뒤에는 그전에 읽은 엔티티를 고쳐도 저장되지 않으므로 필요하면 다시 조회해야 한다.
+     * 여러 청약의 margin을 한 번에 조회한다 (한 트랜잭션에서 여러 건을 처리할 때, 쿼리 1회). 없는 청약은 결과에 없다.
+     *
+     * @param subscriptionIds 청약 ID (비어 있으면 안 됨)
      */
-    void flushAndClear();
+    List<Margin> findAllBySubscriptionIds(Collection<UUID> subscriptionIds);
 }

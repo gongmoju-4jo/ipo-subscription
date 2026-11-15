@@ -1,6 +1,9 @@
 package com.gongmoju.account.application.margin;
 
 import com.gongmoju.account.global.exception.InvalidEventException;
+import jakarta.persistence.EntityManagerFactory;
+import org.hibernate.SessionFactory;
+import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,15 +20,21 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 // 여러 건을 한 트랜잭션으로 처리하는 reserveAll (#162)을 실제 PostgreSQL(Testcontainers)에서 확인한다. Docker가 필요하다
 // 건별 처리 본문은 reserve와 같아서, 건별 경우의 상세 검증은 MarginReserveServiceTest가 맡는다
+// hibernate.generate_statistics: 준비한 SQL 수로 JDBC 배치가 적용됐는지 확인하려고 이 테스트에서만 켠다
 @DisplayName("증거금 인출 배치 처리(reserveAll)")
 @Testcontainers
-@SpringBootTest(properties = "eureka.client.enabled=false")
+@SpringBootTest(properties = {"eureka.client.enabled=false", "spring.jpa.properties.hibernate.generate_statistics=true"})
 class MarginReserveBatchServiceTest {
 
     @Container
@@ -38,6 +47,9 @@ class MarginReserveBatchServiceTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private EntityManagerFactory entityManagerFactory;
 
     private UUID userId;
     private UUID accountId;
@@ -114,7 +126,7 @@ class MarginReserveBatchServiceTest {
     }
 
     @Test
-    @DisplayName("같은 계좌의 요청이 영속성 컨텍스트를 여러 번 비우는 긴 배치에서도 잔고가 정확히 누적된다")
+    @DisplayName("같은 계좌의 요청 30건을 메모리에서 이어서 판단해도 잔고와 원장이 정확히 누적된다")
     void reserveAll_manyRequestsOnSameAccount_accumulatesBalanceCorrectly() {
         // given: 예수금 20,000원, 100원씩 30건
         List<ReserveMarginCommand> commands = new ArrayList<>();
@@ -233,6 +245,78 @@ class MarginReserveBatchServiceTest {
         assertThat(cashBalance(accountId)).isEqualTo(10_000L);
         assertThat(count("outbox WHERE event_type = 'margin.reserve-failed' AND message_key = '" + unknownAccountId + "'")).isEqualTo(1);
         assertThat(count("processed_event")).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("서로 다른 계좌 30건을 처리하면 INSERT와 UPDATE가 JDBC 배치로 묶여서 준비한 SQL 수가 건수에 비례해 늘지 않는다")
+    void reserveAll_manyAccounts_groupsStatementsIntoJdbcBatches() {
+        // given: 계좌 30개, 계좌마다 1건
+        List<ReserveMarginCommand> commands = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            UUID otherUserId = UUID.randomUUID();
+            UUID otherAccountId = UUID.randomUUID();
+            insertAccount(otherUserId, otherAccountId, String.format("3%011d", i), 20_000);
+            commands.add(command(otherAccountId, otherUserId, UUID.randomUUID(), 1_000));
+        }
+        Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+        statistics.clear();
+
+        // when
+        ReserveBatchResult result = marginReserveService.reserveAll(commands);
+
+        // then
+        assertThat(result).isEqualTo(new ReserveBatchResult(30, 0, 0));
+        assertThat(statistics.getEntityInsertCount()).isEqualTo(90); // margin, 원장, Outbox 30건씩
+        assertThat(statistics.getEntityUpdateCount()).isEqualTo(30); // 계좌 30개
+        // 처리 기록 30(건마다) + 조회 3(계좌 잠금, margin, 선행 반환 기록) + 묶인 INSERT 3종류 + 묶인 계좌 UPDATE 1 = 37쯤.
+        // 묶지 않으면 30 + 3 + 90 + 30 = 153
+        long preparedStatements = statistics.getPrepareStatementCount();
+        assertThat(preparedStatements).as("준비한 SQL 수").isLessThanOrEqualTo(commands.size() + 10L);
+    }
+
+    @Test
+    @DisplayName("같은 두 계좌를 서로 반대 순서로 요청한 배치 둘이 동시에 처리돼도 계좌를 ID 순으로 잠가서 교착 없이 모두 반영된다")
+    void reserveAll_overlappingBatchesInOppositeOrder_doNotDeadlock() throws Exception {
+        // given: 계좌 둘 (예수금 20,000원씩), 배치 2개가 [A, B], [B, A] 순서로 번갈아 20번 동시에 들어옴
+        UUID userA = UUID.randomUUID();
+        UUID accountA = UUID.randomUUID();
+        UUID userB = UUID.randomUUID();
+        UUID accountB = UUID.randomUUID();
+        insertAccount(userA, accountA, "400000000001", 20_000);
+        insertAccount(userB, accountB, "400000000002", 20_000);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+            for (int round = 0; round < 20; round++) {
+                List<ReserveMarginCommand> ab = List.of(
+                        command(accountA, userA, UUID.randomUUID(), 100), command(accountB, userB, UUID.randomUUID(), 100));
+                List<ReserveMarginCommand> ba = List.of(
+                        command(accountB, userB, UUID.randomUUID(), 100), command(accountA, userA, UUID.randomUUID(), 100));
+                CountDownLatch start = new CountDownLatch(1);
+                Future<?> first = executor.submit(() -> {
+                    start.await();
+                    return marginReserveService.reserveAll(ab);
+                });
+                Future<?> second = executor.submit(() -> {
+                    start.await();
+                    return marginReserveService.reserveAll(ba);
+                });
+
+                // when
+                start.countDown();
+
+                // then: 하나라도 교착으로 실패하면 get()에서 예외가 난다
+                first.get(30, TimeUnit.SECONDS);
+                second.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        // 계좌마다 20번 x 2건 x 100원
+        assertThat(cashBalance(accountA)).isEqualTo(16_000L);
+        assertThat(cashBalance(accountB)).isEqualTo(16_000L);
+        assertThat(count("margin WHERE account_id IN ('" + accountA + "', '" + accountB + "')")).isEqualTo(80);
     }
 
     // 이 테스트 클래스의 기본 계좌(accountId)에 대한 요청

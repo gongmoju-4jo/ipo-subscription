@@ -3,6 +3,8 @@ package com.gongmoju.account.domain.account;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -33,4 +35,14 @@ public interface AccountRepository {
     // 계좌 행에 쓰기 잠금을 획득하여 동시 잔고 변경 방지
     // 잠금은 트랜잭션이 종료될 때 해제됨
     Optional<Account> findByIdForUpdate(UUID accountId);
+
+    /**
+     * 여러 계좌에 쓰기 잠금을 한 번에 획득한다 (한 트랜잭션에서 여러 건을 처리할 때, 쿼리 1회).
+     * 계좌 ID 순으로 잠가서 같은 방식으로 여러 계좌를 잠그는 트랜잭션끼리 서로 기다리며 멈추지 않게 함
+     * 없는 계좌는 결과에 없다.
+     *
+     * @param accountIds 계좌 ID (비어 있으면 안 됨)
+     * @return 잠근 계좌 (ID 순)
+     */
+    List<Account> findAllByIdForUpdate(Collection<UUID> accountIds);
 }

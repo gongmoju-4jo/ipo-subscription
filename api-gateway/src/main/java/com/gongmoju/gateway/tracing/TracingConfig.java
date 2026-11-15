@@ -11,6 +11,7 @@ import io.micrometer.tracing.exporter.SpanExportingPredicate;
 import io.micrometer.tracing.handler.PropagatingReceiverTracingObservationHandler;
 import io.micrometer.tracing.propagation.Propagator;
 import org.springframework.boot.actuate.autoconfigure.tracing.MicrometerTracingAutoConfiguration;
+import org.springframework.cloud.gateway.filter.headers.observation.GatewayContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -27,8 +28,9 @@ import org.springframework.core.annotation.Order;
  * trace는 밖에서 들어온 HTTP 요청에서만 시작한다. 부모 없이 시작하는 관측(1초 입장 스케줄러의 Redis 명령,
  * 5초 청약 중 공모주 목록 갱신 WebClient, Eureka 갱신)은 만들지 않는다. 관측을 만들지 않으므로 그 관측의 지표도 남지 않는다.
  * <p>
- * Spring Cloud Gateway가 서비스로 보내는 호출({@code spring.cloud.gateway.*})은 관측을 만든 뒤에 부모(요청)를 넣어서,
- * 만들 때는 부모가 비어 있을 수 있다. 그래서 이름으로 따로 허용한다.
+ * Spring Cloud Gateway가 서비스로 보내는 호출(관측 이름 {@code http.client.requests}, 문맥 {@link GatewayContext})은 관측을 만든 뒤에
+ * 부모(요청)를 넣어서, 만들 때는 부모가 비어 있을 수 있다. 그래서 문맥 타입으로 따로 허용한다.
+ * 이름으로 허용하면 같은 이름을 쓰는 백그라운드 WebClient 호출(공모주 목록 갱신)까지 허용되어 타입으로 구분한다.
  * <p>
  * 관측은 그대로 두고(지표 유지) span만 Zipkin으로 보내지 않는 요청
  * <ul>
@@ -41,7 +43,6 @@ import org.springframework.core.annotation.Order;
 @Configuration(proxyBeanMethods = false)
 class TracingConfig {
 
-    private static final String GATEWAY_OBSERVATION_PREFIX = "spring.cloud.gateway.";
     private static final String QUEUE_POSITION_URI = "/api/v1/queues/{ipoId}/entries/me";
 
     @Bean
@@ -65,13 +66,13 @@ class TracingConfig {
     }
 
     /**
-     * 부모가 있는 관측은 그대로 두고, 부모가 없으면 수신(HTTP 서버 요청)이나 게이트웨이의 서비스 호출일 때만 만든다.
+     * 부모가 있는 관측은 그대로 두고, 부모가 없으면 수신(HTTP 서버 요청)이나 게이트웨이의 서비스 호출({@link GatewayContext})일 때만 만든다.
      * 이 규칙으로 만들지 않은 관측(noop)도 범위를 열면 현재 관측이 되어 부모로 잡히므로, noop 부모는 부모가 없는 것으로 본다
      */
     static boolean startsFromOutside(String name, Observation.Context context) {
         return hasRealParent(context)
                 || context instanceof ReceiverContext<?>
-                || name.startsWith(GATEWAY_OBSERVATION_PREFIX);
+                || context instanceof GatewayContext;
     }
 
     private static boolean hasRealParent(Observation.Context context) {

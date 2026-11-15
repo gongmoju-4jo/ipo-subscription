@@ -17,6 +17,10 @@ import io.micrometer.observation.transport.SenderContext;
 import io.micrometer.tracing.exporter.FinishedSpan;
 import io.micrometer.tracing.exporter.SpanExportingPredicate;
 import org.junit.jupiter.api.Test;
+import org.springframework.cloud.gateway.filter.headers.observation.GatewayContext;
+import org.springframework.http.HttpHeaders;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
 
 import java.util.List;
 import java.util.Map;
@@ -48,10 +52,21 @@ class TracingConfigTest {
 
     @Test
     void 게이트웨이의_서비스_호출은_만들_때_부모가_없어도_관측한다() {
-        Observation route = Observation.createNotStarted("spring.cloud.gateway.http.client.requests",
-                () -> new SenderContext<>((carrier, key, value) -> { }), registry);
+        // Spring Cloud Gateway는 관측(이름 http.client.requests)을 만든 뒤에 부모를 붙인다
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/v1/subscriptions"));
+        Observation route = Observation.createNotStarted("http.client.requests",
+                () -> new GatewayContext(new HttpHeaders(), exchange.getRequest(), exchange), registry);
 
         assertThat(route.isNoop()).isFalse();
+    }
+
+    @Test
+    void 같은_이름이어도_게이트웨이_전달이_아닌_부모_없는_호출은_관측하지_않는다() {
+        // 공모주 목록 갱신 WebClient (백그라운드)
+        Observation background = Observation.createNotStarted("http.client.requests",
+                () -> new SenderContext<>((carrier, key, value) -> { }), registry);
+
+        assertThat(background.isNoop()).isTrue();
     }
 
     @Test

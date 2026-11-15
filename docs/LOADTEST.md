@@ -159,6 +159,14 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 - 컨테이너가 상한과 함께 다시 만들어집니다 (DB, Kafka 데이터는 유지).
 - 상한과 JVM 힙(G1 명시)은 `compose.perf.yml` 맨 위 표를 봅니다. 머신에 맞게 고치고, 쓴 값은 측정 환경 기록에 적습니다.
 - `kafka-ui`는 이 구성에서 기본 실행에서 빠집니다 (필요하면 `docker-compose -f docker-compose.yml -f compose.perf.yml up -d kafka-ui`).
+- 분산 추적은 샘플링 0이라 Zipkin으로 보내지 않습니다 (서비스 4개 `TRACING_SAMPLING_PROBABILITY=0`). 요청마다 span을 만들어 보내는 일이 서비스 CPU 상한 안에서 돌아 측정값에 섞이지 않게 하려는 것입니다. 로그에는 traceId가 그대로 남고, Outbox를 거쳐도 같은 traceId로 이어져 Loki에서 요청 하나의 로그를 서비스 전체에서 찾을 수 있습니다.
+- 원인 분석에 trace가 필요하면 낮은 속도(200건/초 이하)의 진단 실행에서만 샘플링을 올립니다. 정식 측정에는 쓰지 않습니다 (600건/초에서 계좌, 게이트웨이가 이미 CPU 상한에 닿아 있음).
+  ```bash
+  TRACING_SAMPLING_PROBABILITY=1.0 docker-compose -f docker-compose.yml -f compose.perf.yml up -d api-gateway account-service subscription-service allocation-service
+  ```
+  - 끝나면 같은 명령을 앞의 변수 없이 다시 실행해 0으로 돌립니다.
+  - 1.0에서는 청약 1건에 span이 약 9개라, Zipkin(최대 50만 span)에는 빠른 속도일수록 최근 몇 분만 남습니다.
+- 로그 수집(Alloy, Loki)은 샘플링과 관계없이 돕니다. 서비스 상한 밖의 별도 컨테이너라 서비스 측정값에 직접 섞이지 않지만 PC 전체 CPU는 나눠 씁니다. `docker stats` 기록과 `자원.md`에 `ipo-zipkin`, `ipo-loki`, `ipo-alloy`도 나옵니다.
 
 ### 3-4. 기준 상태 스냅샷 만들기 (한 번)
 
@@ -368,6 +376,8 @@ S3, S4 (Synthetic Data) 판정 기준. 회차마다 유효성, 정합성, 성능
 종료 코드: 0 정상, 2 워밍업이 최대 시간 안에 정상 상태에 닿지 않음 또는 판정 실패, 3 토큰, 4 예수금, 5 버전(dirty, jar 불일치), 6 소진 대기, 7 기동, 8 k6, 9 사전 점검, 10 부하는 끝났고 후처리 일부 실패, 11 공모주 생성, 12 잠금·결과 폴더, 13 도구 없음, 14 기준 상태 복원 실패
 
 결과를 쓸 때 같이 적는 한계: k6와 서비스가 같은 PC, Prometheus 5초 수집, docker stats 5초 간격 순간값(조회 1번에 약 2~3초, 조회도 CPU를 씀), 토큰 재발급의 로그인 요청, S1은 공모가 `S1_PRICE`원 종목 (금액만 다르고 처리 경로는 같다고 보지만 확인하지 않았습니다)
+
+분산 추적 계측(#165)이 들어간 커밋 이후 회차를 그 전 회차와 비교할 때는 조건 차이를 같이 적습니다. 샘플링 0이라 span을 보내지는 않지만 관측 생성, 로그 traceId, Outbox 문맥 저장(행당 약 55바이트), Kafka 헤더는 그대로 돌고, 로그 수집 컨테이너 2개가 PC CPU를 나눠 씁니다. 그 영향 크기는 측정하지 않았습니다. Kafka 리스너 지표의 태그도 바뀌었습니다 (`consumer_stats.py`는 두 형식을 모두 읽습니다).
 
 ### 대량 환불 측정 (g2_run.sh)
 

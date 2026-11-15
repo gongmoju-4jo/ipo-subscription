@@ -7,13 +7,12 @@ datasources:
     access: proxy
     url: http://zipkin:9411
     jsonData:
-      # trace의 span에서 그 서비스의 같은 traceId 로그로 간다
-      # span의 서비스 이름(service.name)을 Loki 라벨 service로 바꾸고, 로그 본문에서 traceId를 찾는다
+      # trace의 span에서 같은 traceId의 로그(모든 서비스)로 간다
+      # Zipkin span에는 서비스 이름이 태그(service.name)로 오지 않아 서비스 라벨로 좁히지 않고, Alloy가 뽑아 둔 trace_id로 찾는다
+      # Grafana가 파일 안의 $를 환경변수로 바꾸므로 $$로 적는다
       tracesToLogsV2:
         datasourceUid: loki
-        tags:
-          - key: service.name
-            value: service
-        filterByTraceID: true
+        customQuery: true
+        query: '{service=~".+"} | trace_id="$${__trace.traceId}"'
         spanStartTimeShift: -1m
         spanEndTimeShift: 1m

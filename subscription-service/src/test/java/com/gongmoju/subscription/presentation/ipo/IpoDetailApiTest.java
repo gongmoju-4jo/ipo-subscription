@@ -37,6 +37,7 @@ class IpoDetailApiTest {
 
     @BeforeEach
     void setUp() {
+        jdbcTemplate.update("DELETE FROM subscription.subscription");
         jdbcTemplate.update("DELETE FROM subscription.ipo");
     }
 
@@ -60,7 +61,32 @@ class IpoDetailApiTest {
                 .andExpect(jsonPath("$.data.subscriptionStartAt").value("2026-11-03T10:00:00+09:00"))
                 .andExpect(jsonPath("$.data.subscriptionEndAt").value("2026-11-04T16:00:00+09:00"))
                 .andExpect(jsonPath("$.data.refundDate").value("2026-11-06"))
-                .andExpect(jsonPath("$.data.status").value("OPEN"));
+                .andExpect(jsonPath("$.data.status").value("OPEN"))
+                .andExpect(jsonPath("$.data.competitionRate").value(0.00));
+    }
+
+    @Test
+    void 경쟁률은_증거금이_확보된_청약의_신청_수량_합을_일반청약_물량으로_나눈_값이다() throws Exception {
+        UUID ipoId = UUID.randomUUID();
+        insertIpo(ipoId, "경쟁률 공모주", "OPEN");
+        // 세는 청약: CONFIRMED, ALLOCATED, REFUNDED (합 1,527,000주 / 물량 100,000주 = 15.27)
+        insertSubscription(ipoId, "CONFIRMED", 1_000_000);
+        insertSubscription(ipoId, "ALLOCATED", 500_000);
+        insertSubscription(ipoId, "REFUNDED", 27_000);
+        // 세지 않는 청약: 접수 중, 거절, 보상 중, 취소 요청, 취소
+        insertSubscription(ipoId, "PENDING", 9_000_000);
+        insertSubscription(ipoId, "REJECTED", 9_000_000);
+        insertSubscription(ipoId, "COMPENSATING", 9_000_000);
+        insertSubscription(ipoId, "CANCEL_REQUESTED", 9_000_000);
+        insertSubscription(ipoId, "CANCELLED", 9_000_000);
+        // 다른 공모주의 청약은 섞이지 않음
+        UUID other = UUID.randomUUID();
+        insertIpo(other, "다른 공모주", "OPEN");
+        insertSubscription(other, "CONFIRMED", 9_000_000);
+
+        mockMvc.perform(get(IPOS + ipoId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.competitionRate").value(15.27));
     }
 
     @Test
@@ -101,5 +127,17 @@ class IpoDetailApiTest {
                         + " VALUES (?, ?, 15000, 100000, 50000, 10, 10000, 1.00, ?, ?, DATE '2026-11-06', ?, 0, ?, 'SYSTEM:test')",
                 ipoId, name, OffsetDateTime.parse("2026-11-03T10:00:00+09:00"), OffsetDateTime.parse("2026-11-04T16:00:00+09:00"),
                 status, OffsetDateTime.parse("2026-10-28T10:00:00+09:00"));
+    }
+
+    // 청약을 DB에 직접 넣는다 (경쟁률 확인용. 상태와 신청 수량만 의미 있음)
+    private void insertSubscription(UUID ipoId, String status, long requestedQuantity) {
+        UUID requestId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "INSERT INTO subscription.subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,"
+                        + " margin_amount, status, attempts, received_at, version, created_at, created_by)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, 'SYSTEM:test')",
+                UUID.randomUUID(), requestId, ipoId, UUID.randomUUID(), UUID.randomUUID(), requestedQuantity,
+                requestedQuantity * 15000, status, OffsetDateTime.parse("2026-11-03T11:00:00+09:00"),
+                OffsetDateTime.parse("2026-11-03T11:00:00+09:00"));
     }
 }

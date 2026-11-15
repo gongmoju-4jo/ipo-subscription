@@ -429,6 +429,7 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 - 비밀번호가 담긴 스모크는 서버 안에서 게이트웨이(`127.0.0.1:8080`)로 바로 보낸다. 비밀번호가 서버 밖으로 나가지 않고, 서버 밖과는 SSM의 암호화된 채널로만 오간다
 
 - 설정: `.github/workflows/deploy.yml`. CI가 실패한 커밋, PR에서 돈 CI로는 배포하지 않는다
+- ECR 저장소는 이미지마다 하나씩 6개다: `ipo/eureka-server`, `ipo/api-gateway`, `ipo/account-service`, `ipo/subscription-service`, `ipo/allocation-service`, `ipo/web` (태그 덮어쓰기 금지(IMMUTABLE), 최근 5개만 유지). 계정을 새로 꾸릴 때 하나라도 빠지면 그 이미지를 올리다 배포가 멈춘다
 - 배포는 한 번에 하나만 실행된다. 머지가 겹치면 앞 배포가 끝난 뒤 다음 배포가 실행된다
 - 자동 배포는 CI가 끝난 커밋이 아직 develop의 최신일 때만 한다. 그사이 새 커밋이 머지됐으면 건너뛰고(`gate`에 "건너뜀" 표시), 최신 커밋의 CI가 끝나면 그 커밋을 배포한다
 - 워크플로의 외부 액션은 커밋 SHA로 고정했다. 버전을 올릴 때는 해당 릴리스의 커밋 SHA로 바꾸고 주석의 버전도 같이 고친다
@@ -440,7 +441,7 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 
 - 화면: `https://{도메인}/`. 통합 Swagger는 `https://{도메인}/swagger-ui/index.html`. 도메인은 Parameter Store `SITE_DOMAIN` (Route 53에서 구매, A 레코드가 고정 IP를 가리킨다)
 - 외부에 열린 것은 web(Caddy) 하나다 (80, 443). 설정은 `frontend/Caddyfile`
-  - `/api/**`와 Swagger 경로는 게이트웨이(서버 안 `127.0.0.1:8080`)로 넘기고, 나머지는 프론트 화면을 준다. 프론트와 API가 같은 주소라 CORS 설정이 없다
+  - `/api/**`와 Swagger 경로는 게이트웨이(Docker 네트워크의 `api-gateway:8080`)로 넘기고, 나머지는 프론트 화면을 준다. 프론트와 API가 같은 주소라 CORS 설정이 없다
   - http는 https로 넘긴다. 인증서는 Caddy가 Let's Encrypt에서 자동으로 받고 갱신한다 (DNS가 서버를 가리키고 80, 443이 열려 있어야 한다)
   - `/ops`(시연용 운영 조회 서버), `/prom`(Prometheus)은 404다. 배포 화면은 시연 기능(API 기록 창, 처리 상세, DLT, 시스템 현황 등)을 빼고 빌드한다 (`frontend/Dockerfile`의 `VITE_DEMO=false`). 관리자 화면은 들어 있고 ADMIN 계정에만 보인다
 - 📌 HTTPS여도 공개 서버라 **시연용 테스트 계정만 쓴다**

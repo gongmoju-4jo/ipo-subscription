@@ -6,7 +6,7 @@
 # web은 SITE_DOMAIN(Parameter Store)의 인증서를 Let's Encrypt에서 받고, 프론트 화면을 주고, /api와 Swagger를 게이트웨이로 넘긴다 (frontend/Caddyfile)
 # 서버가 재부팅되거나 컨테이너가 죽으면 다시 띄운다 (kafka-init은 토픽을 만들고 끝나는 컨테이너라 제외)
 # 분산 추적(zipkin), 로그 수집(loki, alloy)도 포함한다. Zipkin은 메모리 저장이라 배포로 컨테이너가 다시 만들어지면 trace가 사라진다 (로그는 볼륨에 남음)
-# 배포 대기(deploy.sh)는 서비스 5개의 healthy만 본다. 이 셋이 늦게 떠도 배포는 성공으로 본다
+# 배포 대기(deploy.sh)는 서비스 5개와 web의 healthy만 본다. zipkin, loki, alloy가 늦게 떠도 배포는 성공으로 본다
 services:
   postgres:
     restart: unless-stopped

@@ -1,0 +1,43 @@
+# 로그 저장소 (Grafana Loki, 단일 프로세스). Alloy가 컨테이너 로그를 보내고 Grafana가 조회한다
+# 포트는 내 PC에 열지 않는다 (Grafana의 Explore에서 조회)
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  # Loki 자신의 로그도 Loki로 모이므로 경고 이상만 남긴다
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2026-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # 7일 지난 로그는 컴팩터가 지운다
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+# 기본값은 Grafana Labs(stats.grafana.org)로 사용 통계를 보낸다. 외부로 나가지 않게 끈다
+analytics:
+  reporting_enabled: false

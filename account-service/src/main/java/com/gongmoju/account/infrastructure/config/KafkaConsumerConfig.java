@@ -2,10 +2,11 @@ package com.gongmoju.account.infrastructure.config;
 
 import com.gongmoju.account.global.exception.InvalidEventException;
 import org.apache.kafka.common.TopicPartition;
+import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerContainerFactoryConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerContainerFactoryConfigurer;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
@@ -16,7 +17,7 @@ import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
 // Consumer 실패 처리 설정 (이벤트 명세 3-3). 청약 서비스의 KafkaConsumerConfig와 같은 값
 // Boot가 CommonErrorHandler 빈을 리스너 컨테이너에 자동 적용한다
 @Configuration
-class KafkaConsumerConfig {
+public class KafkaConsumerConfig {
 
     // 재시도 3회(최초 1회 + 재시도 3회), 대기 1초 → 2초 → 4초 (합계 7초)
     // 청약 서비스의 응답 시간 초과 기준(30초)보다 짧아야 재시도 중에 시간 초과 보상이 먼저 시작되지 않는다
@@ -30,28 +31,6 @@ class KafkaConsumerConfig {
     // DLT 전송은 문자열 값 KafkaTemplate이라 원본 JSON이 그대로 쌓인다 (원 토픽으로 재발행하면 같은 eventId로 다시 처리됨)
     @Bean
     DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, String> kafkaTemplate) {
-        return createErrorHandler(kafkaTemplate);
-    }
-
-    // 증거금 인출 Consumer 전용 배치 리스너 컨테이너 팩토리 (#162). 리스너가 containerFactory 이름으로 지정한다
-    // Boot의 configurer로 spring.kafka.* 설정(concurrency, auto-startup 등)은 기본 팩토리와 같게 받고, 배치 리스너와 오프셋 커밋만 바꾼다
-    // 에러 핸들러는 빈으로 등록하지 않는다. CommonErrorHandler 빈이 2개가 되면 Boot가 기본 팩토리에 핸들러를 넣지 않아 반환, 정산 Consumer의 재시도와 DLT 설정이 사라진다
-    // 같은 값(재시도 1초, 2초, 4초, 재시도 없는 예외, .DLT)을 쓰려고 핸들러 생성 코드를 하나로 공유한다
-    @Bean
-    ConcurrentKafkaListenerContainerFactory<Object, Object> marginReserveBatchListenerContainerFactory(
-            ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
-            ConsumerFactory<Object, Object> consumerFactory,
-            KafkaTemplate<String, String> kafkaTemplate) {
-        ConcurrentKafkaListenerContainerFactory<Object, Object> factory = new ConcurrentKafkaListenerContainerFactory<>();
-        configurer.configure(factory, consumerFactory);
-        factory.setBatchListener(true);
-        // 배치 처리(DB 커밋)가 끝난 뒤 오프셋을 배치당 1번 커밋한다
-        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.BATCH);
-        factory.setCommonErrorHandler(createErrorHandler(kafkaTemplate));
-        return factory;
-    }
-
-    private DefaultErrorHandler createErrorHandler(KafkaTemplate<String, String> kafkaTemplate) {
         ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(MAX_RETRIES);
         backOff.setInitialInterval(INITIAL_INTERVAL_MS);
         backOff.setMultiplier(MULTIPLIER);
@@ -64,6 +43,35 @@ class KafkaConsumerConfig {
         // 다시 처리해도 결과가 같은 실패는 재시도 없이 바로 DLT로 전송한다
         // IllegalArgumentException은 도메인 생성 가드(금액 1 이상 등)의 최후 방어. 메시지 검증에 성공하면 발생하지 않는다
         handler.addNotRetryableExceptions(InvalidEventException.class, IllegalArgumentException.class);
+        // 에러 핸들러가 재시도, 재수신 시 발생시키는 예외(Seek to current after exception)의 로그 수준을 기본 ERROR에서 WARN으로 변경한다
+        // spring-kafka 3.3.16에서 배치 리스너(FailedBatchProcessor.seekOrRecover)와 1건 리스너(DefaultErrorHandler.handleRemaining) 모두 이 값을 사용한다
+        // 재시도 횟수를 초과한 실패 건은 DLT로 전송되고, Grafana DltMessageArrived 알림(최근 5분 DLT 신규 메시지)이 발생한다
+        handler.setLogLevel(KafkaException.Level.WARN);
         return handler;
+    }
+
+    // 배치 리스너용 공용 컨테이너 팩토리 (#114). 리스너에 containerFactory = BATCH_LISTENER_FACTORY로 지정한다
+    // 동시 처리 수, 에러 핸들러(위 kafkaErrorHandler) 등은 Boot 기본 팩토리와 동일하게 적용되고, 배치 수신만 다르다
+    // batch size(max.poll.records)는 리스너마다 다르게 지정한다 (@KafkaListener properties)
+    // 배치 중 1건 실패는 리스너가 BatchListenerFailedException(실패 위치)으로 알리면, 에러 핸들러가 이전 건은 완료 처리하고 실패 건만 재시도, DLT 처리한다
+    public static final String BATCH_LISTENER_FACTORY = "batchKafkaListenerContainerFactory";
+
+    @Bean(BATCH_LISTENER_FACTORY)
+    ConcurrentKafkaListenerContainerFactory<Object, Object> batchKafkaListenerContainerFactory(
+            ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
+            ConsumerFactory<Object, Object> consumerFactory) {
+        ConcurrentKafkaListenerContainerFactory<Object, Object> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        configurer.configure(factory, consumerFactory);
+        factory.setBatchListener(true);
+        // 리스너 메서드가 정상 종료하면(배치 트랜잭션 커밋 후) 배치 전체 오프셋을 커밋한다
+        // application.yml의 ack-mode: record는 1건 리스너용이라 배치 팩토리에서는 BATCH로 변경한다
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.BATCH);
+        // 배치 리스너의 리스너 타이머(spring.kafka.listener, 태그 name, result)를 끈다
+        // spring-kafka 3.3은 배치 리스너의 관측(observation)을 지원하지 않아 이 타이머를 쓰는데, 1건 리스너는 관측을 켜서(#165, 분산 추적)
+        // 같은 이름의 타이머를 다른 태그(spring.kafka.listener.id, error)로 만든다. Prometheus는 같은 이름에 다른 태그 구성을 받지 않아,
+        // 이 타이머가 먼저 등록되면 1건 리스너(증거금 인출 등)의 지표가 빠진다 (loadtest/verify/consumer_stats.py가 쓰는 지표)
+        // 정산 배치의 처리량, 랙은 Kafka 클라이언트 지표(kafka_consumer_fetch_manager_*)로 본다
+        factory.getContainerProperties().setMicrometerEnabled(false);
+        return factory;
     }
 }

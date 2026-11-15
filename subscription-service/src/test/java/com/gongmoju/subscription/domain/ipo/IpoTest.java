@@ -107,9 +107,6 @@ class IpoTest {
         assertThat(ipo.getStatus()).isEqualTo(status);
     }
 
-    /**
-     * 상태 전이만 보므로 등록 규칙(register)을 거치지 않고 같은 패키지의 {@code protected} 생성자와 리플렉션으로 생성함.
-     */
     @ParameterizedTest(name = "신청 {0}주 / 물량 {1}주 = {2}")
     @CsvSource({
             "0, 100, 0.00",
@@ -146,6 +143,9 @@ class IpoTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * 상태 전이만 보므로 등록 규칙(register)을 거치지 않고 같은 패키지의 {@code protected} 생성자와 리플렉션으로 생성함.
+     */
     private Ipo ipoEndingAt(Instant endAt) {
         Ipo ipo = new Ipo();
         ReflectionTestUtils.setField(ipo, "subscriptionEndAt", endAt);

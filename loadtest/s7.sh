@@ -2,7 +2,7 @@
 # S7 경쟁률 조회 부하 한 묶음 (F-15): 지금 커밋으로 빌드, 배포(jar 확인) → S7 스냅샷 복원 → 토큰 → 워밍업 → 목록 조회 속도별로 REPS회 → 후처리
 #   청약 신청(RATE)과 공모주 목록 조회(LIST_RATE, 경쟁률 포함)를 같은 시간 동안 각자 고정 속도로 보낸다 (k6/s7.js)
 #   목록 첫 페이지에 확정 청약 10만 건 공모주가 있는 S7 스냅샷에서 시작한다 (seed/s7_ipo.sh로 만든 합성 데이터, 아래 "스냅샷")
-# 사용: bash loadtest/s7.sh --batch <이름>   (이름은 19자 이하)
+# 사용: bash loadtest/s7.sh --batch <이름>   (기본값이면 19자 이하. 공모주 이름이 30자를 넘으면 시작 전에 멈춘다)
 #   시험 실행: ALLOW_DIRTY=1 WARM=0 RATE=5 LIST_RATES=5 REPS=1 DURATION=10s GAP=5 bash loadtest/s7.sh --batch S7-smoke (결과를 측정값으로 쓰지 않음)
 #   비교는 코드마다 같은 날 한 번씩 돌린다. 예) develop에서 EXPECT_RATE=0 bash loadtest/s7.sh --batch S7-dev, 기능 브랜치에서 bash loadtest/s7.sh --batch S7-db
 #   경쟁률이 없는 코드(develop)는 EXPECT_RATE=0 (목록 항목의 competitionRate 검사를 끔)
@@ -57,6 +57,21 @@ k6s7() {
 # 인자: 청약 속도, 초. 회원이 한 바퀴 돌 때마다 공모주를 하나씩 쓰므로 필요한 공모주 수 (+1 여유)
 need_ipos() { echo $(( ($1 * $2 + USERS - 1) / USERS + 1 )); }
 secs() { echo "${1%s}"; }
+# 만들 공모주 이름 중 가장 긴 것의 길이 ("<이름>-l<목록 속도>-r<회차>-<번호>", 워밍업 "<이름>-W-<번호>"). 공모주 이름은 VARCHAR(30)
+max_ipo_name_len() {
+  local max=0 len n L
+  n="$(need_ipos "$RATE" "$(secs "$DURATION")")"
+  for L in $LIST_RATES; do
+    len=$(( ${#BATCH} + 2 + ${#L} + 2 + ${#REPS} + 1 + ${#n} ))
+    [ "$len" -gt "$max" ] && max=$len
+  done
+  if [ "$WARM" = 1 ]; then
+    n="$(need_ipos "$WARM_RATE" $((WARM_MAX + 60)))"
+    len=$(( ${#BATCH} + 3 + ${#n} ))
+    [ "$len" -gt "$max" ] && max=$len
+  fi
+  echo "$max"
+}
 
 record_env() {
   {
@@ -81,9 +96,11 @@ main() {
     esac
   done
   [ -n "$BATCH" ] || { echo "사용: $0 --batch <이름>" >&2; exit 1; }
-  # 공모주 이름(VARCHAR(30))이 "<이름>-l866-r3-<번호>"가 되므로 이름은 19자 이하
-  [ "${#BATCH}" -le 19 ] || { echo "--batch는 19자 이하 (공모주 이름 30자 제한): $BATCH" >&2; exit 1; }
   [ "$WARM" = 0 ] || [ "$WARM" = 1 ] || { echo "WARM은 0 또는 1: $WARM" >&2; exit 1; }
+  USERS="$(($(grep -c . "$DIR/data/users.csv") - 1))"
+  # 복원, 워밍업 뒤에 공모주 만들기가 실패하지 않게 시작 전에 이름 길이를 확인한다
+  local name_len; name_len="$(max_ipo_name_len)"
+  [ "$name_len" -le 30 ] || { echo "공모주 이름이 ${name_len}자가 되어 30자 제한을 넘습니다. --batch를 $((name_len - 30))자 이상 줄입니다: $BATCH" >&2; exit 1; }
   check_dirty || exit $?
   OUT="$DIR/results/$BATCH"; MANIFEST="$OUT/manifest.csv"
   [ -e "$OUT" ] && { echo "이미 있는 이름입니다: $OUT" >&2; exit 1; }
@@ -112,7 +129,6 @@ main() {
   # 쿼리 통계: 스냅샷 DB에는 확장이 없을 수 있어 만든다 (compose.perf.yml이 미리 읽어 들이도록 설정한다)
   pg "create extension if not exists pg_stat_statements" > /dev/null 2>&1 || say "pg_stat_statements 확장을 만들지 못함 (쿼리 통계 없이 진행)"
   K6_NET="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' ipo-api-gateway | awk '{print $1}')"
-  USERS="$(($(grep -c . "$DIR/data/users.csv") - 1))"
   record_env
   echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s,drain_end" > "$MANIFEST"
   if [ "$STATS_INTERVAL" -gt 0 ]; then stats_loop "$OUT/docker-stats.raw" "$STATS_INTERVAL" & STATS_PID=$!; say "docker stats 기록 시작 (${STATS_INTERVAL}초 간격)"; fi
@@ -186,17 +202,22 @@ for d in sorted(glob.glob(os.path.join(root, f"{batch}-l*-r*"))):
         g("http_reqs{kind:subscribe}", "count"), g("http_reqs{kind:list}", "count"),
         g("http_req_duration{kind:subscribe}", "avg"), g("http_req_duration{kind:subscribe}", "p(95)"),
         g("http_req_duration{kind:list}", "avg"), g("http_req_duration{kind:list}", "p(95)")))
+# 실행이 중간에 멈춰 요약에 값이 없으면 "-"로 적는다 (중앙값은 값이 있는 실행만으로)
+num = lambda v: "-" if v is None else f"{v:g}"
+ms = lambda v: "-" if v is None else f"{v:.1f}"
+def med(xs):
+    xs = [x for x in xs if x is not None]
+    return statistics.median(xs) if xs else None
 print(f"# S7 요약 ({batch})\n")
 print("| 실행 | 밀린 요청 | 청약 요청 | 목록 요청 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n| --- | --- | --- | --- | --- | --- |")
 for L in sorted(rows, key=int):
     for r in rows[L]:
-        print(f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} | {r[4]:.1f} / {r[5]:.1f} | {r[6]:.1f} / {r[7]:.1f} |")
+        print(f"| {r[0]} | {r[1]:g} | {num(r[2])} | {num(r[3])} | {ms(r[4])} / {ms(r[5])} | {ms(r[6])} / {ms(r[7])} |")
 print("\n## 목록 속도별 중앙값\n")
 print("| 목록 건/초 | 밀린 요청 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n| --- | --- | --- | --- |")
-med = lambda xs: statistics.median(xs)
 for L in sorted(rows, key=int):
     rs = rows[L]
-    print(f"| {L} | {med([r[1] for r in rs]):g} | {med([r[4] for r in rs]):.1f} / {med([r[5] for r in rs]):.1f} | {med([r[6] for r in rs]):.1f} / {med([r[7] for r in rs]):.1f} |")
+    print(f"| {L} | {num(med([r[1] for r in rs]))} | {ms(med([r[4] for r in rs]))} / {ms(med([r[5] for r in rs]))} | {ms(med([r[6] for r in rs]))} / {ms(med([r[7] for r in rs]))} |")
 PYEOF
   say "== 끝: $OUT (요약.md, 자원.md, 실행별 report.md)"
 }

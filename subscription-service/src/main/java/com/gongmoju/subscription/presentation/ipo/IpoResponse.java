@@ -36,8 +36,8 @@ public record IpoResponse(
         LocalDate refundDate,
         @Schema(description = "공모주 상태. 청약 가능 여부는 상태와 청약 시작, 마감 시각을 함께 확인한다", example = "OPEN")
         IpoStatus status,
-        @Schema(description = "실시간 경쟁률 (F-15). 증거금이 확보된 청약(CONFIRMED, ALLOCATED, REFUNDED)의 신청 수량 합 / 일반청약 물량, "
-                + "소수 둘째 자리 반올림. 15.27이면 15.27:1. 접수 직후가 아니라 확정된 뒤 반영되고, 마감 뒤에는 고정된다", example = "15.27")
+        @Schema(description = "실시간 경쟁률 (F-15). 배정 대상 청약(CONFIRMED, ALLOCATED, REFUNDED. 취소 요청 중인 청약은 빠짐)의 신청 수량 합 / 일반청약 물량, "
+                + "소수 둘째 자리 반올림. 15.27이면 15.27:1. 접수 직후가 아니라 확정된 뒤 반영되고, 마감 처리 뒤에는 고정된다", example = "15.27")
         BigDecimal competitionRate
 ) {
 

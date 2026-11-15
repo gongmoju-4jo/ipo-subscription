@@ -91,7 +91,7 @@ public class IpoService {
     }
 
     /**
-     * 공모주들의 경쟁률(F-15)을 계산한다. 배정 대상 청약({@link SubscriptionStatus#ALLOCATION_TARGETS}: 증거금이 확보된 청약)의
+     * 공모주들의 경쟁률(F-15)을 계산한다. 배정 대상 청약({@link SubscriptionStatus#ALLOCATION_TARGETS}: 확정, 배정 완료, 환불 완료 청약)의
      * 신청 수량을 공모주별로 한 번의 조회로 합산하고, 계산 규칙은 {@link Ipo#competitionRate}가 정한다.
      * 접수(PENDING) 직후가 아니라 확정된 뒤 반영된다.
      *

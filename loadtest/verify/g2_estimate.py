@@ -27,7 +27,7 @@ import sys
 
 TARGET = 2_122_367          # LG에너지솔루션 공모 KB증권 청약 건수 (DART)
 LOW, HIGH, REF = 10_000, 100_000, 1_000
-PASS_S, GOAL_S = 3 * 3600, 1.5 * 3600
+PASS_S, GOAL_S = 3 * 3600, 82 * 60   # 목표 1시간 22분 = 212만 건 ÷ 433건/초(오픈 직후 피크) 올림
 R_LOW, R_HIGH = 0.9, 1.1
 EPS = 1e-9
 SEGMENTS = [  # (키, 이름)

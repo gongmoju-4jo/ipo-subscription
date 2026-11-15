@@ -66,7 +66,7 @@ class IpoDetailApiTest {
     }
 
     @Test
-    void 경쟁률은_증거금이_확보된_청약의_신청_수량_합을_일반청약_물량으로_나눈_값이다() throws Exception {
+    void 경쟁률은_배정_대상_청약의_신청_수량_합을_일반청약_물량으로_나눈_값이다() throws Exception {
         UUID ipoId = UUID.randomUUID();
         insertIpo(ipoId, "경쟁률 공모주", "OPEN");
         // 세는 청약: CONFIRMED, ALLOCATED, REFUNDED (합 1,527,000주 / 물량 100,000주 = 15.27)

@@ -105,6 +105,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 📌 JWT 검증: HS256 서명, 만료, `iss`=**`account-service`**(문자열 비교), `sub`, `role`. `exp`가 없는 토큰은 거절. 실패하면 401 (만료는 `TOKEN_EXPIRED`, 그 외는 `UNAUTHORIZED`)
 - 📌 역할: **USER, ADMIN** (common `UserRole`과 같은 값). `/api/v1/admin/**`은 ADMIN만, 일반 회원은 403 `FORBIDDEN`
 - 클라이언트가 보낸 `X-User-Id`, `X-User-Role`, `X-Request-Received-At`를 모두 제거한 뒤 Gateway가 다시 설정한다 (서비스, Audit이 이 헤더를 신뢰)
+- 클라이언트가 보낸 추적 헤더(`traceparent`, `tracestate`, `baggage`, `b3`, `X-B3-*`)도 지운다. 외부 요청은 항상 새 trace로 시작하고, 서비스로 보낼 때 Gateway가 자기 `traceparent`를 붙인다 (외부가 traceId를 정하거나 샘플링을 켜지 못하게. [분산 추적](#분산-추적-zipkin))
   - `X-User-Id` = 토큰의 `sub`, `X-User-Role` = 토큰의 `role` (토큰이 없는 공개 경로에는 붙지 않음)
   - `X-Request-Received-At` = Gateway 도착 시각 (UTC ISO-8601, 밀리초, 모든 요청). 청약 마감 판단 기준
 - Gateway는 `common`을 쓰지 않아 401·403 오류 응답을 직접 공통 형식으로 만든다 (`details`는 없으면 생략)
@@ -240,14 +241,14 @@ docker-compose restart {서비스 이름}                                       
 요청 하나가 게이트웨이, 서비스, Kafka를 거쳐 처리되는 과정을 trace 하나로 본다.
 
 - 주소: http://localhost:9411 (`ZIPKIN_PORT`로 변경). Grafana Explore에서 데이터 소스 Zipkin을 골라도 같은 데이터가 보인다
-- trace 하나로 이어지는 구간: 게이트웨이 → 서비스(HTTP), 배정 → 청약(Feign), Kafka 발행 → 수신, Outbox
+- trace 하나로 이어지는 구간: 게이트웨이 → 서비스(HTTP), 배정 → 청약(Feign), Kafka 발행 → 수신, Outbox. 외부 요청은 게이트웨이에서 새 trace로 시작한다 (클라이언트가 보낸 추적 헤더는 쓰지 않음)
   - 예: 청약 신청 → 증거금 인출(계좌) → 청약 확정 / `ipo.closed` 수신 → 배정 → 정산(계좌) → 청약 정산 처리
   - span 사이 빈 시간이 Outbox 발행 대기(발행 주기 1초)와 Consumer 대기다
 - Outbox 구간이 이어지는 방식: 행을 저장할 때 그 요청의 추적 문맥을 `outbox.trace_parent`에 같이 저장하고, 발행기가 그 문맥으로 보낸다. 메시지에는 `traceparent` 헤더가 붙고 받는 서비스가 이어 간다
 - 새 trace에서 시작하는 경우: 스케줄러가 시작한 흐름(공모주 마감 → `ipo.closed`), 추적 문맥 없이 저장된 Outbox 행
 - 모으지 않는 것 (요청이 없어도 몇 초마다 생겨서 목록을 덮는 것)
   - 주기 작업과 그 안의 호출: Outbox 발행 주기 실행, 대기열 입장 스케줄러(Redis), 청약 중 공모주 목록 갱신, Eureka 갱신. trace는 HTTP 요청, Kafka 수신에서만 시작한다
-  - `/actuator/**`, 추적 문맥 없이 들어온 `/internal/**`(게이트웨이의 공모주 목록 갱신): 지표는 남고 Zipkin으로만 보내지 않는다
+  - `/actuator/**`, 추적 문맥 없이 들어온 `/internal/**`(게이트웨이의 공모주 목록 갱신), 대기열 순번 조회(`GET /api/v1/queues/{ipoId}/entries/me`, 대기 화면이 계속 부름): 지표는 남고 Zipkin으로만 보내지 않는다
   - 게이트웨이 Spring Security 내부 단계 (`management.observations.enable.spring.security: false`)
   - 규칙은 서비스 3개가 common `CommonTracingAutoConfiguration`, 게이트웨이가 `gateway/tracing/TracingConfig` (게이트웨이는 common을 쓰지 않음)
 - trace 찾기: 로그 줄의 `[traceId-spanId]`에서 traceId를 복사해 Zipkin 검색창에 넣거나, Grafana 로그에서 바로 이동한다 ([로그 검색](#로그-검색-loki)). 문맥이 없는 줄은 이 자리가 빈칸이다

@@ -6,6 +6,7 @@ import com.gongmoju.subscription.domain.ipo.Ipo;
 import com.gongmoju.subscription.domain.ipo.IpoRepository;
 import com.gongmoju.subscription.domain.ipo.IpoStatus;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -20,7 +21,9 @@ import java.util.concurrent.ConcurrentHashMap;
 // 마감 조건: 대기 시간 경과(마감 대상 조회) → 진행 중 청약 0건(IpoCloseService가 공모주 행을 잠근 뒤 트랜잭션 안에서 확인)
 // 접수는 청약 API 트랜잭션에서 끝나므로(D-29 B-2) 접수 토픽 랙은 보지 않는다. 접수와 마감의 순서는 공모주 행 잠금이 정한다
 // 조건이 맞지 않으면 다음 확인에서 다시 시도한다. 오래 막히면 알림 로그만 남기고 강제로 마감하지 않는다 (결정 14)
-// 단일 인스턴스를 전제로 한다 (알림 시각을 메모리에 둔다. 같은 공모주를 동시에 마감하려 하면 행 잠금으로 차례로 처리되고 뒤쪽은 NOT_OPEN으로 끝난다)
+// 인스턴스가 여러 개면 ShedLock(@SchedulerLock)으로 한 번에 한 인스턴스만 실행한다 (#149). 락이 없어도 같은 공모주를 동시에 마감하려 하면
+// 행 잠금으로 차례로 처리되고 뒤쪽은 NOT_OPEN으로 끝나서 결과는 같고, 락은 중복 실행을 줄인다
+// 오래 막힌 마감의 알림 시각은 인스턴스 메모리에 둔다. 락을 잡는 인스턴스가 바뀌면 같은 알림이 인스턴스마다 한 번씩 날 수 있다 (마감 동작에는 영향 없음)
 @Slf4j
 @Component
 @ConditionalOnProperty(prefix = "ipo.close", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -42,7 +45,10 @@ class IpoCloseScheduler {
     }
 
     // 이전 실행이 끝난 뒤 interval만큼 쉬고 다시 실행한다 (실행이 겹치지 않는다)
+    // 락: lockAtMostFor는 실행 중 인스턴스가 죽었을 때 풀리기까지의 시간(가장 긴 실행보다 넉넉히), lockAtLeastFor는 interval(5초)보다 조금 짧게.
+    // lockAtLeastFor가 없으면 A가 끝나자마자 B가 실행해 인스턴스 수만큼 돈다. interval을 바꾸면 lockAtLeastFor도 같이 맞춘다 (PROJECT_SETUP 5장)
     @Scheduled(fixedDelayString = "${ipo.close.interval:PT5S}")
+    @SchedulerLock(name = "IpoCloseScheduler.closeDueIpos", lockAtMostFor = "PT1M", lockAtLeastFor = "PT4S")
     void closeDueIpos() {
         closeDueIpos(Instant.now());
     }

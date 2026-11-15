@@ -49,8 +49,10 @@ class IpoCloseScheduler {
     // 이전 실행이 끝난 뒤 interval만큼 쉬고 다시 실행한다 (실행이 겹치지 않는다)
     // 락: lockAtMostFor는 실행 중 인스턴스가 죽었을 때 풀리기까지의 시간(가장 긴 실행보다 넉넉히), lockAtLeastFor는 interval보다 조금 짧게.
     // lockAtLeastFor가 없으면 A가 끝나자마자 B가 실행해 인스턴스 수만큼 돈다. interval이 설정값이라 lockAtLeastFor도 설정값으로 둔다 (PROJECT_SETUP 5장)
+    // lockAtMostFor는 lockAtLeastFor보다 길어야 한다 (아니면 ShedLock이 락 설정을 만들 때 예외를 던져 마감이 실행되지 않음). 그래서 둘 다 설정값으로 둔다
     @Scheduled(fixedDelayString = "${ipo.close.interval:PT5S}")
-    @SchedulerLock(name = "IpoCloseScheduler.closeDueIpos", lockAtMostFor = "PT1M", lockAtLeastFor = "${ipo.close.lock-at-least-for:PT4S}")
+    @SchedulerLock(name = "IpoCloseScheduler.closeDueIpos",
+            lockAtMostFor = "${ipo.close.lock-at-most-for:PT1M}", lockAtLeastFor = "${ipo.close.lock-at-least-for:PT4S}")
     void closeDueIpos() {
         closeDueIpos(Instant.now());
     }

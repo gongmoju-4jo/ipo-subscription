@@ -8,10 +8,12 @@ import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.core.env.Environment;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Duration;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,6 +46,9 @@ class IpoCloseSchedulerLockTest {
     @Autowired
     private IpoCloseScheduler scheduler;
 
+    @Autowired
+    private Environment environment;
+
     @Test
     @DisplayName("마감 스케줄러 빈은 ShedLock 프록시로 감싸져 closeDueIpos 실행에 락이 걸린다")
     void closeScheduler_isProxiedBySchedulerLock() throws Exception {
@@ -54,7 +59,18 @@ class IpoCloseSchedulerLockTest {
         // 락 이름과 시간 (실제 대상 클래스의 메서드에 붙은 값)
         SchedulerLock lock = AopUtils.getTargetClass(scheduler).getDeclaredMethod("closeDueIpos").getAnnotation(SchedulerLock.class);
         assertThat(lock.name()).isEqualTo("IpoCloseScheduler.closeDueIpos");
-        assertThat(lock.lockAtMostFor()).isEqualTo("PT1M");
+        assertThat(lock.lockAtMostFor()).isEqualTo("${ipo.close.lock-at-most-for:PT1M}");
         assertThat(lock.lockAtLeastFor()).isEqualTo("${ipo.close.lock-at-least-for:PT4S}");
+    }
+
+    @Test
+    @DisplayName("설정한 락 최대 시간은 최소 시간보다 길다 (짧으면 ShedLock이 락 설정을 만들 때 예외를 던져 마감이 실행되지 않음)")
+    void lockAtMostFor_isLongerThanLockAtLeastFor() {
+        // when: 어노테이션과 같은 키, 같은 기본값으로 읽은 실제 설정값
+        Duration atMost = Duration.parse(environment.resolveRequiredPlaceholders("${ipo.close.lock-at-most-for:PT1M}"));
+        Duration atLeast = Duration.parse(environment.resolveRequiredPlaceholders("${ipo.close.lock-at-least-for:PT4S}"));
+
+        // then
+        assertThat(atMost).isGreaterThan(atLeast);
     }
 }

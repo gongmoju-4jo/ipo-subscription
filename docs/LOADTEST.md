@@ -41,11 +41,13 @@
 | `loadtest/run-k6.sh` | 입장 허가 넣기, 시나리오 실행, 원본 저장, 입장 허가 지우기 (`seed/admit.sh`) |
 | `loadtest/s2.sh` | S2 마감 경계 한 회차 실행 (워밍업, 공모주 준비, 대상 공모주 마감 시각 설정, 실행, 판정). 6장 |
 | `loadtest/s6.sh` | S6 장애 주입 한 회차 실행 (기준 상태 복원, 토큰, 사전 점검, 부하 시작, 계좌 서비스 강제 종료와 재시작, 소진 대기, DLT와 환경 기록, 정합성 SQL, 판정). 6장 |
+| `loadtest/s7.sh` | S7 경쟁률 조회 부하 한 묶음 실행 (빌드, 배포, S7 스냅샷 복원, 워밍업, 목록 조회 속도별 반복, docker stats, 요약). 6장 |
+| `loadtest/seed/s7_ipo.sh` | S7 스냅샷용 공모주 1개와 확정 청약 N건(기본 10만)을 SQL로 넣기 (측정 전용 합성 데이터). 6장 |
 | `loadtest/verify/s6_judge.py` | S6 한 회차 판정 (회차 유효성, 결과 위반, 장애 구간, DLT 증가와 중복 수신 기록. `s6-judge.txt`) |
 | `loadtest/verify/s6_summary.py` | S6 여러 회차를 한 표로 (회차별 값, 중앙값, 최소~최대. 3회 측정용) |
 | `loadtest/sql/verify-s6.sql` | S6 정합성 검사 23~26번과 상태별 요약 (`verify.sql` 1~22번 다음 번호) |
 | `loadtest/verify/s2_judge.py` | S2 한 회차 판정 (회차 유효성, `verify.sql` 20~22번 결과, 202인데 청약 행이 없는 요청. `s2-judge.txt`) |
-| `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, 공통 코드 `lib.js`, 대량 환불 스냅샷용 청약 시드 `g2.js`(수량은 `g2-quantity.js`) |
+| `loadtest/k6/` | 시나리오 스크립트 `s0.js` ~ `s4.js`, `s7.js`(청약 신청 + 공모주 목록 조회), 공통 코드 `lib.js`, 대량 환불 스냅샷용 청약 시드 `g2.js`(수량은 `g2-quantity.js`) |
 | `loadtest/verify/check_requests.py` | 요청 로그 분석 (결과 분류, 재전송 응답 일치) |
 | `loadtest/verify.sh`, `loadtest/sql/verify.sql` | 정합성 SQL 22종 실행 (11~15는 배정, 정산 뒤 검사, 16~19는 재전송, 이중청약, 잔액 부족 검사, 20~22는 마감된 공모주 검사로 마감 전이면 20, 22번 건너뜀. `--each-dir`는 공모주 여러 개를 psql 한 번으로 검사하고, 전체 계좌 기준 검사 2개는 첫 공모주만) |
 | `loadtest/report.py` | 회차 보고서 생성 (k6 요약, 요청 로그, 같은 시간대의 Prometheus 지표를 `report.md`로) |
@@ -487,6 +489,7 @@ python loadtest/report.py --run-id $RUN                                         
 | S3 | Synthetic Data `s3-behavior.csv`: 첫 청약 860 + 같은 requestId 재전송 80 + 다른 계좌 청약 60 (S0과 같은 100명 x 10회) | 새 공모주 | `users.csv` (S3 행동 CSV로 두 번째 계좌 시드) | 전부 202, 재전송 응답의 `subscriptionId`가 원래 요청과 같음. 이중청약(다른 계좌 청약)은 청약 API가 접수 트랜잭션에서 `REJECTED(ALREADY_SUBSCRIBED)`로 저장 |
 | S4 | Synthetic Data `s4-behavior.csv`: 투자자 1,000명 x 1건, 97명 예수금 부족 (S0과 같은 100명 x 10회) | 새 공모주 | `users-s4.csv` (S4 행동 CSV의 입금액으로 시드) | 전부 202 (잔액 부족 판정은 Consumer) |
 | S6 | 장애 주입: 회원 1,000명이 1건씩, 일정한 도착률(기본 100건/초 × 10초)로 요청하고 부하 도중 계좌 서비스를 강제 종료했다가 재시작 (아래 S6 절) | 새 공모주 | `users.csv` | 전부 202 (접수는 계좌 서비스와 무관) |
+| S7 | 경쟁률 조회 부하(F-15): 청약 신청(`RATE`, 기본 433건/초)과 공모주 목록 조회(`LIST_RATE`, 433 또는 866건/초)를 90초 동안 각자 고정 속도로 (아래 S7 절) | 새 공모주 여러 개(`IPO_IDS`) + 목록 첫 페이지의 확정 청약 10만 건 공모주(S7 스냅샷) | `users.csv` | 청약 전부 202, 목록 전부 200 (`EXPECT_RATE=1`이면 항목마다 `competitionRate`) |
 
 - **S1의 조건(요청 속도, 유지 시간, 요청 구성)은 임시 값입니다.** 첫 측정 전에 확정하고, 측정을 시작한 뒤에는 바꾸지 않습니다.
 - S0은 `VUS`, `ITERATIONS`로 규모를 줄일 수 있습니다 (예: 스모크는 `-e VUS=1 -e ITERATIONS=1`). S2는 `RATE`, `PRE`, `POST`로 조정합니다 (아래 S2 절). S3, S4는 요청 수가 행동 CSV 행 수(1,000)와 같아야 해서 줄이면 시작 전에 멈춥니다.
@@ -589,6 +592,39 @@ ALLOW_DIRTY=1 RATE=2 DURATION=6 KILL_AT=1 OUTAGE=10 bash loadtest/s6.sh --run-id
 - 결과 파일: `results/<run_id>/`에 `s6-judge.txt`, `precheck.txt`, `dlt-start.txt`, `dlt-end.txt`, `events.txt`, `lag.csv`, `sql_result.txt`, `sql_result_s6.txt`, `env.txt`(커밋, 설정, 시간 초과 설정, jar sha256, Docker 자원과 JVM 옵션 등 실행 환경), `account-service.log`와 `subscription-service.log`(이번 회차 부하 시작 5초 전부터), k6 원본이 있습니다. 호스트 PC의 CPU 모델은 환경 기록표에 직접 적습니다.
 - 그 밖의 종료 코드: 5 커밋하지 않은 변경 또는 컨테이너 jar가 로컬 jar와 다름 / 9 사전 점검 실패(`precheck.txt`) / 14 기준 상태 복원 실패
 - 한계: 로컬 단일 머신, 계좌 서비스 인스턴스 1개, k6도 같은 머신에서 실행하는 로컬 시뮬레이션입니다.
+
+### S7 경쟁률 조회 부하 (`s7.sh`)
+
+청약이 몰리는 동안 경쟁률을 보려는 공모주 목록 조회도 같이 몰릴 때, 목록 조회(경쟁률 계산 포함)가 얼마나 걸리고 청약 접수에 영향을 주는지 봅니다 (F-15). 목록 조회는 대기열을 거치지 않습니다. 한 묶음은 `loadtest/s7.sh`가 빌드부터 요약까지 실행합니다. 정식 측정(`official.sh`)과 따로 돌립니다.
+
+```bash
+# 스냅샷 (한 번): 기준 스냅샷 복원 → 확정 청약 10만 건 공모주 넣기 → S7 스냅샷으로 저장
+bash loadtest/baseline.sh restore
+bash loadtest/seed/s7_ipo.sh
+ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/baseline-s7 bash loadtest/baseline.sh save
+
+# 비교: 코드마다 같은 날 한 번씩 (경쟁률이 없는 코드는 EXPECT_RATE=0)
+EXPECT_RATE=0 bash loadtest/s7.sh --batch S7-dev      # develop
+bash loadtest/s7.sh --batch S7-db                      # 경쟁률 브랜치
+ALLOW_DIRTY=1 WARM=0 RATE=5 LIST_RATES=5 REPS=1 DURATION=10s GAP=5 bash loadtest/s7.sh --batch S7-smoke   # 스모크 (결과는 측정값으로 쓰지 않음)
+```
+
+- 흐름: 이 커밋으로 빌드, 배포하고 jar를 확인(`s2.sh`와 같은 방식) → `BASELINE_DIR`(기본 `loadtest/data/baseline-s7`) 복원 → `pg_stat_statements` 확장 생성 → docker stats 기록 시작 → 토큰 재발급 → 워밍업(`WARM=1`, 청약 200 + 목록 216건/초로 `warmup.py`가 평평하다고 판정할 때까지) → 회차(`REPS`, 기본 3)마다 목록 속도(`LIST_RATES`, 기본 "433 866")별로: 새 공모주 준비 → 쿼리 통계 초기화 → k6 → 소진 대기 → 쿼리 통계, `report.py` → `GAP`초 쉼 → 후처리(`자원.md`, `요약.md`)
+- 이름: `--batch`는 19자 이하입니다 (공모주 이름 30자 제한). 이미 있는 결과 폴더 이름이면 멈춥니다. Windows는 폴더 이름의 대소문자를 구분하지 않아 `S7-smoke`와 `s7-smoke`도 같은 이름입니다.
+- 볼 것: 요청 종류별(`kind`: `subscribe`, `list`) 응답 시간과 밀린 요청(`요약.md`), 청약 서비스 Hikari(`report.md`), 컨테이너 CPU(`자원.md`, Redis 포함), 쿼리별 호출 수와 시간(`slow-queries-<run>.txt`)
+- 판정: 밀린 요청(`dropped_iterations`)이 있으면 정한 속도를 보내지 못한 회차라 k6 종료 코드가 99입니다. `s7.sh`는 종료 코드를 `진행.log`에 남기고 다음 실행을 계속합니다. 청약은 G1 합격선(평균 500ms 이하, 실패 1% 미만)을 걸고, 목록은 실패 1% 미만만 걸고 응답 시간은 값만 남깁니다. 공통 합격선 `http_reqs rate>=200`도 걸려 있어 스모크(초당 약 10건)는 99로 끝나는 것이 정상입니다.
+- 워밍업: 무너진 상태(응답 수십 초)로 고정돼도 `warmup.py`가 평평하다고 판정할 수 있어, 마지막 구간 응답 시간을 `진행.log`에 남깁니다.
+- Redis CPU: k6 시작 직후 `run-k6.sh`가 입장 허가를 Redis에 한꺼번에 넣어 Redis CPU가 상한(0.5코어)까지 오릅니다. 그 구간은 빼고 봅니다.
+- 결과 파일: `results/<이름>/`에 `진행.log`, `env.txt`, `manifest.csv`, `docker-stats.raw`, `docker-stats.csv`, `자원.md`, `요약.md`, `slow-queries-<run>.txt`, 실행마다 `results/<이름>-l<목록 속도>-r<회차>/`(k6 원본, `report.md`), 워밍업 `results/<이름>-W/`
+- 한계 (결과에 같이 적습니다)
+  - 목록 조회 속도(433, 866건/초)는 가정입니다. 실제 조회 비율을 잰 값이 아닙니다
+  - 확정 청약 10만 건은 SQL로 넣은 측정 전용 합성 데이터입니다. 계좌 쪽(증거금, 원장) 데이터가 없어 마감시키면 안 되고, 그래서 마감 시각을 10년 뒤로 둡니다
+  - 한 번에 넣어 이 공모주의 행이 디스크에 몰려 있습니다. 여러 공모주 청약이 섞여 쌓이는 실제보다 DB 합산이 빠를 수 있습니다 (DB 합산에 유리)
+  - 목록 맨 위에 두려고 등록 시각을 2099년으로 둔 측정용 조정입니다
+  - 866건/초는 경쟁률이 없는 코드에서도 게이트웨이 CPU(1코어)가 먼저 막힐 수 있어, 결과를 게이트웨이 CPU와 같이 봅니다
+  - 10만 건은 실제 대형 공모주(약 212만 건)보다 훨씬 적습니다
+  - 로컬 단일 PC, 같은 날 측정끼리만 비교합니다
+  - 경쟁률은 확정 기준이라 접수 직후에는 반영되지 않습니다
 
 ## 7. 결과 파일
 

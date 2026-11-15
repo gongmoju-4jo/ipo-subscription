@@ -164,7 +164,10 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
   ```bash
   TRACING_SAMPLING_PROBABILITY=1.0 docker-compose -f docker-compose.yml -f compose.perf.yml up -d api-gateway account-service subscription-service allocation-service
   ```
-  - 끝나면 같은 명령을 앞의 변수 없이 다시 실행해 0으로 돌립니다.
+  - 끝나면 0으로 돌린 뒤 정식 측정을 합니다. `${TRACING_SAMPLING_PROBABILITY:-0}`은 값이 없을 때만 0이라, `.env`에 적었거나 셸에서 `export`했다면 명령 앞 변수만 빼도 1.0이 남습니다.
+    1. `.env`의 `TRACING_SAMPLING_PROBABILITY` 줄을 지우거나 주석 처리하고, 셸에서 `export`했다면 `unset TRACING_SAMPLING_PROBABILITY`
+    2. 변수 없이 다시 실행: `docker-compose -f docker-compose.yml -f compose.perf.yml up -d api-gateway account-service subscription-service allocation-service`
+    3. 확인: `docker exec ipo-account-service printenv TRACING_SAMPLING_PROBABILITY`가 `0`
   - 1.0에서는 청약 1건에 span이 약 9개라, Zipkin(최대 50만 span)에는 빠른 속도일수록 최근 몇 분만 남습니다.
 - 로그 수집(Alloy, Loki)은 샘플링과 관계없이 돕니다. 서비스 상한 밖의 별도 컨테이너라 서비스 측정값에 직접 섞이지 않지만 PC 전체 CPU는 나눠 씁니다. `docker stats` 기록과 `자원.md`에 `ipo-zipkin`, `ipo-loki`, `ipo-alloy`도 나옵니다.
 

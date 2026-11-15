@@ -1,0 +1,32 @@
+# 배포 환경의 웹 서버 (web 컨테이너). 외부에는 이 서버만 열린다 (80, 443)
+# - SITE_DOMAIN의 인증서를 Let's Encrypt에서 자동으로 받고 갱신한다. http는 https로 넘긴다
+#   localhost로 띄우면 Caddy 자체 인증서를 쓴다 (로컬 확인용, 브라우저 경고는 정상)
+# - /api, 통합 Swagger는 게이트웨이로 넘기고, 나머지는 프론트 빌드 결과(dist)를 준다
+# - /ops(운영 조회 서버), /prom(Prometheus)은 배포 환경에서 열지 않는다. 화면은 "확인 불가"로 나온다
+{$SITE_DOMAIN:localhost} {
+	encode zstd gzip
+
+	@gateway path /api/* /swagger-ui* /v3/api-docs* /account-service/v3/api-docs /subscription-service/v3/api-docs /allocation-service/v3/api-docs
+	handle @gateway {
+		reverse_proxy {$GATEWAY_UPSTREAM:api-gateway:8080}
+	}
+
+	# SPA 주소로 떨어지면 index.html이 200으로 나가 화면이 HTML을 JSON으로 읽으려 하므로 404로 막는다
+	@internal path /ops /ops/* /prom /prom/*
+	handle @internal {
+		respond 404
+	}
+
+	handle {
+		root * /srv
+		# 파일 이름에 해시가 붙은 빌드 결과는 오래 캐시하고, 나머지(index.html 등)는 매번 새로 확인하게 한다
+		# (header는 try_files보다 먼저 원래 주소로 맞춰서, /accounts 새로고침으로 받은 index.html도 no-cache)
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@pages not path /assets/*
+		header @pages Cache-Control "no-cache"
+		# /accounts처럼 프론트 라우터가 처리하는 주소를 새로고침해도 index.html을 준다
+		try_files {path} /index.html
+		file_server
+	}
+}

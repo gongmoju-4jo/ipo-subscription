@@ -71,13 +71,21 @@ class AllocationResultConsumer {
     private void settleOneByOne(List<String> payloads) {
         for (int index = 0; index < payloads.size(); index++) {
             try {
-                marginSettleService.settle(toCommand(payloads.get(index)));
+                marginSettleService.settle(toValidCommand(payloads.get(index)));
             } catch (RuntimeException e) {
-                if (e instanceof InvalidEventException) {
-                    log.error("[증거금 정산] 잘못된 메시지라 재시도 없이 DLT로 보냄. reason={}", e.getMessage());
-                }
                 throw new BatchListenerFailedException("[증거금 정산] 배치 " + index + "번째 메시지 처리 실패", e, index);
             }
+        }
+    }
+
+    // JSON 변환, 필드 검증에 실패한 메시지만 이곳에서 ERROR로 기록한다
+    // 데이터 불일치(증거금 없음 등)는 MarginSettleService가 "DLT 대상" ERROR를 이미 기록한다
+    private SettleMarginCommand toValidCommand(String payload) {
+        try {
+            return toCommand(payload);
+        } catch (InvalidEventException e) {
+            log.error("[증거금 정산] 잘못된 메시지라 재시도 없이 DLT로 보냄. reason={}", e.getMessage());
+            throw e;
         }
     }
 

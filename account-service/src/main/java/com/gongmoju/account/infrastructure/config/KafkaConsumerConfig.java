@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerConta
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
@@ -42,13 +43,17 @@ public class KafkaConsumerConfig {
         // 다시 처리해도 결과가 같은 실패는 재시도 없이 바로 DLT로 전송한다
         // IllegalArgumentException은 도메인 생성 가드(금액 1 이상 등)의 최후 방어. 메시지 검증에 성공하면 발생하지 않는다
         handler.addNotRetryableExceptions(InvalidEventException.class, IllegalArgumentException.class);
+        // 에러 핸들러가 재시도, 재수신 시 발생시키는 예외(Seek to current after exception)의 로그 수준을 기본 ERROR에서 WARN으로 변경한다
+        // spring-kafka 3.3.16에서 배치 리스너(FailedBatchProcessor.seekOrRecover)와 1건 리스너(DefaultErrorHandler.handleRemaining) 모두 이 값을 사용한다
+        // 재시도 횟수를 초과한 실패 건은 DLT로 전송되고, Grafana DltMessageArrived 알림(최근 5분 DLT 신규 메시지)이 발생한다
+        handler.setLogLevel(KafkaException.Level.WARN);
         return handler;
     }
 
     // 배치 리스너용 공용 컨테이너 팩토리 (#114). 리스너에 containerFactory = BATCH_LISTENER_FACTORY로 지정한다
     // 동시 처리 수, 에러 핸들러(위 kafkaErrorHandler) 등은 Boot 기본 팩토리와 동일하게 적용되고, 배치 수신만 다르다
     // batch size(max.poll.records)는 리스너마다 다르게 지정한다 (@KafkaListener properties)
-    // 배치 중 1건 실패는 리스너가 BatchListenerFailedException(실패 위치)으로 알리면, 에러 핸들러가 앞 건은 완료 처리하고 실패 건만 재시도, DLT 처리한다
+    // 배치 중 1건 실패는 리스너가 BatchListenerFailedException(실패 위치)으로 알리면, 에러 핸들러가 이전 건은 완료 처리하고 실패 건만 재시도, DLT 처리한다
     public static final String BATCH_LISTENER_FACTORY = "batchKafkaListenerContainerFactory";
 
     @Bean(BATCH_LISTENER_FACTORY)

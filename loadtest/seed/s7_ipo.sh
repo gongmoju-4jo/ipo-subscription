@@ -40,6 +40,7 @@ done
 for v in "$COUNT" "$QUANTITY" "$RETAIL" "$PRICE"; do
   [[ "$v" =~ ^[1-9][0-9]*$ ]] || { echo "--count, --quantity, --retail, --price는 1 이상 정수: $v" >&2; exit 1; }
 done
+[ "$QUANTITY" -le 10000 ] || { echo "--quantity는 1인 청약 한도(max_quantity 10000) 이하: $QUANTITY" >&2; exit 1; }
 [ $((RETAIL % 2)) -eq 0 ] || { echo "--retail은 짝수여야 한다 (균등 물량 = 물량 / 2): $RETAIL" >&2; exit 1; }
 [ "${#NAME}" -le 30 ] || { echo "--name은 30자 이하 (ipo.name VARCHAR(30)): $NAME" >&2; exit 1; }
 
@@ -62,7 +63,7 @@ INSERT INTO s7_new SELECT ipo_id FROM ins;
 INSERT INTO subscription.subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity, margin_amount,
                                        status, attempts, last_requested_at, received_at, confirmed_at, version,
                                        created_at, created_by, updated_at, updated_by)
-SELECT gen_random_uuid(), gen_random_uuid(), n.ipo_id, gen_random_uuid(), gen_random_uuid(), :qty, :qty * :price,
+SELECT gen_random_uuid(), gen_random_uuid(), n.ipo_id, gen_random_uuid(), gen_random_uuid(), :qty, :qty::bigint * :price,
        'CONFIRMED', 1, now(), now(), now(), 0,
        now(), 'SYSTEM:loadtest', now(), 'SYSTEM:loadtest'
 FROM s7_new n, generate_series(1, :count);

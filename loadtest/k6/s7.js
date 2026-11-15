@@ -1,6 +1,8 @@
 // S7 경쟁률 조회 부하 (F-15): 청약 신청과 공모주 목록 조회(경쟁률 포함)를 같은 시간 동안 각자 고정 속도로 보낸다.
 // 청약이 몰리는 동안 경쟁률을 보려는 조회도 같이 몰리는 상황이다. 목록 조회는 대기열을 거치지 않는다.
-// 결과는 요청 종류 태그(kind: subscribe, list)로 나눠 본다 (http_req_duration{kind:list} 등).
+// 결과는 요청 종류 태그(kind: subscribe, list)로 나눠 본다 (http_req_duration{kind:list} 등). 태그는 시나리오에 붙여 check 결과(checks)에도 붙는다.
+// 임계값(종료 코드 99): 밀린 요청 0, 청약 평균 500ms 이하(G1 합격선), 요청 종류별 실패율 1% 미만, 요청 종류별 검사 전부 통과.
+// 공통 합격선(lib.js)은 청약과 목록을 합친 값이라 기록용으로 덮는다 (목록이 느리기만 해도 99가 되어 청약 기준을 넘은 것처럼 보이지 않게).
 //
 // 환경변수
 //   RATE        청약 신청 건/초 (기본 433)
@@ -28,23 +30,30 @@ const constant = { executor: 'constant-arrival-rate', timeUnit: '1s', duration: 
 
 export const options = makeOptions('S7', {
   subscribe: {
-    ...constant, rate: RATE, exec: 'subscribeOne',
+    ...constant, rate: RATE, exec: 'subscribeOne', tags: { kind: 'subscribe' },
     preAllocatedVUs: Number(__ENV.PRE_VUS || 500), maxVUs: Number(__ENV.MAX_VUS || 2000),
   },
   list: {
-    ...constant, rate: LIST_RATE, exec: 'listOne',
+    ...constant, rate: LIST_RATE, exec: 'listOne', tags: { kind: 'list' },
     preAllocatedVUs: Number(__ENV.LIST_PRE_VUS || 200), maxVUs: Number(__ENV.LIST_MAX_VUS || 1000),
   },
 }, {
   // 밀린 요청이 있으면 정한 속도를 보내지 못한 것이라 회차를 쓰지 않는다 (종료 코드 99)
   dropped_iterations: ['count==0'],
-  // 요청 종류별 값을 요약(summary.json)에 남기려고 건다. 청약은 G1 합격선과 같고, 목록은 기준이 없어 값만 남긴다
+  // 청약과 목록을 합친 공통 합격선은 기록용으로 덮는다 (s1.js와 같은 방식)
+  http_reqs: ['count>=0'],
+  http_req_duration: ['avg>=0'],
+  http_req_failed: ['rate>=0'],
+  // 요청 종류별 값을 요약(summary.json)에 남기려고 건다. 청약은 G1 합격선과 같고, 목록 응답 시간은 기준이 없어 값만 남긴다
   'http_reqs{kind:subscribe}': ['count>=0'],
   'http_req_duration{kind:subscribe}': ['avg<=500'],
   'http_req_failed{kind:subscribe}': ['rate<0.01'],
   'http_reqs{kind:list}': ['count>=0'],
   'http_req_duration{kind:list}': ['avg>=0'],
   'http_req_failed{kind:list}': ['rate<0.01'],
+  // 응답 검사(청약 202와 본문, 목록 200과 항목, EXPECT_RATE=1이면 competitionRate)가 하나라도 틀리면 99
+  'checks{kind:subscribe}': ['rate==1'],
+  'checks{kind:list}': ['rate==1'],
 });
 
 // 청약 신청 1건 (s1.js와 같음. 회원 idx % 회원 수, 공모주는 회원이 한 바퀴 돌 때마다 다음 것)

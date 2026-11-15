@@ -620,12 +620,18 @@ ALLOW_DIRTY=1 WARM=0 RATE=5 LIST_RATES=5 REPS=1 DURATION=10s GAP=5 bash loadtest
 
 - 흐름: 이 커밋으로 빌드, 배포하고 jar를 확인(`s2.sh`와 같은 방식) → `BASELINE_DIR`(기본 `loadtest/data/baseline-s7`) 복원 → `pg_stat_statements` 확장 생성 → docker stats 기록 시작 → 토큰 재발급 → 워밍업(`WARM=1`, 청약 200 + 목록 216건/초로 `warmup.py`가 평평하다고 판정할 때까지) → 회차(`REPS`, 기본 3)마다 목록 속도(`LIST_RATES`, 기본 "433 866")별로: 새 공모주 준비 → 쿼리 통계 초기화 → k6 → 소진 대기 → 쿼리 통계, `report.py` → `GAP`초 쉼 → 후처리(`자원.md`, `요약.md`)
 - 이름: 공모주 이름(`<이름>-l<목록 속도>-r<회차>-<번호>`)이 30자를 넘으면 시작 전에 멈춥니다. 기본값이면 `--batch`는 19자 이하이고, `DURATION`, `REPS`, `LIST_RATES`를 키우면 더 짧아야 합니다. 이미 있는 결과 폴더 이름이면 멈춥니다. Windows는 폴더 이름의 대소문자를 구분하지 않아 `S7-smoke`와 `s7-smoke`도 같은 이름입니다.
-- 볼 것: 요청 종류별(`kind`: `subscribe`, `list`) 응답 시간과 밀린 요청(`요약.md`), 청약 서비스 Hikari(`report.md`), 컨테이너 CPU(`자원.md`, Redis 포함), 쿼리별 호출 수와 시간(`slow-queries-<run>.txt`)
-- 판정: 밀린 요청(`dropped_iterations`)이 있으면 정한 속도를 보내지 못한 회차라 k6 종료 코드가 99입니다. `s7.sh`는 종료 코드를 `진행.log`에 남기고 다음 실행을 계속합니다. 청약은 G1 합격선(평균 500ms 이하, 실패 1% 미만)을 걸고, 목록은 실패 1% 미만만 걸고 응답 시간은 값만 남깁니다. 공통 합격선 `http_reqs rate>=200`도 걸려 있어 스모크(초당 약 10건)는 99로 끝나는 것이 정상입니다.
+- 볼 것: 요청 종류별(`kind`: `subscribe`, `list`) 응답 시간, 실패율, 검사 통과율, 밀린 요청, k6 종료 코드(`요약.md`), 청약 서비스 Hikari(`report.md`. k6 값은 청약과 목록을 합친 값이라 서버 지표용으로 봅니다), 컨테이너 CPU(`자원.md`, Redis 포함), 쿼리별 호출 수와 시간(`slow-queries-<run>.txt`)
+- 판정: 아래 중 하나라도 넘으면 k6 종료 코드가 99입니다. `s7.sh`는 종료 코드를 `진행.log`, 실행별 `k6-exit.txt`, `요약.md`에 남기고 다음 실행을 계속합니다.
+  - 밀린 요청(`dropped_iterations`) 0 (넘으면 정한 속도를 보내지 못한 회차)
+  - 청약: G1 합격선(평균 500ms 이하, 실패 1% 미만)
+  - 목록: 실패 1% 미만 (응답 시간은 기준 없이 값만 남김)
+  - 응답 검사 전부 통과 (청약 202와 본문, 목록 200과 항목, `EXPECT_RATE=1`이면 항목마다 `competitionRate`)
+  - 청약과 목록을 합친 공통 합격선(`lib.js`)은 기록용으로 덮습니다. 목록이 느리기만 해도 99가 되어 청약 기준을 넘은 것처럼 보이지 않게 하려는 것입니다
 - 중앙값: S1, S6과 달리 밀린 요청이 있는 회차도 `요약.md`의 목록 속도별 중앙값에 넣고, 밀린 회차 수(`n/N`)를 같이 적습니다. S7에서는 서버가 느려져 정한 속도를 보내지 못한 것 자체가 결과라서(예: 조회마다 DB 합산), 빼면 무너진 결과가 요약에서 사라집니다. 밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값이라 밀리지 않은 회차와 같은 조건이 아닙니다.
 - 워밍업: 무너진 상태(응답 수십 초)로 고정돼도 `warmup.py`가 평평하다고 판정할 수 있어, 마지막 구간 응답 시간을 `진행.log`에 남깁니다.
 - Redis CPU: k6 시작 직후 `run-k6.sh`가 입장 허가를 Redis에 한꺼번에 넣어 Redis CPU가 상한(0.5코어)까지 오릅니다. 그 구간은 빼고 봅니다.
-- 결과 파일: `results/<이름>/`에 `진행.log`, `env.txt`, `manifest.csv`, `docker-stats.raw`, `docker-stats.csv`, `자원.md`, `요약.md`, `slow-queries-<run>.txt`, 실행마다 `results/<이름>-l<목록 속도>-r<회차>/`(k6 원본, `report.md`), 워밍업 `results/<이름>-W/`
+- 결과 파일: `results/<이름>/`에 `진행.log`, `env.txt`, `manifest.csv`, `docker-stats.raw`, `docker-stats.csv`, `자원.md`, `자원.err`, `요약.md`, `slow-queries-<run>.txt`, 워밍업 판정 `warmup.csv`, 실행마다 `results/<이름>-l<목록 속도>-r<회차>/`(k6 원본 `summary.json`, `requests.log`, `k6-console.out`, 종료 코드 `k6-exit.txt`, `report.md`, `report.out`), 워밍업 `results/<이름>-W/`. 같은 이름의 실행 폴더(`<이름>-l*-r*`, `<이름>-W`)가 남아 있으면 이전 결과가 섞이지 않게 시작 전에 멈춥니다
+- 설정 검사: `DURATION`(초 단위, 예: `90s`), `RATE`, `REPS`, `LIST_RATES`, `GAP`, `STATS_INTERVAL`, 목록 가상 사용자(`LIST_PRE_VUS` 기본 200, `LIST_MAX_VUS` 기본 1000) 등의 형식과 회원 수를 빌드 전에 확인합니다
 - 한계 (결과에 같이 적습니다)
   - 목록 조회 속도(433, 866건/초)는 가정입니다. 실제 조회 비율을 잰 값이 아닙니다
   - 확정 청약 10만 건은 SQL로 넣은 측정 전용 합성 데이터입니다. 계좌 쪽(증거금, 원장) 데이터가 없어 마감시키면 안 되고, 그래서 마감 시각을 10년 뒤로 둡니다

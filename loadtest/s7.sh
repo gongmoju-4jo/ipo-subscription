@@ -6,18 +6,21 @@
 #   시험 실행: ALLOW_DIRTY=1 WARM=0 RATE=5 LIST_RATES=5 REPS=1 DURATION=10s GAP=5 bash loadtest/s7.sh --batch S7-smoke (결과를 측정값으로 쓰지 않음)
 #   비교는 코드마다 같은 날 한 번씩 돌린다. 예) develop에서 EXPECT_RATE=0 bash loadtest/s7.sh --batch S7-dev, 기능 브랜치에서 bash loadtest/s7.sh --batch S7-db
 #   경쟁률이 없는 코드(develop)는 EXPECT_RATE=0 (목록 항목의 competitionRate 검사를 끔)
-# 결과: results/<이름>/ (진행.log, env.txt, manifest.csv, docker-stats.raw, docker-stats.csv, 자원.md, 요약.md, slow-queries-<run>.txt)
-#       + 실행마다 results/<이름>-l<목록 속도>-r<회차>/ (summary.json, requests.log, report.md) + 워밍업 results/<이름>-W/
+# 결과: results/<이름>/ (진행.log, env.txt, manifest.csv, docker-stats.raw, docker-stats.csv, 자원.md, 자원.err, 요약.md, slow-queries-<run>.txt, 워밍업 warmup.csv)
+#       + 실행마다 results/<이름>-l<목록 속도>-r<회차>/ (summary.json, requests.log, k6-console.out, k6-exit.txt, report.md, report.out) + 워밍업 results/<이름>-W/
+#       요청 종류별 값(응답 시간, 실패율, 검사 통과율, k6 종료 코드)은 요약.md. report.md는 청약과 목록을 합친 k6 값이라 서버 지표(Hikari 등)용으로 본다
 # 환경변수: RATE(청약, 433), LIST_RATES("433 866"), REPS(3), DURATION(90s), GAP(30, 실행 사이 쉬는 초), EXPECT_RATE(1),
 #          BASELINE_DIR(loadtest/data/baseline-s7), STATS_INTERVAL(5, docker stats 기록 간격 초. 0이면 기록 안 함),
-#          WARM(1, 0이면 워밍업 없이. 스크립트 시험용), WARM_RATE(200), WARM_LIST_RATE(216), WARM_* (s2.sh와 같은 기본값), DRAIN_TIMEOUT(600), PRE_VUS, MAX_VUS, K6_IMAGE, K6_CPUS, K6_MEMORY,
+#          WARM(1, 0이면 워밍업 없이. 스크립트 시험용), WARM_RATE(200), WARM_LIST_RATE(216), WARM_* (s2.sh와 같은 기본값), DRAIN_TIMEOUT(600),
+#          PRE_VUS, MAX_VUS(청약 가상 사용자), LIST_PRE_VUS(200), LIST_MAX_VUS(1000)(목록 가상 사용자), K6_IMAGE, K6_CPUS, K6_MEMORY,
 #          ALLOW_DIRTY(0), SKIP_BUILD(0, s2.sh와 같은 의미)
 # 스냅샷: 기준 스냅샷 복원 → bash loadtest/seed/s7_ipo.sh → ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/baseline-s7 bash loadtest/baseline.sh save
 #   (확정 청약 10만 건은 SQL로 넣은 측정 전용 합성 데이터라 계좌 쪽 데이터가 없다. 마감시키지 않는다. 자세한 한계는 seed/s7_ipo.sh 머리말)
 # 볼 것: 요청 종류별(kind: subscribe, list) 응답 시간과 밀린 요청(요약.md), 청약 서비스 Hikari(report.md), 컨테이너 CPU(자원.md, Redis 포함), 쿼리 통계
 #   k6 시작 직후에는 run-k6.sh가 입장 허가를 Redis에 한꺼번에 넣어 Redis CPU가 상한(0.5코어)까지 오른다. Redis CPU는 그 구간을 빼고 본다
 # 워밍업: s2.sh와 같은 기준(응답 시간 추세가 평평해질 때까지). 다만 무너진 상태(응답 수십 초)로 고정돼도 평평하다고 판정할 수 있어 마지막 구간 값을 진행.log에 남긴다
-# 종료 코드: 0 끝 / 5 커밋하지 않은 변경 또는 컨테이너 jar가 로컬 jar와 다름 / 14 스냅샷 복원 실패 / 그 밖은 준비, 실행 실패. 실행별 k6 종료 코드(99 임계값)는 진행.log에 남기고 계속한다
+# 종료 코드: 0 끝 / 1 설정 오류(시작 전 검사) / 5 커밋하지 않은 변경 또는 컨테이너 jar가 로컬 jar와 다름 / 14 스냅샷 복원 실패 / 그 밖은 준비, 실행 실패.
+#   실행별 k6 종료 코드(99 임계값, k6/s7.js 머리말)는 진행.log, k6-exit.txt, 요약.md에 남기고 계속한다
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
 # s2.sh가 같은 이름의 변수 기본값(RATE=274 등)을 덮어쓰므로, S7 기본값은 source 전에 받아 둔다
@@ -28,6 +31,7 @@ source "$SCRIPT_DIR/s2.sh"
 RATE="$S7_RATE"
 LIST_RATES="${LIST_RATES:-433 866}"; REPS="${REPS:-3}"; DURATION="${DURATION:-90s}"; GAP="${GAP:-30}"; EXPECT_RATE="${EXPECT_RATE:-1}"
 BASELINE_DIR="${BASELINE_DIR:-$DIR/data/baseline-s7}"; STATS_INTERVAL="${STATS_INTERVAL:-5}"; WARM_LIST_RATE="${WARM_LIST_RATE:-216}"
+LIST_PRE_VUS="${LIST_PRE_VUS:-200}"; LIST_MAX_VUS="${LIST_MAX_VUS:-1000}"
 ALL_CONTAINERS="$ALL_CONTAINERS ipo-redis"
 BATCH=""; MANIFEST=""; STATS_PID=""; K6_NET=""
 
@@ -51,12 +55,32 @@ stats_stop() { [ -n "$STATS_PID" ] && { kill "$STATS_PID" 2>/dev/null; wait "$ST
 k6s7() {
   (cd "$DIR" && K6_MODE=container K6_IMAGE="$K6_IMAGE" K6_CPUS="$K6_CPUS" K6_MEMORY="$K6_MEMORY" K6_LABEL="$BATCH" K6_NAME="k6-$1" K6_NETWORK="$K6_NET" \
     bash run-k6.sh s7 --ipo "${2%%,*}" --run-id "$1" -e "IPO_IDS=$2" -e "RATE=$3" -e "LIST_RATE=$4" -e "DURATION=$5" -e "EXPECT_RATE=$EXPECT_RATE" \
-    -e "PRE_VUS=$PRE_VUS" -e "MAX_VUS=$MAX_VUS" -e "QUANTITY=$QUANTITY") > "$DIR/results/$1/k6-console.out" 2>&1
+    -e "PRE_VUS=$PRE_VUS" -e "MAX_VUS=$MAX_VUS" -e "LIST_PRE_VUS=$LIST_PRE_VUS" -e "LIST_MAX_VUS=$LIST_MAX_VUS" -e "QUANTITY=$QUANTITY") > "$DIR/results/$1/k6-console.out" 2>&1
   echo $?
 }
 # 인자: 청약 속도, 초. 회원이 한 바퀴 돌 때마다 공모주를 하나씩 쓰므로 필요한 공모주 수 (+1 여유)
 need_ipos() { echo $(( ($1 * $2 + USERS - 1) / USERS + 1 )); }
 secs() { echo "${1%s}"; }
+# 설정 값 형식을 시작 전에 확인한다 (틀리면 복원, 워밍업이 끝난 뒤에야 공모주 만들기에서 멈추므로)
+check_settings() {
+  local v L
+  [[ "$DURATION" =~ ^[1-9][0-9]*s$ ]] || { echo "DURATION은 초 단위(예: 90s): $DURATION" >&2; return 1; }
+  for v in RATE REPS WARM_RATE WARM_LIST_RATE WARM_MAX LIST_PRE_VUS LIST_MAX_VUS; do
+    [[ "${!v}" =~ ^[1-9][0-9]*$ ]] || { echo "$v는 1 이상 정수: ${!v}" >&2; return 1; }
+  done
+  for v in GAP STATS_INTERVAL; do
+    [[ "${!v}" =~ ^[0-9]+$ ]] || { echo "$v는 0 이상 정수: ${!v}" >&2; return 1; }
+  done
+  [ -n "${LIST_RATES// /}" ] || { echo "LIST_RATES가 비어 있음" >&2; return 1; }
+  for L in $LIST_RATES; do
+    [[ "$L" =~ ^[1-9][0-9]*$ ]] || { echo "LIST_RATES는 1 이상 정수 목록(공백 구분): $LIST_RATES" >&2; return 1; }
+  done
+  [ "$USERS" -ge 1 ] 2>/dev/null || { echo "회원 CSV($DIR/data/users.csv)에 회원이 없음" >&2; return 1; }
+}
+# 같은 묶음 이름의 실행 폴더가 남아 있으면 요약에 이전 결과가 섞이므로 멈춘다 (Windows는 대소문자를 구분하지 않아 nocaseglob)
+leftover_runs() {
+  ( shopt -s nullglob nocaseglob; set -- "$DIR/results/$BATCH"-l*-r* "$DIR/results/$BATCH"-[W]; [ $# -gt 0 ] && printf '%s\n' "$@" )
+}
 # 만들 공모주 이름 중 가장 긴 것의 길이 ("<이름>-l<목록 속도>-r<회차>-<번호>", 워밍업 "<이름>-W-<번호>"). 공모주 이름은 VARCHAR(30)
 max_ipo_name_len() {
   local max=0 len n L
@@ -77,8 +101,9 @@ record_env() {
   {
     echo "batch=$BATCH git=$(git_repo rev-parse --short HEAD) branch=$(git_repo rev-parse --abbrev-ref HEAD) dirty=$DIRTY_N allow_dirty=${ALLOW_DIRTY:-0}"
     echo "rate=$RATE list_rates=$LIST_RATES reps=$REPS duration=$DURATION gap=$GAP expect_rate=$EXPECT_RATE users=$USERS"
-    echo "baseline_dir=$BASELINE_DIR stats_interval=$STATS_INTERVAL warm_rate=$WARM_RATE warm_list_rate=$WARM_LIST_RATE"
-    echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY pre_vus=$PRE_VUS max_vus=$MAX_VUS skip_build=${SKIP_BUILD:-0}"
+    echo "baseline_dir=$BASELINE_DIR warm_rate=$WARM_RATE warm_list_rate=$WARM_LIST_RATE"
+    echo "설정 STATS_INTERVAL=$STATS_INTERVAL"   # docker_stats.py가 이 형식으로 기록 간격을 읽는다
+    echo "k6_image=$K6_IMAGE k6_cpus=$K6_CPUS k6_memory=$K6_MEMORY pre_vus=$PRE_VUS max_vus=$MAX_VUS list_pre_vus=$LIST_PRE_VUS list_max_vus=$LIST_MAX_VUS skip_build=${SKIP_BUILD:-0}"
     local c line
     for c in $ALL_CONTAINERS; do
       line="$(docker inspect -f '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' "$c" 2>/dev/null)" || { echo "자원 $c 조회 실패"; continue; }
@@ -97,18 +122,22 @@ main() {
   done
   [ -n "$BATCH" ] || { echo "사용: $0 --batch <이름>" >&2; exit 1; }
   [ "$WARM" = 0 ] || [ "$WARM" = 1 ] || { echo "WARM은 0 또는 1: $WARM" >&2; exit 1; }
-  USERS="$(($(grep -c . "$DIR/data/users.csv") - 1))"
+  USERS="$(( $(grep -c . "$DIR/data/users.csv" 2>/dev/null || echo 0) - 1 ))"
+  check_settings || exit 1
   # 복원, 워밍업 뒤에 공모주 만들기가 실패하지 않게 시작 전에 이름 길이를 확인한다
   local name_len; name_len="$(max_ipo_name_len)"
   [ "$name_len" -le 30 ] || { echo "공모주 이름이 ${name_len}자가 되어 30자 제한을 넘습니다. --batch를 $((name_len - 30))자 이상 줄입니다: $BATCH" >&2; exit 1; }
   check_dirty || exit $?
   OUT="$DIR/results/$BATCH"; MANIFEST="$OUT/manifest.csv"
   [ -e "$OUT" ] && { echo "이미 있는 이름입니다: $OUT" >&2; exit 1; }
+  local left; left="$(leftover_runs)"
+  [ -z "$left" ] || { printf '%s\n' "$left" >&2; echo "같은 이름의 실행 폴더가 남아 있습니다. 다른 --batch를 쓰거나 폴더를 옮긴 뒤 실행한다" >&2; exit 1; }
   mkdir -p "$OUT"
   LOG="$OUT/진행.log"
   pick_python || die 1 "Python 3.8 이상이 필요합니다"
   pick_compose
-  trap 'stats_stop; docker ps --format "{{.Names}}" | grep "^k6-$BATCH" | xargs -r docker stop -t 30 >/dev/null 2>&1' EXIT
+  # 이 묶음의 k6 컨테이너만 멈춘다 (run-k6.sh가 붙이는 라벨로 고름. 이름 앞부분으로 고르면 다른 묶음까지 걸릴 수 있음)
+  trap 'stats_stop; docker ps -q --filter "label=loadtest.batch=$BATCH" | xargs -r docker stop -t 30 >/dev/null 2>&1' EXIT
 
   if [ "${SKIP_BUILD:-0}" != 1 ]; then
     say "jar 빌드 (./gradlew build -x test)"
@@ -170,6 +199,7 @@ main() {
       ipos="$(new_ipos "$run" "$(need_ipos "$RATE" "$(secs "$DURATION")")")" || die 1 "$run 공모주 생성 실패"
       pg "select pg_stat_statements_reset()" > /dev/null 2>&1 || true
       t0="$(date +%s)"; rc="$(k6s7 "$run" "$ipos" "$RATE" "$L" "$DURATION")"; t1="$(date +%s)"
+      echo "$rc" > "$DIR/results/$run/k6-exit.txt"   # 요약.md에 회차별 종료 코드를 적으려고 남긴다
       d="$(drain "$ipos" "$DRAIN_TIMEOUT")" || { say "!! $run 소진 대기 시간 초과"; d=timeout; }
       echo "$run,S7,measure,$rep,$RATE+$L,$((t1 - t0)),,$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d,$(date +%s)" >> "$MANIFEST"
       pg "select calls, round(mean_exec_time::numeric,3) mean_ms, round(max_exec_time::numeric,1) max_ms, round(total_exec_time::numeric,1) total_ms, left(regexp_replace(query, '\s+', ' ', 'g'), 160) from pg_stat_statements order by total_exec_time desc limit 20" \
@@ -189,39 +219,59 @@ main() {
   py - "$(pypath "$DIR/results")" "$BATCH" > "$OUT/요약.md" <<'PYEOF'
 import glob, json, os, statistics, sys
 root, batch = sys.argv[1], sys.argv[2]
-rows = {}
+rows = {}     # 목록 속도 → summary.json이 있는 회차
+planned = {}  # 목록 속도 → 실행 폴더 수 (k6 전에 만들므로 계획한 회차 수. 중간에 멈춘 회차도 센다)
 for d in sorted(glob.glob(os.path.join(root, f"{batch}-l*-r*"))):
+    if not os.path.isdir(d):
+        continue
+    name = os.path.basename(d)
+    L = name[len(batch) + 2:].split("-r")[0]
+    planned[L] = planned.get(L, 0) + 1
     f = os.path.join(d, "summary.json")
     if not os.path.exists(f):
         continue
     m = json.load(open(f, encoding="utf-8"))["metrics"]
     g = lambda k, fld: (m.get(k) or {}).get(fld)
-    name = os.path.basename(d)
-    L = name[len(batch) + 2:].split("-r")[0]
+    try:
+        rc = open(os.path.join(d, "k6-exit.txt"), encoding="utf-8").read().strip() or None
+    except OSError:
+        rc = None
     rows.setdefault(L, []).append((name, g("dropped_iterations", "count") or 0,
         g("http_reqs{kind:subscribe}", "count"), g("http_reqs{kind:list}", "count"),
         g("http_req_duration{kind:subscribe}", "avg"), g("http_req_duration{kind:subscribe}", "p(95)"),
-        g("http_req_duration{kind:list}", "avg"), g("http_req_duration{kind:list}", "p(95)")))
+        g("http_req_duration{kind:list}", "avg"), g("http_req_duration{kind:list}", "p(95)"),
+        g("http_req_failed{kind:subscribe}", "value"), g("http_req_failed{kind:list}", "value"), rc,
+        g("checks{kind:subscribe}", "value"), g("checks{kind:list}", "value")))
 # 실행이 중간에 멈춰 요약에 값이 없으면 "-"로 적는다 (중앙값은 값이 있는 실행만으로)
 num = lambda v: "-" if v is None else f"{v:g}"
 ms = lambda v: "-" if v is None else f"{v:.1f}"
+pct = lambda v: "-" if v is None else f"{v * 100:.2f}%"
 def med(xs):
     xs = [x for x in xs if x is not None]
     return statistics.median(xs) if xs else None
 print(f"# S7 요약 ({batch})\n")
-print("| 실행 | 밀린 요청 | 청약 요청 | 목록 요청 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n| --- | --- | --- | --- | --- | --- |")
+print("실패율은 HTTP 오류 응답 비율이다. 오류가 빨리 돌아오면 응답 시간이 짧게 보이므로 응답 시간과 같이 본다."
+      " 검사 통과율은 응답 검사(청약 202와 본문, 목록 200과 항목, EXPECT_RATE=1이면 competitionRate)를 통과한 비율이다."
+      " k6 종료 코드 99는 임계값(밀린 요청 0, 청약 평균 500ms 이하, 요청 종류별 실패율 1% 미만, 요청 종류별 검사 전부 통과) 중 하나를 넘은 것이다.\n")
+print("| 실행 | k6 종료 코드 | 밀린 요청 | 청약 요청 | 목록 요청 | 청약 실패율 | 목록 실패율 | 청약 검사 통과 | 목록 검사 통과 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n"
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
 for L in sorted(rows, key=int):
     for r in rows[L]:
-        print(f"| {r[0]} | {r[1]:g} | {num(r[2])} | {num(r[3])} | {ms(r[4])} / {ms(r[5])} | {ms(r[6])} / {ms(r[7])} |")
+        print(f"| {r[0]} | {r[10] or '-'} | {r[1]:g} | {num(r[2])} | {num(r[3])} | {pct(r[8])} | {pct(r[9])} | {pct(r[11])} | {pct(r[12])}"
+              f" | {ms(r[4])} / {ms(r[5])} | {ms(r[6])} / {ms(r[7])} |")
 # 밀린 요청이 있는 회차도 중앙값에 넣는다. S7에서는 서버가 느려져 속도를 못 낸 것 자체가 결과라서 빼면 무너진 결과가 요약에서 사라진다.
-# 대신 밀린 회차 수를 같이 적는다 (밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값)
+# 대신 밀린 회차 수를 같이 적는다 (밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값). 분모는 계획한 회차 수이고, 중앙값은 요약이 있는 회차만으로
 print("\n## 목록 속도별 중앙값\n")
-print("밀린 회차도 포함한다. 밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값이라 밀리지 않은 회차와 같은 조건이 아니다.\n")
-print("| 목록 건/초 | 밀린 회차 | 밀린 요청 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n| --- | --- | --- | --- | --- |")
-for L in sorted(rows, key=int):
-    rs = rows[L]
+print("밀린 회차도 포함한다. 밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값이라 밀리지 않은 회차와 같은 조건이 아니다."
+      " 밀린 회차와 집계 회차의 분모는 계획한 회차 수이고, 중앙값은 요약(summary.json)이 있는 회차만으로 계산한다.\n")
+print("| 목록 건/초 | 집계 회차 | 밀린 회차 | 밀린 요청 | 청약 실패율 | 목록 실패율 | 청약 검사 통과 | 목록 검사 통과 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n"
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+for L in sorted(planned, key=int):
+    rs = rows.get(L, [])
     dropped_runs = sum(1 for r in rs if r[1] > 0)
-    print(f"| {L} | {dropped_runs}/{len(rs)} | {num(med([r[1] for r in rs]))} | {ms(med([r[4] for r in rs]))} / {ms(med([r[5] for r in rs]))} | {ms(med([r[6] for r in rs]))} / {ms(med([r[7] for r in rs]))} |")
+    print(f"| {L} | {len(rs)}/{planned[L]} | {dropped_runs}/{planned[L]} | {num(med([r[1] for r in rs]))} | {pct(med([r[8] for r in rs]))} | {pct(med([r[9] for r in rs]))}"
+          f" | {pct(med([r[11] for r in rs]))} | {pct(med([r[12] for r in rs]))}"
+          f" | {ms(med([r[4] for r in rs]))} / {ms(med([r[5] for r in rs]))} | {ms(med([r[6] for r in rs]))} / {ms(med([r[7] for r in rs]))} |")
 PYEOF
   say "== 끝: $OUT (요약.md, 자원.md, 실행별 report.md)"
 }

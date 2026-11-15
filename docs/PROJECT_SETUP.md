@@ -620,16 +620,16 @@ void closeDueIpos() { ... }
 확인 방법 (인스턴스 2개 환경, [부하 테스트 가이드](./LOADTEST.md) 3-5절)
 
 ```bash
-# 이미지는 build/libs의 jar를 복사만 한다. 빼면 이전 코드로 떠서 붙이기 전 결과가 나올 수 있다
-./gradlew build -x test && \
-  docker-compose -f docker-compose.yml -f compose.scale.yml up -d --build
+# 이미지는 build/libs의 jar를 복사만 한다. 빌드를 빼면 이전 코드로 떠서 붙이기 전 결과가 나올 수 있다
+./gradlew build -x test && docker-compose -f docker-compose.yml -f compose.scale.yml up -d --build
 # 락을 잡은 인스턴스(locked_by = 컨테이너 호스트 이름)와 시각. 계좌는 account.shedlock
 docker exec ipo-postgres psql -U postgres -d ipo -c "SELECT name, locked_by, locked_at, lock_until FROM subscription.shedlock"
 ```
 
-- 락을 얻지 못해 건너뛴 인스턴스는 해당 실행 로그를 남기지 않는다. 같은 스케줄러의 각 실행에 대해 인스턴스별 시작 시각과 종료 시각을 비교해 실행 구간이 겹치는지 확인한다
-  - 실행마다 시작과 종료 로그가 없다면 확인할 스케줄러 메서드에 임시로 남긴다. 인스턴스와 실행을 구분하고, 예외나 조기 반환 때도 종료 시각을 남긴다
-  - 구간이 겹치면 동시에 실행된 것이다. 겹치지 않은 관찰만으로 락이 항상 동작한다고 증명할 수는 없다
+- 건너뛴 인스턴스는 로그를 남기지 않는다. 스케줄러가 실행마다 남기는 로그를 **모든 인스턴스를 합쳐 일정 시간(예: 1분) 동안** 세어 붙이기 전과 붙인 뒤를 비교한다
+  - 주기 5초, 인스턴스 2개면 1분에 붙이기 전 약 24번(12번 x 2), 붙인 뒤 약 12번. 붙인 뒤 횟수가 인스턴스 1개일 때와 같으면 정상이다
+  - 주기 하나(5초) 구간으로 세지 않는다. 인스턴스마다 깨어나는 시점이 달라, 락이 정상이어도 A가 0초, B가 4.5초에 실행하면(락은 4초까지) 한 구간에 두 번 찍힐 수 있다
+  - 실행 시각이 겹치지 않는지만 보는 것으로는 부족하다. 금방 끝나는 작업은 락이 없어도 거의 겹치지 않고, `lockAtLeastFor`가 없으면 겹치지 않으면서 5초에 두 번 돌 수 있어서, 줄어든 실행 횟수로 확인한다
 - 테스트에서 스케줄러를 `new`로 만들어 메서드를 부르면 락이 걸리지 않는다 (지금 스케줄러 테스트는 모두 이 방식이라 영향 없음). 스프링 빈으로 받아 여러 번 부르는 테스트는 `lockAtLeastFor` 때문에 두 번째 호출부터 건너뛸 수 있다
 
 ---

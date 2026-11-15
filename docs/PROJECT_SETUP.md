@@ -620,12 +620,16 @@ void closeDueIpos() { ... }
 확인 방법 (인스턴스 2개 환경, [부하 테스트 가이드](./LOADTEST.md) 3-5절)
 
 ```bash
+./gradlew build -x test   # 이미지는 build/libs의 jar를 복사만 한다. 빼면 이전 코드로 떠서 붙이기 전 결과가 나올 수 있다
 docker-compose -f docker-compose.yml -f compose.scale.yml up -d --build
 # 락을 잡은 인스턴스(locked_by = 컨테이너 호스트 이름)와 시각. 계좌는 account.shedlock
 docker exec ipo-postgres psql -U postgres -d ipo -c "SELECT name, locked_by, locked_at, lock_until FROM subscription.shedlock"
 ```
 
-- 건너뛴 인스턴스는 로그를 남기지 않는다. 스케줄러가 실행마다 남기는 로그를 인스턴스별로 세어 붙이기 전(인스턴스 수만큼)과 붙인 뒤(한 번)를 비교한다
+- 건너뛴 인스턴스는 로그를 남기지 않는다. 스케줄러가 실행마다 남기는 로그를 **모든 인스턴스를 합쳐 일정 시간(예: 1분) 동안** 세어 붙이기 전과 붙인 뒤를 비교한다
+  - 주기 5초, 인스턴스 2개면 1분에 붙이기 전 약 24번(12번 x 2), 붙인 뒤 약 12번 (주기마다 한 번)
+  - 주기 하나(5초) 구간으로 세지 않는다. 인스턴스마다 깨어나는 시점이 달라, 락이 정상이어도 A가 0초, B가 4.5초에 실행하면(락은 4초까지) 한 구간에 두 번 찍힐 수 있다
+  - 실행 시각이 겹치지 않는지만 보는 것으로는 부족하다. 금방 끝나는 작업은 락이 없어도 거의 겹치지 않아서, 줄어든 실행 횟수로 확인한다
 - 테스트에서 스케줄러를 `new`로 만들어 메서드를 부르면 락이 걸리지 않는다 (지금 스케줄러 테스트는 모두 이 방식이라 영향 없음). 스프링 빈으로 받아 여러 번 부르는 테스트는 `lockAtLeastFor` 때문에 두 번째 호출부터 건너뛸 수 있다
 
 ---

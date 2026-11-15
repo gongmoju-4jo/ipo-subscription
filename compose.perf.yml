@@ -2,6 +2,7 @@
 #   docker-compose -f docker-compose.yml -f compose.perf.yml up -d --build
 # 컨테이너별 CPU, 메모리 상한과 JVM 힙을 고정해서 회차마다 같은 조건으로 측정한다.
 # 아래 값은 Docker에 CPU 10개, 메모리 약 12GB가 할당된 PC(`docker info`의 CPUs, Total Memory) 기준이다. 머신에 맞게 고치고, 쓴 값은 측정 환경 기록에 적는다.
+# 상한 합계는 CPU 10.75, 메모리 약 10.25GB다. 상한은 "이 이상 못 씀"이라 합계가 CPU 수를 넘어도 뜬다 (모든 컨테이너가 동시에 상한까지 쓰지는 않음).
 # 회원 시드(loadtest/seed)는 BCrypt 때문에 CPU를 많이 써서, 이 상한을 건 상태에서는 1,000명에 2분 넘게 걸린다. 시드는 상한 없이 먼저 하는 편이 빠르다.
 # 한 번에 하나만 바꾼다: 메모리 상한을 바꿔도 힙이 같이 움직이지 않도록 JAVA_TOOL_OPTIONS로 힙을 따로 고정했다.
 # GC도 G1로 명시했다. CPU 상한이 2 미만이면 JVM이 기본으로 SerialGC를 골라서, 상한을 바꿀 때 GC 방식까지 같이 바뀌기 때문이다.

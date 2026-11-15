@@ -13,7 +13,7 @@
 # - Prometheus: 서비스 이름을 DNS로 찾아 모든 인스턴스를 수집하는 설정으로 바꾼다 (docker/prometheus/prometheus.scale.yml).
 # - Eureka: 서비스가 IP로 등록하므로(prefer-ip-address) 인스턴스마다 따로 등록된다. 대시보드(8761)에서 2개씩 보이면 정상.
 #
-# 자원 (compose.perf.yml과 같이 쓸 때): 상한 합계가 CPU 14, 메모리 약 13.75GB로 perf 기준 PC(CPU 10, 메모리 12GB)보다 크다.
+# 자원 (compose.perf.yml과 같이 쓸 때): 상한 합계가 CPU 15.25, 메모리 약 15.25GB로 perf 기준 PC(CPU 10, 메모리 12GB)보다 크다.
 # 상한은 "이 이상 못 씀"이라 합계가 넘어도 뜨지만, 부하 중 실제 사용량이 Docker 메모리를 넘으면 컨테이너가 강제 종료된다. `docker stats`로 본다.
 #
 # DB 커넥션: Hikari 풀이 청약 30, 계좌 10, 배정 10이라 2개씩이면 100개를 잡으려 한다.

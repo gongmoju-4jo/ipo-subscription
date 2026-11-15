@@ -200,9 +200,9 @@ docker-compose down -v                                     # 종료 + DB, Kafka 
   - Eureka 등록 확인은 IntelliJ 때와 같이 `http://localhost:8761` 화면에서 한다
   - Eureka 포트가 이미 사용 중이거나 Windows 예약 포트라 기동되지 않으면 `.env`에서 `EUREKA_PORT`(기본 8761)를 바꾼다
 - 기동 순서는 compose가 제어한다: postgres, kafka 준비 → 토픽 생성(`kafka-init`) → eureka-server → 서비스. 서비스가 모두 `healthy`여도 Gateway가 서비스를 찾는 데 최대 30초 걸려 처음 요청이 503일 수 있다
-- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너와 모니터링(Prometheus, Grafana)까지 전부 올라온다.** `GRAFANA_ADMIN_PASSWORD`가 비어 있으면 Grafana만 시작되지 않는다. jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui redis`)
+- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너와 모니터링(Prometheus, Grafana, Zipkin, Loki, Alloy)까지 전부 올라온다.** `GRAFANA_ADMIN_PASSWORD`가 비어 있으면 Grafana만 시작되지 않는다. jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui redis`)
 - ⚠️ **같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다** (포트 충돌, Eureka 중복 등록). 특히 IntelliJ의 Eureka를 켠 채 Docker 전체를 띄우면 8761이 충돌한다. 일부 서비스만 IntelliJ로 띄워 컨테이너 Eureka에 붙이는 구성은 확인하지 않았고 지원하지 않는다
-- 📌 **Docker 메모리 6GB 이상 권장** (Kafka 포함 시 2GB 부족. 모니터링 포함 전체 실행 시 컨테이너 사용량 합계가 부하 중 약 3.4GB였다)
+- 📌 **Docker 메모리 6GB 이상 권장** (Kafka 포함 시 2GB 부족. 모니터링 포함 전체 실행 시 컨테이너 사용량 합계가 부하 중 약 3.4GB였다. 이 값은 Zipkin, Loki, Alloy를 빼고 잰 것이고, Zipkin, Loki, Alloy는 부하 없을 때 합계 약 0.4~0.55GB를 더 쓴다)
   - Colima: `colima stop && colima start --cpus 4 --memory 6` / Docker Desktop: Settings → Resources → Memory
 
 #### 필요한 서비스만 띄우기

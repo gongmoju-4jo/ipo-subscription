@@ -6,3 +6,4 @@ com.gongmoju.common.outbox.CommonOutboxAutoConfiguration
 com.gongmoju.common.event.CommonProcessedEventAutoConfiguration
 com.gongmoju.common.schedulerlock.CommonSchedulerLockAutoConfiguration
 com.gongmoju.common.tracing.CommonTracingAutoConfiguration
+com.gongmoju.common.tracing.CommonKafkaClusterIdAutoConfiguration

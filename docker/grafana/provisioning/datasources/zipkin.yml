@@ -1,0 +1,19 @@
+apiVersion: 1
+datasources:
+  # 분산 추적. Explore에서 traceId로 조회한다 (Zipkin 화면 http://localhost:9411 과 같은 데이터)
+  - name: Zipkin
+    uid: zipkin
+    type: zipkin
+    access: proxy
+    url: http://zipkin:9411
+    jsonData:
+      # trace의 span에서 그 서비스의 같은 traceId 로그로 간다
+      # span의 서비스 이름(service.name)을 Loki 라벨 service로 바꾸고, 로그 본문에서 traceId를 찾는다
+      tracesToLogsV2:
+        datasourceUid: loki
+        tags:
+          - key: service.name
+            value: service
+        filterByTraceID: true
+        spanStartTimeShift: -1m
+        spanEndTimeShift: 1m

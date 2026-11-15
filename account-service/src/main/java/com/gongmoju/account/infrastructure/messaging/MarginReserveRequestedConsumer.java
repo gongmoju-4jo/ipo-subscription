@@ -5,6 +5,7 @@ import com.gongmoju.account.application.margin.MarginReserveService;
 import com.gongmoju.account.application.margin.ReserveBatchResult;
 import com.gongmoju.account.application.margin.ReserveMarginCommand;
 import com.gongmoju.account.global.exception.InvalidEventException;
+import com.gongmoju.account.infrastructure.config.KafkaConsumerConfig;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -26,9 +27,6 @@ import java.util.List;
 @Slf4j
 @Component
 class MarginReserveRequestedConsumer {
-
-    // KafkaConsumerConfig의 배치 리스너 컨테이너 팩토리 빈 이름
-    private static final String CONTAINER_FACTORY = "marginReserveBatchListenerContainerFactory";
 
     private final ObjectMapper objectMapper;
     private final MarginReserveService marginReserveService;
@@ -52,8 +50,10 @@ class MarginReserveRequestedConsumer {
     // id: 리스너 지표(spring_kafka_listener) name 라벨 고정용. Consumer Group은 groupId가 우선이라 그대로
     // 리스너 지표는 배치 호출 1번이 1건으로 센다 (메시지 수가 아님)
     // max.poll.records: 한 번에 받는 최대 건수. 이 리스너에만 적용한다. 기다려서 모으지 않고 이미 밀려 있는 만큼만 받는다
+    // containerFactory: 정산 Consumer와 같은 공용 배치 팩토리 (KafkaConsumerConfig, #114). 배치 수신, 오프셋 배치 커밋, 에러 핸들러 적용,
+    // 리스너 지표 끄기(1건 리스너의 추적 지표와 이름이 겹침)가 한곳에서 정해진다
     @KafkaListener(id = MarginReserveService.CONSUMER_NAME, topics = MarginReserveService.TOPIC, groupId = MarginReserveService.CONSUMER_NAME,
-            containerFactory = CONTAINER_FACTORY,
+            containerFactory = KafkaConsumerConfig.BATCH_LISTENER_FACTORY,
             properties = "max.poll.records=${margin-reserve.batch.max-poll-records:100}")
     void consume(List<ConsumerRecord<String, String>> records) {
         // 앞에서부터 파싱한다. 잘못된 메시지를 만나면 거기서 멈추고, 그 앞 메시지는 먼저 처리한 뒤에 예외를 던진다

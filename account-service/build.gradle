@@ -12,6 +12,10 @@ dependencies {
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.17'
 	runtimeOnly 'org.postgresql:postgresql'
 
+	// 스케줄러 중복 실행 방지 (common CommonSchedulerLockAutoConfiguration이 켜짐). 버전은 common/build.gradle과 같게
+	implementation 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'
+	implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.10.0'
+
 	// 비밀번호 BCrypt 해시, JWT(HS256) 발급. 보안 필터는 붙지 않는다 (버전은 Boot BOM)
 	implementation 'org.springframework.security:spring-security-crypto'
 	implementation 'org.springframework.security:spring-security-oauth2-jose'

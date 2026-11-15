@@ -100,6 +100,24 @@ class AllocationResultConsumerKafkaTest {
         userIds.forEach(id -> jdbcTemplate.update("DELETE FROM users WHERE user_id = ?", id));
     }
 
+    // 정산 배치 리스너의 리스너 타이머(spring.kafka.listener, 태그 name, result)가 켜져 있으면, 1건 리스너가 관측으로 만드는
+    // 같은 이름의 타이머(태그 spring.kafka.listener.id, error)를 Prometheus가 받지 않아 1건 리스너 지표가 빠진다
+    @Test
+    void 정산_배치_리스너는_리스너_타이머를_끄고_1건_리스너는_관측을_켠다() {
+        List<MessageListenerContainer> containers = new ArrayList<>(listenerRegistry.getListenerContainers());
+
+        MessageListenerContainer settle = containers.stream()
+                .filter(c -> MarginSettleService.CONSUMER_NAME.equals(c.getGroupId()))
+                .findFirst().orElseThrow();
+        assertThat(settle.getContainerProperties().isMicrometerEnabled()).isFalse();
+
+        List<MessageListenerContainer> recordListeners = containers.stream()
+                .filter(c -> !MarginSettleService.CONSUMER_NAME.equals(c.getGroupId()))
+                .toList();
+        assertThat(recordListeners).isNotEmpty()
+                .allSatisfy(c -> assertThat(c.getContainerProperties().isObservationEnabled()).isTrue());
+    }
+
     @Test
     void 정상_메시지는_정산하고_margin_settled를_Outbox에_남긴다() throws Exception {
         UUID subscriptionId = reserve(15_000);

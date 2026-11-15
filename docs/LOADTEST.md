@@ -604,6 +604,7 @@ bash loadtest/seed/s7_ipo.sh
 ALLOW_SUBSCRIPTIONS=1 BASELINE_DIR=loadtest/data/baseline-s7 bash loadtest/baseline.sh save
 
 # 비교: 코드마다 같은 날 한 번씩. s7.sh는 지금 체크아웃한 코드를 빌드하므로 코드마다 브랜치를 바꿔 실행한다
+# 아래는 이 기능(#164)이 develop에 머지된 뒤 기준이다. 머지 전에는 도구를 feat/164-competition-rate에서 가져오고(git checkout feat/164-competition-rate -- loadtest/), DB 합산도 그 브랜치에서 잰다
 # ① 경쟁률이 없는 코드: 경쟁률 머지 전 커밋(ab55c65)에는 S7 도구가 없어서, 도구만 얹은 측정용 브랜치를 만들어 커밋한다
 #    (도구 파일만 복사하면 커밋하지 않은 파일이 생겨 종료 코드 5로 멈춘다. ALLOW_DIRTY=1 결과는 측정값으로 쓰지 않는다)
 #    바뀌는 것은 loadtest/뿐이라 빌드되는 서비스 코드는 ab55c65와 같다. 측정용 브랜치는 내 PC에서만 쓰고 푸시하지 않는다

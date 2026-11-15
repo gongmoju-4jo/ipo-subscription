@@ -525,7 +525,8 @@ subscription-service/.../com/gongmoju/subscription/
 | `feign/` | 헤더 전달, 에러 디코더, 재시도, Feign 예외 처리 (Feign 있는 서비스만) |
 | `outbox/` | Outbox 엔티티, 저장소, 발행기, 설정(`outbox.publisher.*`), 자동 설정 (Kafka, JPA 있는 서비스만) |
 | `event/` | 처리한 이벤트 기록(중복 수신 방지): 엔티티, 포트(`ProcessedEventRepository`), 구현, 자동 설정 (JPA 있는 서비스만) |
-| `config/` | 위 기능 + Swagger 공통 설정 자동 등록 (AutoConfiguration). `outbox/`, `event/`의 자동 설정은 각 폴더에 있음 |
+| `schedulerlock/` | 스케줄러 중복 실행 방지(ShedLock) 락 저장소, 자동 설정 (ShedLock 의존성과 DB가 있는 서비스만. 지금은 계좌, 청약). [아래](#스케줄러-중복-실행-방지-shedlock) |
+| `config/` | 위 기능 + Swagger 공통 설정 자동 등록 (AutoConfiguration). `outbox/`, `event/`, `schedulerlock/`의 자동 설정은 각 폴더에 있음 |
 
 > 💡 서비스는 자기 패키지(`com.gongmoju.{서비스}`)만 스캔하므로 common 설정은 `AutoConfiguration.imports`로 자동 등록됩니다. 서비스에 `JpaAuditingConfig`, `SwaggerConfig`를 따로 만들지 않습니다.
 >
@@ -587,6 +588,7 @@ compileOnly 'org.springframework.boot:spring-boot-starter-data-jpa'   // BaseEnt
 compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign' // feign/
 compileOnly 'org.springframework.kafka:spring-kafka'                  // outbox/ (발행기)
 compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
+compileOnly 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'          // schedulerlock/ (provider-jdbc-template도 같은 버전)
 ```
 
 > 💡 `compileOnly`: common은 빌드할 때만 라이브러리를 참고하고, 서비스에 넘겨주지 않습니다.
@@ -596,6 +598,57 @@ compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
 
 - common에 라이브러리 추가 → common엔 `compileOnly` + 서비스엔 `implementation`
   - 서비스쪽 누락 시 `ClassNotFoundException` → 서비스 `build.gradle`에 의존성 추가
+
+### 스케줄러 중복 실행 방지 (ShedLock)
+
+인스턴스를 2개 이상 띄우면 `@Scheduled` 작업이 인스턴스마다 돈다. `@SchedulerLock`을 붙이면 같은 작업은 한 번에 한 인스턴스만 실행하고, 나머지는 그 차례를 건너뛴다 (기다리지 않음)
+
+- 락은 서비스 자기 스키마의 `shedlock` 표에 작업 이름마다 한 줄로 남는다. 표는 계좌, 청약 `schema.sql`이 만든다 (다른 서비스에 붙일 때는 ShedLock 의존성 두 줄과 같은 표를 추가)
+- `shedlock` 표의 시각 컬럼은 팀 규칙과 달리 `TIMESTAMP`다. ShedLock이 DB 시각을 시간대 없는 UTC로 넣고 비교해서, `TIMESTAMPTZ`면 접속 시간대(IntelliJ로 띄운 KST 등)에 따라 락 시각이 9시간 어긋날 수 있다. 서비스에서 따로 만들지 말고 `schema.sql`의 정의를 그대로 쓴다
+- 락 만료는 DB 시각으로 판단한다 (인스턴스마다 시계가 조금 달라도 같은 기준)
+- `@SchedulerLock`을 붙이지 않은 스케줄러는 지금처럼 인스턴스마다 돈다. 이 설정이 들어와도 붙이기 전까지 동작은 바뀌지 않는다
+- 게이트웨이는 common, DB를 쓰지 않아 이 방식을 쓰지 않는다. Outbox 발행기는 방식 결정 전이라 아직 붙이지 않는다 (#149)
+
+붙이는 방법 (의존성, 설정은 이미 되어 있어 어노테이션만 추가)
+
+```java
+@Scheduled(fixedDelayString = "${ipo.close.interval:PT5S}")
+@SchedulerLock(name = "IpoCloseScheduler.closeDueIpos", lockAtMostFor = "PT1M", lockAtLeastFor = "PT4S")
+void closeDueIpos() { ... }
+```
+
+- 메서드는 public이 아니어도 된다 (package-private 메서드와 `@Scheduled` 실행에서 락이 걸리는 것을 `CommonSchedulerLockAutoConfigurationTest`가 확인)
+- `name`: `{클래스}.{메서드}`. 표가 서비스 스키마마다 따로라 서비스 이름은 붙이지 않는다. 64자 이하. 한 번 정하면 바꾸지 않는다 (바꾸면 옛 이름과 새 이름이 서로를 막지 못한다)
+- `lockAtMostFor`: 락을 잡은 인스턴스가 작업 중에 죽어도 이 시간이 지나면 풀린다. **가장 오래 걸리는 실행보다 넉넉히 길게** 잡는다. 실행이 이 시간을 넘기면 다른 인스턴스가 같은 작업을 동시에 시작한다. 적지 않으면 기본값 10분
+- `lockAtLeastFor`: 작업이 빨리 끝나도 이 시간 동안은 락을 놓지 않는다. **주기보다 조금 짧게** 잡는다
+  - 락은 "동시 실행"만 막는다. `lockAtLeastFor`가 0이면 A가 끝나자마자 B가 실행할 수 있어, 겹치지만 않을 뿐 인스턴스 수만큼 자주 돈다 (주기 5초, 인스턴스 2개면 5초에 최대 2번)
+  - cron 작업도 꼭 둔다. 인스턴스끼리 시계가 몇 초 다르면 A가 04:00:00에 끝낸 뒤 B가 04:00:02에 같은 작업을 또 실행한다
+
+추천값 (실제 실행 시간을 보고 담당자가 정한다)
+
+| 스케줄러 | 주기 | `lockAtMostFor` | `lockAtLeastFor` | 담당 |
+| --- | --- | --- | --- | --- |
+| `IpoCloseScheduler.closeDueIpos` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
+| `PendingTimeoutScheduler.handleTimedOutPending` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
+| `VoidRetryScheduler.retryStaleVoid` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
+| `LedgerReconciliationScheduler.reconcile` (계좌) | 매일 04:00 | `PT30M` | `PT5M` | 계좌 |
+
+- 주기를 설정값으로 바꿀 수 있는 스케줄러는 `lockAtLeastFor`도 주기에 맞춰야 한다. 어노테이션 값에 `"${키:기본값}"` 형식의 설정값을 쓸 수 있다
+
+확인 방법 (인스턴스 2개 환경, [부하 테스트 가이드](./LOADTEST.md) 3-5절)
+
+```bash
+# 이미지는 build/libs의 jar를 복사만 한다. 빌드를 빼면 이전 코드로 떠서 붙이기 전 결과가 나올 수 있다
+./gradlew build -x test && docker-compose -f docker-compose.yml -f compose.scale.yml up -d --build
+# 락을 잡은 인스턴스(locked_by = 컨테이너 호스트 이름)와 시각. 계좌는 account.shedlock
+docker exec ipo-postgres psql -U postgres -d ipo -c "SELECT name, locked_by, locked_at, lock_until FROM subscription.shedlock"
+```
+
+- 건너뛴 인스턴스는 로그를 남기지 않는다. 스케줄러가 실행마다 남기는 로그를 **모든 인스턴스를 합쳐 일정 시간(예: 1분) 동안** 세어 붙이기 전과 붙인 뒤를 비교한다
+  - 주기 5초, 인스턴스 2개면 1분에 붙이기 전 약 24번(12번 x 2), 붙인 뒤 약 12번. 붙인 뒤 횟수가 인스턴스 1개일 때와 같으면 정상이다
+  - 주기 하나(5초) 구간으로 세지 않는다. 인스턴스마다 깨어나는 시점이 달라, 락이 정상이어도 A가 0초, B가 4.5초에 실행하면(락은 4초까지) 한 구간에 두 번 찍힐 수 있다
+  - 실행 시각이 겹치지 않는지만 보는 것으로는 부족하다. 금방 끝나는 작업은 락이 없어도 거의 겹치지 않고, `lockAtLeastFor`가 없으면 겹치지 않으면서 5초에 두 번 돌 수 있어서, 줄어든 실행 횟수로 확인한다
+- 테스트에서 스케줄러를 `new`로 만들어 메서드를 부르면 락이 걸리지 않는다 (지금 스케줄러 테스트는 모두 이 방식이라 영향 없음). 스프링 빈으로 받아 여러 번 부르는 테스트는 `lockAtLeastFor` 때문에 두 번째 호출부터 건너뛸 수 있다
 
 ---
 

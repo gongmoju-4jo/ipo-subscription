@@ -11,6 +11,7 @@
 #      compose 파일에 없는 컨테이너는 지운다 (--remove-orphans). web이 없는 이전 커밋으로 롤백할 때 남은 web이 80을 쥐고 있으면 게이트웨이가 뜨지 못한다
 #   4. 서비스 5개와 web이 healthy가 될 때까지 기다린다. 실패하면 상태와 로그를 출력하고 종료 코드 1
 #   5. 서버 안에서 게이트웨이(127.0.0.1:8080)로 스모크 (deploy/smoke.sh). 계정은 Parameter Store의 SMOKE_LOGIN_ID, SMOKE_PASSWORD
+#      web이 없던 이전 구성 커밋으로 롤백하면 web은 기다리지 않고, 스모크는 그 구성의 게이트웨이 주소(127.0.0.1:80)로 보낸다
 #      공개 주소(web)를 거치지 않고 서버 안에서만 보낸다. 서버 밖과는 SSM의 암호화된 채널로만 오간다
 #   6. 스모크까지 통과하면 .last-tag를 기록한다
 #
@@ -39,9 +40,8 @@ main() {
   local region="${AWS_REGION:-ap-northeast-2}"
   local param_path="${PARAM_PATH:-/ipo/prod/}"
   local health_timeout="${HEALTH_TIMEOUT:-300}"
-  local smoke_url="${SMOKE_BASE_URL:-http://127.0.0.1:8080}"   # 서버 안의 게이트웨이 (docker-compose.yml의 127.0.0.1:8080)
-  local services=(eureka-server api-gateway account-service subscription-service allocation-service web)
-  local required=(DB_PASSWORD ACCOUNT_DB_PASSWORD SUBSCRIPTION_DB_PASSWORD ALLOCATION_DB_PASSWORD JWT_SECRET GRAFANA_ADMIN_PASSWORD ADMIN_LOGIN_ID ADMIN_PASSWORD SITE_DOMAIN)
+  local services=(eureka-server api-gateway account-service subscription-service allocation-service)
+  local required=(DB_PASSWORD ACCOUNT_DB_PASSWORD SUBSCRIPTION_DB_PASSWORD ALLOCATION_DB_PASSWORD JWT_SECRET GRAFANA_ADMIN_PASSWORD ADMIN_LOGIN_ID ADMIN_PASSWORD)
 
   cd "$app_dir"
 
@@ -50,6 +50,19 @@ main() {
   git checkout --quiet --detach "$tag"
   local full_sha
   full_sha="$(git rev-parse HEAD)"
+
+  # 배포할 커밋에 web(Caddy)이 있는지에 따라 기다릴 대상과 스모크 주소가 다르다
+  # 이 스크립트는 checkout 전에 읽힌 버전이 끝까지 실행되므로, 서버에서 web이 없던 커밋으로 손으로 롤백할 때도 맞게 동작하도록 여기서 정한다
+  #   web 있음: 게이트웨이는 서버 안 127.0.0.1:8080, web이 healthy여야 하고 SITE_DOMAIN이 필요하다
+  #   web 없음: 게이트웨이가 80으로 공개된 이전 구성
+  local smoke_url
+  if grep -q 'container_name: ipo-web' compose.prod.yml; then
+    services+=(web)
+    required+=(SITE_DOMAIN)
+    smoke_url="${SMOKE_BASE_URL:-http://127.0.0.1:8080}"
+  else
+    smoke_url="${SMOKE_BASE_URL:-http://127.0.0.1:80}"
+  fi
 
   echo "== 2. Parameter Store(${param_path})로 .env 생성"
   local registry

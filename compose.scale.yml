@@ -44,6 +44,8 @@ services:
     mem_limit: 1g
     environment:
       JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
+      # perf의 샘플링 0도 같이 맞춘다. 외부 요청을 받지 않는 인스턴스라 실제로 만드는 trace는 없다
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0}
 
   prometheus:
     volumes:

@@ -5,6 +5,8 @@
 # 외부에 여는 포트는 게이트웨이 하나(80 → 8080)뿐이다. 나머지는 docker-compose.yml대로 127.0.0.1에만 열린다
 # Compose는 여러 파일의 ports를 합치므로 게이트웨이 포트는 !override로 교체한다 (그대로 두면 127.0.0.1:8080 바인딩이 함께 남는다)
 # 서버가 재부팅되거나 컨테이너가 죽으면 다시 띄운다 (kafka-init은 토픽을 만들고 끝나는 컨테이너라 제외)
+# 분산 추적(zipkin), 로그 수집(loki, alloy)도 포함한다. Zipkin은 메모리 저장이라 배포로 컨테이너가 다시 만들어지면 trace가 사라진다 (로그는 볼륨에 남음)
+# 배포 대기(deploy.sh)는 서비스 5개의 healthy만 본다. 이 셋이 늦게 떠도 배포는 성공으로 본다
 services:
   postgres:
     restart: unless-stopped
@@ -24,6 +26,9 @@ services:
     build: !reset null
     image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/api-gateway:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
     restart: unless-stopped
+    environment:
+      # compose.perf.yml이 부하 측정용으로 0으로 둔 샘플링을 배포 환경은 다시 전부(1.0)로 돌린다 (요청이 적어 전부 봐도 부담 없음)
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
     ports: !override
       - "80:8080"
 
@@ -31,19 +36,37 @@ services:
     build: !reset null
     image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/account-service:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
     restart: unless-stopped
+    environment:
+      # compose.perf.yml이 부하 측정용으로 0으로 둔 샘플링을 배포 환경은 다시 전부(1.0)로 돌린다 (요청이 적어 전부 봐도 부담 없음)
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
 
   subscription-service:
     build: !reset null
     image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/subscription-service:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
     restart: unless-stopped
+    environment:
+      # compose.perf.yml이 부하 측정용으로 0으로 둔 샘플링을 배포 환경은 다시 전부(1.0)로 돌린다 (요청이 적어 전부 봐도 부담 없음)
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
 
   allocation-service:
     build: !reset null
     image: ${ECR_REGISTRY:?ECR_REGISTRY가 비어 있습니다}/ipo/allocation-service:${IMAGE_TAG:?IMAGE_TAG가 비어 있습니다}
     restart: unless-stopped
+    environment:
+      # compose.perf.yml이 부하 측정용으로 0으로 둔 샘플링을 배포 환경은 다시 전부(1.0)로 돌린다 (요청이 적어 전부 봐도 부담 없음)
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
 
   prometheus:
     restart: unless-stopped
 
   grafana:
+    restart: unless-stopped
+
+  zipkin:
+    restart: unless-stopped
+
+  loki:
+    restart: unless-stopped
+
+  alloy:
     restart: unless-stopped

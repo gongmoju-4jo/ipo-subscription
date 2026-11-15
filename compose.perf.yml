@@ -15,6 +15,13 @@
 # | kafka | 1.0 | 1g | 512m |
 # | prometheus, grafana | 0.5 | 512m | - |
 # | redis | 0.5 | 256m | - (`--maxmemory 200mb`) |
+# | zipkin | 0.5 | 768m | 512m |
+# | loki | 0.5 | 512m | - |
+# | alloy | 0.25 | 256m | - |
+#
+# 분산 추적은 서비스 4개의 샘플링을 0으로 둬서 Zipkin으로 보내지 않는다 (span 생성, 전송 비용이 서비스 CPU 상한 안에서 측정값에 섞이지 않게).
+# 계측 코드(관측 생성, 로그 traceId, Outbox 문맥 저장)는 그대로 돌아서 추적을 넣기 전 회차와 완전히 같은 조건은 아니다.
+# 로그 수집(alloy, loki)은 샘플링과 관계없이 돈다. 서비스 상한 밖의 별도 컨테이너지만 PC 전체 CPU는 나눠 쓴다
 #
 # redis는 컨테이너 상한보다 작은 --maxmemory를 둔다. 상한에 먼저 닿으면 컨테이너가 강제 종료되어 대기열이 통째로 사라지고,
 # --maxmemory에 먼저 닿으면 noeviction이라 쓰기만 오류가 나서 드러난다 (게이트웨이 알림 QueueAdmissionDown의 redis_oom).
@@ -57,24 +64,36 @@ services:
     mem_limit: 1g
     environment:
       JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
+      # 추적은 보내지 않는다 (샘플링 0). 계측 코드는 그대로라 로그에는 traceId가 남는다
+      # 원인 분석 때만 낮은 속도에서 TRACING_SAMPLING_PROBABILITY=1.0으로 띄운다 (.env 또는 명령 앞에 붙임)
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0}
 
   account-service:
     cpus: 1.0
     mem_limit: 1g
     environment:
       JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
+      # 추적은 보내지 않는다 (샘플링 0). 계측 코드는 그대로라 로그에는 traceId가 남는다
+      # 원인 분석 때만 낮은 속도에서 TRACING_SAMPLING_PROBABILITY=1.0으로 띄운다 (.env 또는 명령 앞에 붙임)
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0}
 
   subscription-service:
     cpus: 2.0
     mem_limit: 1g
     environment:
       JAVA_TOOL_OPTIONS: "-Xms512m -Xmx512m -XX:+UseG1GC"
+      # 추적은 보내지 않는다 (샘플링 0). 계측 코드는 그대로라 로그에는 traceId가 남는다
+      # 원인 분석 때만 낮은 속도에서 TRACING_SAMPLING_PROBABILITY=1.0으로 띄운다 (.env 또는 명령 앞에 붙임)
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0}
 
   allocation-service:
     cpus: 0.5
     mem_limit: 2g
     environment:
       JAVA_TOOL_OPTIONS: "-Xms1536m -Xmx1536m -XX:+UseG1GC"
+      # 추적은 보내지 않는다 (샘플링 0). 계측 코드는 그대로라 로그에는 traceId가 남는다
+      # 원인 분석 때만 낮은 속도에서 TRACING_SAMPLING_PROBABILITY=1.0으로 띄운다 (.env 또는 명령 앞에 붙임)
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0}
 
   prometheus:
     cpus: 0.5
@@ -83,6 +102,18 @@ services:
   grafana:
     cpus: 0.5
     mem_limit: 512m
+
+  zipkin:
+    cpus: 0.5
+    mem_limit: 768m
+
+  loki:
+    cpus: 0.5
+    mem_limit: 512m
+
+  alloy:
+    cpus: 0.25
+    mem_limit: 256m
 
   redis:
     cpus: 0.5

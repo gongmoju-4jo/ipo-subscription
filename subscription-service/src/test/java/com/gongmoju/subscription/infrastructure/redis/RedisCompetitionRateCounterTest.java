@@ -89,7 +89,7 @@ class RedisCompetitionRateCounterTest {
     }
 
     @Test
-    @DisplayName("더하기를 건너뛴 공모주는 Redis가 돌아오면 사본을 먼저 지운다 (낮은 값이 남지 않고 다음 조회가 DB로 다시 채우게)")
+    @DisplayName("더하기를 건너뛴 공모주는 Redis가 돌아오면 사본과 채우는 중 표시를 먼저 지운다 (낮은 값이 남지 않고, 진행 중이던 채우기도 옛 값을 넣지 못하게)")
     void skippedAdds_deleteCounterWhenRedisIsBack() {
         // given: 읽기 실패로 건너뛰는 중에 확정이 들어옴
         when(values.multiGet(anyList()))
@@ -103,7 +103,7 @@ class RedisCompetitionRateCounterTest {
         counter.find(List.of(IPO));
 
         // then
-        verify(redis).delete(List.of(RedisCompetitionRateCounter.key(IPO)));
+        verify(redis).delete(List.of(RedisCompetitionRateCounter.key(IPO), RedisCompetitionRateCounter.loadingKey(IPO)));
     }
 
     @Test

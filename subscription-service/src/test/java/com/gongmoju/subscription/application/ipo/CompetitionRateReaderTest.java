@@ -122,7 +122,7 @@ class CompetitionRateReaderTest {
                     pool.submit(() -> reader.rates(List.of(ipo))),
                     pool.submit(() -> reader.rates(List.of(ipo))),
                     pool.submit(() -> reader.rates(List.of(ipo))));
-            Thread.sleep(200);  // 나머지 요청이 계산 중인 결과를 기다리는 상태가 되게
+            awaitWaiters(ipo.getId(), 3);  // 나머지 요청이 계산 중인 결과를 기다리는 상태가 된 뒤에 풀어 줌
 
             // when
             release.countDown();
@@ -159,7 +159,7 @@ class CompetitionRateReaderTest {
             Future<Map<UUID, BigDecimal>> leader = pool.submit(() -> reader.rates(List.of(ipo)));
             assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
             Future<Map<UUID, BigDecimal>> follower = pool.submit(() -> reader.rates(List.of(ipo)));
-            Thread.sleep(200);  // 기다리는 상태가 되게
+            awaitWaiters(ipo.getId(), 1);  // 기다리는 상태가 된 뒤에 실패시킴
 
             // when
             release.countDown();
@@ -170,6 +170,60 @@ class CompetitionRateReaderTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    @DisplayName("다른 요청의 합산을 기다리다 시간이 넘으면 같은 계산에 다시 합류하지 않고 직접 합산한다 (사본은 넣지 않음)")
+    void rates_sumsDirectly_whenWaitTimesOut() throws Exception {
+        // given: 앞선 합산이 오래 걸림, 기다리는 시간은 짧게
+        reader.setWaitMillisForTest(300);
+        Ipo ipo = ipo(100);
+        when(counter.find(anyCollection())).thenReturn(Map.of());
+        when(counter.startLoading(anyCollection())).thenReturn(Set.of(ipo.getId()));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(repository.sumRequestedQuantityByIpoIds(anyCollection(), any()))
+                .thenAnswer(inv -> {
+                    started.countDown();
+                    release.await(10, TimeUnit.SECONDS);
+                    return Map.of(ipo.getId(), 300L);
+                })
+                .thenReturn(Map.of(ipo.getId(), 500L));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Map<UUID, BigDecimal>> leader = pool.submit(() -> reader.rates(List.of(ipo)));
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // when: 뒤 요청은 기다리다 시간을 넘김
+            Map<UUID, BigDecimal> follower = pool.submit(() -> reader.rates(List.of(ipo))).get(5, TimeUnit.SECONDS);
+
+            // then: 직접 합산한 값을 받고, 앞선 합산은 그대로 끝남. 사본은 앞선 합산만 넣음
+            assertThat(follower.get(ipo.getId())).isEqualByComparingTo("5.00");
+            release.countDown();
+            assertThat(leader.get(5, TimeUnit.SECONDS).get(ipo.getId())).isEqualByComparingTo("3.00");
+            verify(repository, times(2)).sumRequestedQuantityByIpoIds(anyCollection(), any());
+            verify(counter, times(1)).startLoading(anyCollection());
+            verify(counter, times(1)).finishLoading(Map.of(ipo.getId(), 300L));
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    // 다른 요청들이 공모주의 계산 중 결과를 기다리는 상태가 될 때까지 기다린다 (고정 sleep 대신)
+    @SuppressWarnings("unchecked")
+    private void awaitWaiters(UUID ipoId, int waiters) throws InterruptedException {
+        Map<UUID, java.util.concurrent.CompletableFuture<Long>> loading =
+                (Map<UUID, java.util.concurrent.CompletableFuture<Long>>) ReflectionTestUtils.getField(reader, "loading");
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            java.util.concurrent.CompletableFuture<Long> future = loading.get(ipoId);
+            if (future != null && future.getNumberOfDependents() >= waiters) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("기다리는 요청이 " + waiters + "개가 되지 않음");
     }
 
     private static Ipo ipo(long retailQuantity) {

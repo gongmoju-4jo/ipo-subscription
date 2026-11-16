@@ -35,13 +35,19 @@ import java.util.concurrent.TimeoutException;
 @RequiredArgsConstructor
 class CompetitionRateReader {
 
-    // 다른 요청의 DB 합산을 기다리는 최대 시간. 넘으면 직접 계산한다 (부하 중 10만 건 합산이 약 0.9초)
-    private static final long WAIT_SECONDS = 10;
+    // 다른 요청의 DB 합산을 기다리는 최대 시간. 넘으면 그 계산을 더 기다리지 않고 직접 합산한다 (부하 중 10만 건 합산이 약 0.9초)
+    private static final long WAIT_MILLIS = 10_000;
 
     private final CompetitionRateCounter counter;
     private final SubscriptionRepository subscriptionRepository;
     // 공모주 ID → DB로 계산 중인 신청 수량 합 (계산이 끝나면 지움)
     private final Map<UUID, CompletableFuture<Long>> loading = new ConcurrentHashMap<>();
+    // 테스트가 짧게 바꿀 수 있게 필드로 둔다 (생성자 주입 대상 아님)
+    private long waitMillis = WAIT_MILLIS;
+
+    void setWaitMillisForTest(long waitMillis) {
+        this.waitMillis = waitMillis;
+    }
 
     /**
      * @return 공모주 ID → 경쟁률. 해당 청약이 없는 공모주는 0.00
@@ -60,8 +66,9 @@ class CompetitionRateReader {
         return rates;
     }
 
-    // 사본이 없는 공모주의 신청 수량 합을 DB로 계산한다. 다른 요청이 계산 중인 공모주는 그 결과를 기다리고,
-    // 그 계산이 실패하면 한 번만 다시 이 경로(한 요청만 계산)로 시도한다 (실패한 순간 기다리던 요청이 모두 DB로 몰리지 않게)
+    // 사본이 없는 공모주의 신청 수량 합을 DB로 계산한다. 다른 요청이 계산 중인 공모주는 그 결과를 기다린다.
+    // 그 계산이 실패하면 한 번만 다시 이 경로(한 요청만 계산)로 시도하고 (실패한 순간 기다리던 요청이 모두 DB로 몰리지 않게),
+    // 기다리는 시간을 넘으면 그 계산은 그대로 두고 이 요청만 DB로 직접 합산한다 (같은 계산에 다시 합류하면 또 기다리게 되므로)
     private Map<UUID, Long> load(List<UUID> missing, boolean retryOnFailure) {
         Map<UUID, CompletableFuture<Long>> mine = new LinkedHashMap<>();
         Map<UUID, CompletableFuture<Long>> others = new LinkedHashMap<>();
@@ -79,15 +86,23 @@ class CompetitionRateReader {
             result.putAll(loadOwn(mine));
         }
         List<UUID> failed = new ArrayList<>();
+        List<UUID> timedOut = new ArrayList<>();
         for (Map.Entry<UUID, CompletableFuture<Long>> e : others.entrySet()) {
             try {
-                result.put(e.getKey(), e.getValue().get(WAIT_SECONDS, TimeUnit.SECONDS));
-            } catch (ExecutionException | TimeoutException failure) {
+                result.put(e.getKey(), e.getValue().get(waitMillis, TimeUnit.MILLISECONDS));
+            } catch (ExecutionException failure) {
                 failed.add(e.getKey());
+            } catch (TimeoutException slow) {
+                timedOut.add(e.getKey());
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("경쟁률 계산을 기다리다 중단됨", interrupted);
             }
+        }
+        if (!timedOut.isEmpty()) {
+            // 사본은 넣지 않는다 (채우기는 기다리던 계산이 맡고 있음)
+            Map<UUID, Long> sums = subscriptionRepository.sumRequestedQuantityByIpoIds(timedOut, SubscriptionStatus.ALLOCATION_TARGETS);
+            timedOut.forEach(id -> result.put(id, sums.getOrDefault(id, 0L)));
         }
         if (!failed.isEmpty()) {
             if (!retryOnFailure) {

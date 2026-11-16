@@ -19,7 +19,8 @@
 # 볼 것: 요청 종류별(kind: subscribe, list) 응답 시간과 밀린 요청(요약.md), 청약 서비스 Hikari(report.md), 컨테이너 CPU(자원.md, Redis 포함), 쿼리 통계
 #   k6 시작 직후에는 run-k6.sh가 입장 허가를 Redis에 한꺼번에 넣어 Redis CPU가 상한(0.5코어)까지 오른다. Redis CPU는 그 구간을 빼고 본다
 # 워밍업: s2.sh와 같은 기준(응답 시간 추세가 평평해질 때까지). 다만 무너진 상태(응답 수십 초)로 고정돼도 평평하다고 판정할 수 있어 마지막 구간 값을 진행.log에 남긴다
-# 종료 코드: 0 끝 / 1 설정 오류(시작 전 검사) / 5 커밋하지 않은 변경 또는 컨테이너 jar가 로컬 jar와 다름 / 14 스냅샷 복원 실패 / 그 밖은 준비, 실행 실패.
+# 종료 코드: 0 끝 / 1 설정 오류(시작 전 검사) / 5 커밋하지 않은 변경 또는 컨테이너 jar가 로컬 jar와 다름 / 6 소진 대기 시간 초과(워밍업이면 바로,
+#   측정 회차면 그 회차까지 기록하고 후처리한 뒤. 앞 회차의 처리가 다음 회차에 섞이지 않게 다음 회차를 시작하지 않음) / 14 스냅샷 복원 실패 / 그 밖은 준비, 실행 실패.
 #   실행별 k6 종료 코드(99 임계값, k6/s7.js 머리말)는 진행.log, k6-exit.txt, 요약.md에 남기고 계속한다
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
@@ -193,7 +194,7 @@ main() {
     say "워밍업 건너뜀 (WARM=0, 시험용. 결과를 측정값으로 쓰지 않는다)"
   fi
 
-  local rep L run ipos rc
+  local rep L run ipos rc drain_failed=0
   for rep in $(seq 1 "$REPS"); do
     for L in $LIST_RATES; do
       run="$BATCH-l$L-r$rep"
@@ -203,12 +204,16 @@ main() {
       pg "select pg_stat_statements_reset()" > /dev/null 2>&1 || true
       t0="$(date +%s)"; rc="$(k6s7 "$run" "$ipos" "$RATE" "$L" "$DURATION")"; t1="$(date +%s)"
       echo "$rc" > "$DIR/results/$run/k6-exit.txt"   # 요약.md에 회차별 종료 코드를 적으려고 남긴다
-      d="$(drain "$ipos" "$DRAIN_TIMEOUT")" || { say "!! $run 소진 대기 시간 초과"; d=timeout; }
+      d="$(drain "$ipos" "$DRAIN_TIMEOUT")" || { say "!! $run 소진 대기 시간 초과"; d=timeout; drain_failed=1; }
       echo "$run,S7,measure,$rep,$RATE+$L,$((t1 - t0)),,$(printf '%s' "$ipos" | tr ',' ';'),$t0,$t1,$d,$(date +%s)" >> "$MANIFEST"
       pg "select calls, round(mean_exec_time::numeric,3) mean_ms, round(max_exec_time::numeric,1) max_ms, round(total_exec_time::numeric,1) total_ms, left(regexp_replace(query, '\s+', ' ', 'g'), 160) from pg_stat_statements order by total_exec_time desc limit 20" \
         > "$OUT/slow-queries-$run.txt" 2>&1 || true
       (cd "$DIR" && py report.py --run-id "$run") > "$DIR/results/$run/report.out" 2>&1 || say "  $run report.py 실패 (report.out)"
       say "$run k6=$rc 소진=${d}초"
+      if [ "$drain_failed" = 1 ]; then
+        say "!! 처리 중 청약이 남아 다음 회차를 시작하지 않음 (다음 회차 결과에 섞이지 않게). 후처리 뒤 종료 코드 6"
+        break 2
+      fi
       sleep "$GAP"
     done
   done
@@ -276,6 +281,7 @@ for L in sorted(planned, key=int):
           f" | {ms(med([r[4] for r in rs]))} / {ms(med([r[5] for r in rs]))} | {ms(med([r[6] for r in rs]))} / {ms(med([r[7] for r in rs]))} |")
 PYEOF
   say "== 끝: $OUT (요약.md, 자원.md, 실행별 report.md)"
+  [ "$drain_failed" = 0 ] || exit 6
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

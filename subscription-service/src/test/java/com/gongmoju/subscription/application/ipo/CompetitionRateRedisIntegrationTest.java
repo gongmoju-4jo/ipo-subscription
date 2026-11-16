@@ -3,6 +3,8 @@ package com.gongmoju.subscription.application.ipo;
 import com.gongmoju.subscription.application.subscription.ConfirmResult;
 import com.gongmoju.subscription.application.subscription.SubscriptionConfirmService;
 import com.gongmoju.subscription.domain.ipo.CompetitionRateCounter;
+import com.gongmoju.subscription.infrastructure.redis.CompetitionRateProperties;
+import com.gongmoju.subscription.infrastructure.redis.RedisCompetitionRateCounter;
 import com.gongmoju.subscription.domain.subscription.MarginReserved;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +22,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -191,6 +195,27 @@ class CompetitionRateRedisIntegrationTest {
         // then: 확정이 빠지지 않고 DB 합산과 같음, 채우는 중 표시는 지워짐
         assertThat(redis.opsForValue().get(key)).isEqualTo("1530000");
         assertThat(Long.parseLong(redis.opsForValue().get(key))).isEqualTo(databaseSum());
+        assertThat(redis.hasKey(loadingKey)).isFalse();
+    }
+
+    @Test
+    @DisplayName("채우는 중 표시가 바뀐 뒤(만료 뒤 다른 인스턴스가 다시 채움) 늦게 끝난 채우기는 옛 값을 넣지 않고 남의 표시도 지우지 않는다")
+    void staleLoader_cannotStoreOrDeleteAnotherLoadersMarker() {
+        // given: 이 인스턴스가 채우기 시작 → 표시가 만료돼 다른 인스턴스가 새로 시작
+        assertThat(counter.startLoading(List.of(ipoId))).containsExactly(ipoId);
+        redis.delete(loadingKey);
+        RedisCompetitionRateCounter other = new RedisCompetitionRateCounter(redis,
+                new CompetitionRateProperties(true, Duration.ofMinutes(5), Duration.ofSeconds(30), Duration.ofSeconds(10)), Clock.systemUTC());
+        assertThat(other.startLoading(List.of(ipoId))).containsExactly(ipoId);
+
+        // when: 옛 채우기가 늦게 끝남
+        counter.finishLoading(Map.of(ipoId, 100L));
+
+        // then: 사본을 넣지 않고 다른 인스턴스의 표시도 남아 있음. 다른 인스턴스는 정상으로 넣음
+        assertThat(redis.hasKey(key)).isFalse();
+        assertThat(redis.hasKey(loadingKey)).isTrue();
+        other.finishLoading(Map.of(ipoId, 1_527_000L));
+        assertThat(redis.opsForValue().get(key)).isEqualTo("1527000");
         assertThat(redis.hasKey(loadingKey)).isFalse();
     }
 

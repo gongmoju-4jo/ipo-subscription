@@ -219,7 +219,7 @@ main() {
   py - "$(pypath "$DIR/results")" "$BATCH" > "$OUT/요약.md" <<'PYEOF'
 import glob, json, os, statistics, sys
 root, batch = sys.argv[1], sys.argv[2]
-rows = {}     # 목록 속도 → summary.json이 있는 회차
+rows = {}     # 목록 속도 → 회차 (summary.json이 없어도 종료 코드를 보이려고 넣는다. 마지막 칸이 요약 있음 여부)
 planned = {}  # 목록 속도 → 실행 폴더 수 (k6 전에 만들므로 계획한 회차 수. 중간에 멈춘 회차도 센다)
 for d in sorted(glob.glob(os.path.join(root, f"{batch}-l*-r*"))):
     if not os.path.isdir(d):
@@ -228,20 +228,19 @@ for d in sorted(glob.glob(os.path.join(root, f"{batch}-l*-r*"))):
     L = name[len(batch) + 2:].split("-r")[0]
     planned[L] = planned.get(L, 0) + 1
     f = os.path.join(d, "summary.json")
-    if not os.path.exists(f):
-        continue
-    m = json.load(open(f, encoding="utf-8"))["metrics"]
+    has = os.path.exists(f)
+    m = json.load(open(f, encoding="utf-8"))["metrics"] if has else {}
     g = lambda k, fld: (m.get(k) or {}).get(fld)
     try:
         rc = open(os.path.join(d, "k6-exit.txt"), encoding="utf-8").read().strip() or None
     except OSError:
         rc = None
-    rows.setdefault(L, []).append((name, g("dropped_iterations", "count") or 0,
+    rows.setdefault(L, []).append((name, (g("dropped_iterations", "count") or 0) if has else None,
         g("http_reqs{kind:subscribe}", "count"), g("http_reqs{kind:list}", "count"),
         g("http_req_duration{kind:subscribe}", "avg"), g("http_req_duration{kind:subscribe}", "p(95)"),
         g("http_req_duration{kind:list}", "avg"), g("http_req_duration{kind:list}", "p(95)"),
         g("http_req_failed{kind:subscribe}", "value"), g("http_req_failed{kind:list}", "value"), rc,
-        g("checks{kind:subscribe}", "value"), g("checks{kind:list}", "value")))
+        g("checks{kind:subscribe}", "value"), g("checks{kind:list}", "value"), has))
 # 실행이 중간에 멈춰 요약에 값이 없으면 "-"로 적는다 (중앙값은 값이 있는 실행만으로)
 num = lambda v: "-" if v is None else f"{v:g}"
 ms = lambda v: "-" if v is None else f"{v:.1f}"
@@ -257,7 +256,7 @@ print("| 실행 | k6 종료 코드 | 밀린 요청 | 청약 요청 | 목록 요�
       "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
 for L in sorted(rows, key=int):
     for r in rows[L]:
-        print(f"| {r[0]} | {r[10] or '-'} | {r[1]:g} | {num(r[2])} | {num(r[3])} | {pct(r[8])} | {pct(r[9])} | {pct(r[11])} | {pct(r[12])}"
+        print(f"| {r[0]} | {r[10] or '-'} | {num(r[1])} | {num(r[2])} | {num(r[3])} | {pct(r[8])} | {pct(r[9])} | {pct(r[11])} | {pct(r[12])}"
               f" | {ms(r[4])} / {ms(r[5])} | {ms(r[6])} / {ms(r[7])} |")
 # 밀린 요청이 있는 회차도 중앙값에 넣는다. S7에서는 서버가 느려져 속도를 못 낸 것 자체가 결과라서 빼면 무너진 결과가 요약에서 사라진다.
 # 대신 밀린 회차 수를 같이 적는다 (밀린 회차의 응답 시간은 정한 속도를 보내지 못한 상태의 값). 분모는 계획한 회차 수이고, 중앙값은 요약이 있는 회차만으로
@@ -267,7 +266,7 @@ print("밀린 회차도 포함한다. 밀린 회차의 응답 시간은 정한 �
 print("| 목록 건/초 | 집계 회차 | 밀린 회차 | 밀린 요청 | 청약 실패율 | 목록 실패율 | 청약 검사 통과 | 목록 검사 통과 | 청약 avg / p95 (ms) | 목록 avg / p95 (ms) |\n"
       "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
 for L in sorted(planned, key=int):
-    rs = rows.get(L, [])
+    rs = [r for r in rows.get(L, []) if r[13]]   # 중앙값은 요약이 있는 회차만
     dropped_runs = sum(1 for r in rs if r[1] > 0)
     print(f"| {L} | {len(rs)}/{planned[L]} | {dropped_runs}/{planned[L]} | {num(med([r[1] for r in rs]))} | {pct(med([r[8] for r in rs]))} | {pct(med([r[9] for r in rs]))}"
           f" | {pct(med([r[11] for r in rs]))} | {pct(med([r[12] for r in rs]))}"

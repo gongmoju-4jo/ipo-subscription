@@ -3,6 +3,7 @@ package com.gongmoju.subscription.application.subscription;
 import com.gongmoju.subscription.application.subscription.VoidRetryResult.Outcome;
 import com.gongmoju.subscription.domain.subscription.MarginVoided;
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
+import com.gongmoju.subscription.domain.subscription.VoidRetryBackoff;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -18,6 +19,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.TreeMap;
@@ -49,7 +51,8 @@ import static org.mockito.Mockito.doAnswer;
 class SubscriptionVoidRetryRaceTest {
 
     private static final int ROUNDS = 30;
-    private static final int MAX_ATTEMPTS = 3;
+    // 기본 설정과 같은 값 (요청 횟수 1일 때 대기 시간 30초)
+    private static final VoidRetryBackoff BACKOFF = new VoidRetryBackoff(Duration.ofSeconds(30), Duration.ofMinutes(5));
     private static final long MARGIN_AMOUNT = 1_500_000;
 
     @Container
@@ -73,8 +76,8 @@ class SubscriptionVoidRetryRaceTest {
     private final ThreadLocal<Runnable> afterRead = new ThreadLocal<>();
     private ExecutorService executor;
     private UUID ipoId;
-    // 응답 시간이 지났는지 가르는 기준 시각 (현재 시각 - 30초)
-    private Instant threshold;
+    // 재요청 판단 기준 시각
+    private Instant now;
 
     @BeforeEach
     void setUp() {
@@ -89,7 +92,7 @@ class SubscriptionVoidRetryRaceTest {
             return result;
         }).when(subscriptionRepository).findById(any());
         ipoId = UUID.randomUUID();
-        threshold = Instant.now().minusSeconds(30);
+        now = Instant.now();
         jdbcTemplate.update("""
                 INSERT INTO ipo (ipo_id, name, offer_price, retail_quantity, equal_quantity, min_quantity, max_quantity,
                                  margin_rate, subscription_start_at, subscription_end_at, refund_date, status, version,
@@ -119,7 +122,7 @@ class SubscriptionVoidRetryRaceTest {
             MarginVoided voided = new MarginVoided(UUID.randomUUID(), subscriptionId, 0);
 
             // when
-            Outcomes raced = race(() -> voidedService.complete(voided), () -> voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS));
+            Outcomes raced = race(() -> voidedService.complete(voided), () -> voidRetryService.handle(subscriptionId, now, BACKOFF));
             // 진 쪽을 흉내 냄: Consumer는 낙관적 락 충돌이면 재시도하고, 스케줄러는 건너뛰고 다음 주기에 다시 판단함
             retryConsumerIfConflict(raced.first(), () -> voidedService.complete(voided), round);
             failIfUnexpected(raced.second(), round);
@@ -149,9 +152,9 @@ class SubscriptionVoidRetryRaceTest {
 
         // when
         Object loser = loserReadsThenWinnerCommits(
-                () -> voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS),
+                () -> voidRetryService.handle(subscriptionId, now, BACKOFF),
                 () -> voidedService.complete(voided));
-        VoidRetryResult nextTick = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        VoidRetryResult nextTick = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         // then
         assertThat(loser).isInstanceOf(OptimisticLockingFailureException.class);
@@ -172,7 +175,7 @@ class SubscriptionVoidRetryRaceTest {
         // when
         Object loser = loserReadsThenWinnerCommits(
                 () -> voidedService.complete(voided),
-                () -> voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS));
+                () -> voidRetryService.handle(subscriptionId, now, BACKOFF));
         VoidedResult retried = voidedService.complete(voided);
 
         // then
@@ -190,7 +193,7 @@ class SubscriptionVoidRetryRaceTest {
     void duplicateVoidedAfterRetry_isIgnored() {
         // given
         UUID subscriptionId = insertCompensating(1);
-        voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        voidRetryService.handle(subscriptionId, now, BACKOFF);
         voidedService.complete(new MarginVoided(UUID.randomUUID(), subscriptionId, 0));
 
         // when
@@ -231,7 +234,7 @@ class SubscriptionVoidRetryRaceTest {
 
     // 다음 주기에 스케줄러가 다시 봐도 아무것도 더 기록하지 않아야 함
     private void assertNoFurtherRecordsOnNextTick(UUID subscriptionId, long voidRequestsBefore, int round) {
-        VoidRetryResult next = voidRetryService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+        VoidRetryResult next = voidRetryService.handle(subscriptionId, now, BACKOFF);
 
         assertThat(next.outcome()).as("round %d: 이미 CANCELLED라 건너뜀", round).isEqualTo(Outcome.NOT_VOIDING_IGNORED);
         assertThat(outboxCount(subscriptionId, "margin.void-requested")).as("round %d: 반환 요청이 늘지 않음", round).isEqualTo(voidRequestsBefore);
@@ -291,7 +294,8 @@ class SubscriptionVoidRetryRaceTest {
                 VALUES (?, ?, ?, ?, ?, 100, ?, 'COMPENSATING', 'TIMEOUT', ?, ?, now() - interval '10 minutes',
                         0, now(), 'test', now(), 'test')""",
                 subscriptionId, UUID.randomUUID(), ipoId, UUID.randomUUID(), UUID.randomUUID(), MARGIN_AMOUNT, attempts,
-                Timestamp.from(threshold.minusSeconds(10)));
+                // 요청 횟수 1의 대기 시간(30초)보다 10초 더 지남
+                Timestamp.from(now.minusSeconds(40)));
         return subscriptionId;
     }
 

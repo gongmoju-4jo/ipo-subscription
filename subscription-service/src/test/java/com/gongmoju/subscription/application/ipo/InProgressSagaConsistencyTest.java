@@ -2,6 +2,7 @@ package com.gongmoju.subscription.application.ipo;
 
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import com.gongmoju.subscription.domain.subscription.SubscriptionStatus;
+import com.gongmoju.subscription.domain.subscription.VoidRetryBackoff;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -15,6 +16,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -30,7 +32,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("마감의 진행 중 SAGA 판정과 멈춘 SAGA 정리 대상의 일치 (PostgreSQL)")
 class InProgressSagaConsistencyTest {
 
-    private static final int MAX_ATTEMPTS = 3;
+    // 기본 설정과 같은 값 (요청 횟수 1일 때 대기 시간 30초. 이 테스트의 청약은 60초 전에 마지막으로 요청함)
+    private static final VoidRetryBackoff BACKOFF = new VoidRetryBackoff(Duration.ofSeconds(30), Duration.ofMinutes(5));
 
     @Container
     @ServiceConnection
@@ -68,7 +71,7 @@ class InProgressSagaConsistencyTest {
         // when
         boolean blocksClose = ipoCloseService.close(ipoId).outcome() == IpoCloseResult.Outcome.IN_PROGRESS_REMAINING;
         boolean handledByCleanup = subscriptionRepository.findStalePendingIds(threshold, 100).contains(subscriptionId)
-                || subscriptionRepository.findStaleVoidIds(threshold, MAX_ATTEMPTS, 100).contains(subscriptionId);
+                || subscriptionRepository.findStaleVoidIds(Instant.now(), BACKOFF, 100).contains(subscriptionId);
 
         // then
         assertThat(handledByCleanup)

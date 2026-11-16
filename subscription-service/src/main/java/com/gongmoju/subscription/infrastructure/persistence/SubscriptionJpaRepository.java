@@ -72,42 +72,47 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
     List<UUID> findStalePendingIds(@Param("lastRequestedBefore") Instant lastRequestedBefore, @Param("limit") int limit);
 
     /**
-     * 마지막 요청 시각이 기준 시각보다 이르고 요청 횟수가 최대 횟수 미만인 {@code COMPENSATING}, {@code CANCEL_REQUESTED} 청약의 {@code subscription_id}를 오래된 순으로 최대 limit건 조회함.
+     * 마지막 요청 시각에서 대기 시간(백오프)이 지난 {@code COMPENSATING}, {@code CANCEL_REQUESTED} 청약의 {@code subscription_id}를 오래된 순으로 최대 limit건 조회함.
+     * 대기 시간 = min(initialSeconds × 2^(요청 횟수 − 1), maxSeconds) (VoidRetryBackoff와 같은 식). 요청 횟수는 1 미만이면 1, 지수는 19까지만 씀. 최대 횟수는 없음.
      * 미발행 반환 요청(margin.void-requested)이 있는 청약은 제외함.
+     * 기준 시각 :now는 타입이 정해지지 않으면 interval 뺄셈으로 해석되므로 timestamptz로 변환함.
      */
     @Query(value = """
             SELECT s.subscription_id FROM subscription s
             WHERE s.status IN ('COMPENSATING', 'CANCEL_REQUESTED')
-              AND s.last_requested_at < :lastRequestedBefore
-              AND s.attempts < :maxAttempts
+              AND s.last_requested_at < CAST(:now AS timestamptz)
+                    - make_interval(secs => LEAST(:initialSeconds * power(2, LEAST(GREATEST(s.attempts, 1), 20) - 1), :maxSeconds))
               AND NOT EXISTS (SELECT 1 FROM outbox o
                               WHERE o.aggregate_id = s.subscription_id
                                 AND o.topic = 'margin.void-requested'
                                 AND o.published_at IS NULL)
             ORDER BY s.last_requested_at ASC
             LIMIT :limit""", nativeQuery = true)
-    List<UUID> findStaleVoidIds(@Param("lastRequestedBefore") Instant lastRequestedBefore,
-                                @Param("maxAttempts") int maxAttempts, @Param("limit") int limit);
+    List<UUID> findStaleVoidIds(@Param("now") Instant now, @Param("initialSeconds") double initialSeconds,
+                                @Param("maxSeconds") double maxSeconds, @Param("limit") int limit);
 
-    // 요청 횟수가 최대 횟수 이상인 알림 대상. 재요청 대상 조회와 같은 상태, 시각 조건 (Outbox 확인은 필요 없음)
+    // 알림 대상: 요청 횟수가 알림 기준 이상이고 마지막 요청 뒤 응답 대기 시간이 지난 반환 중 청약. 오래된 순.
+    // 응답 대기 시간(:minAgeSeconds)은 방금 요청해 응답이 오는 중인 청약을 알리지 않게 하는 값 (재요청 대기 시간과 달리 요청 횟수와 무관한 고정값).
+    // 재요청 대기 시간(백오프)을 조건으로 쓰면, 상한 간격에서는 재요청 직전 몇 초만 대상이 되어 알림 시점에 거의 잡히지 않음.
+    // 읽기만 하며 청약을 바꾸지 않음. Outbox 확인은 필요 없음
     @Query(value = """
-            SELECT s.subscription_id FROM subscription s
+            SELECT s.* FROM subscription s
             WHERE s.status IN ('COMPENSATING', 'CANCEL_REQUESTED')
-              AND s.last_requested_at < :lastRequestedBefore
-              AND s.attempts >= :maxAttempts
+              AND s.attempts >= :alertAttempts
+              AND s.last_requested_at < CAST(:now AS timestamptz) - make_interval(secs => :minAgeSeconds)
             ORDER BY s.last_requested_at ASC
             LIMIT :limit""", nativeQuery = true)
-    List<UUID> findExhaustedVoidIds(@Param("lastRequestedBefore") Instant lastRequestedBefore,
-                                    @Param("maxAttempts") int maxAttempts, @Param("limit") int limit);
+    List<Subscription> findLongVoiding(@Param("now") Instant now, @Param("alertAttempts") int alertAttempts,
+                                       @Param("minAgeSeconds") double minAgeSeconds, @Param("limit") int limit);
 
     // 위 조회와 같은 조건의 총 건수 (건수 제한 없음)
     @Query(value = """
             SELECT count(*) FROM subscription s
             WHERE s.status IN ('COMPENSATING', 'CANCEL_REQUESTED')
-              AND s.last_requested_at < :lastRequestedBefore
-              AND s.attempts >= :maxAttempts""", nativeQuery = true)
-    long countExhaustedVoid(@Param("lastRequestedBefore") Instant lastRequestedBefore,
-                            @Param("maxAttempts") int maxAttempts);
+              AND s.attempts >= :alertAttempts
+              AND s.last_requested_at < CAST(:now AS timestamptz) - make_interval(secs => :minAgeSeconds)""", nativeQuery = true)
+    long countLongVoiding(@Param("now") Instant now, @Param("alertAttempts") int alertAttempts,
+                          @Param("minAgeSeconds") double minAgeSeconds);
 
     // 발행된 증거금 인출 요청 Outbox 중 가장 늦은 발행 시각. 없으면 null
     @Query("select max(o.publishedAt) from Outbox o where o.aggregateId = :subscriptionId "

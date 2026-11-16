@@ -13,6 +13,14 @@
 {$SITE_DOMAIN:localhost} {
 	encode zstd gzip
 
+	# 다른 사이트가 이 화면을 iframe으로 감싸지 못하게 하고, 브라우저가 파일 형식을 추측해 실행하지 않게 한다
+	# defer: 게이트웨이가 이미 붙인 응답에도 값이 두 번 들어가지 않고 하나로 덮어쓴다
+	header {
+		defer
+		X-Frame-Options DENY
+		X-Content-Type-Options nosniff
+	}
+
 	@gateway path /api/* /swagger-ui* /v3/api-docs* /account-service/v3/api-docs /subscription-service/v3/api-docs /allocation-service/v3/api-docs
 	handle @gateway {
 		reverse_proxy {$GATEWAY_UPSTREAM:api-gateway:8080}

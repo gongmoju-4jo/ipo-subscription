@@ -87,9 +87,16 @@ class CompetitionRateReader {
         }
         List<UUID> failed = new ArrayList<>();
         List<UUID> timedOut = new ArrayList<>();
+        // 기다리는 시간은 공모주마다가 아니라 이 요청 전체에 한 번 (공모주가 여럿이면 남은 시간만 기다림)
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMillis);
         for (Map.Entry<UUID, CompletableFuture<Long>> e : others.entrySet()) {
             try {
-                result.put(e.getKey(), e.getValue().get(waitMillis, TimeUnit.MILLISECONDS));
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0 && !e.getValue().isDone()) {
+                    timedOut.add(e.getKey());
+                    continue;
+                }
+                result.put(e.getKey(), e.getValue().get(Math.max(remaining, 0), TimeUnit.NANOSECONDS));
             } catch (ExecutionException failure) {
                 failed.add(e.getKey());
             } catch (TimeoutException slow) {

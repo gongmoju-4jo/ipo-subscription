@@ -220,6 +220,22 @@ class CompetitionRateRedisIntegrationTest {
     }
 
     @Test
+    @DisplayName("큰 합계도 정수 문자열로 넣는다 (Lua 숫자 변환으로 1e+14 같은 지수 표기가 되지 않게)")
+    void finishLoading_keepsLargeSumAsIntegerString() {
+        // given: 채우는 중에 확정 5주
+        assertThat(counter.startLoading(List.of(ipoId))).containsExactly(ipoId);
+        counter.addConfirmed(ipoId, 5);
+
+        // when: 15자리 합계로 채움
+        counter.finishLoading(Map.of(ipoId, 100_000_000_000_000L));
+
+        // then
+        assertThat(redis.opsForValue().get(key)).isEqualTo("100000000000005");
+        assertThat(counter.find(List.of(ipoId))).containsEntry(ipoId, 100_000_000_000_005L);
+        assertThat(redis.getExpire(key)).isPositive();
+    }
+
+    @Test
     @DisplayName("다른 쪽이 채우는 중이면 채우기를 맡지 않는다")
     void startLoading_doesNotOwn_whenAlreadyLoading() {
         assertThat(counter.startLoading(List.of(ipoId))).containsExactly(ipoId);

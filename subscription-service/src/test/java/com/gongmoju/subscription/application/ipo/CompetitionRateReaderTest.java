@@ -210,6 +210,44 @@ class CompetitionRateReaderTest {
         }
     }
 
+    @Test
+    @DisplayName("사본이 없는 공모주 여러 개를 기다릴 때 대기 시간은 공모주마다가 아니라 요청 전체에 한 번이고, 남은 공모주를 한 번에 직접 합산한다")
+    void rates_waitsOnceForAllIpos_thenSumsRemainingTogether() throws Exception {
+        // given: 앞선 요청이 공모주 3개를 오래 합산함, 기다리는 시간 400ms
+        reader.setWaitMillisForTest(400);
+        List<Ipo> ipos = List.of(ipo(100), ipo(100), ipo(100));
+        when(counter.find(anyCollection())).thenReturn(Map.of());
+        when(counter.startLoading(anyCollection())).thenAnswer(inv -> Set.copyOf(inv.<Collection<UUID>>getArgument(0)));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(repository.sumRequestedQuantityByIpoIds(anyCollection(), any()))
+                .thenAnswer(inv -> {
+                    started.countDown();
+                    release.await(10, TimeUnit.SECONDS);
+                    return Map.of();
+                })
+                .thenReturn(Map.of(ipos.get(0).getId(), 100L, ipos.get(1).getId(), 200L, ipos.get(2).getId(), 300L));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            pool.submit(() -> reader.rates(ipos));
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // when
+            long t0 = System.nanoTime();
+            Map<UUID, BigDecimal> follower = pool.submit(() -> reader.rates(ipos)).get(5, TimeUnit.SECONDS);
+            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+
+            // then: 공모주마다 400ms씩(1,200ms)이 아니라 한 번(400ms 남짓)만 기다리고, 남은 3개를 한 번에 직접 합산
+            assertThat(elapsedMillis).isLessThan(1_000);
+            assertThat(follower.get(ipos.get(2).getId())).isEqualByComparingTo("3.00");
+            // 앞선 요청의 합산 1번 + 이 요청의 직접 합산 1번, 둘 다 공모주 3개를 한 번에
+            verify(repository, times(2)).sumRequestedQuantityByIpoIds(argThat((Collection<UUID> ids) -> ids.size() == 3), any());
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
     // 다른 요청들이 공모주의 계산 중 결과를 기다리는 상태가 될 때까지 기다린다 (고정 sleep 대신)
     @SuppressWarnings("unchecked")
     private void awaitWaiters(UUID ipoId, int waiters) throws InterruptedException {

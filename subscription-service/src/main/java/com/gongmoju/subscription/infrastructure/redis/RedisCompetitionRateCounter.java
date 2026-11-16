@@ -48,12 +48,14 @@ public class RedisCompetitionRateCounter implements CompetitionRateCounter {
             redis.call('PEXPIRE', KEYS[2], ARGV[2])
             return 1""", Long.class);
 
-    // 표시가 이 토큰일 때만: 사본이 없으면 DB 합산 + 채우는 중 합계로 넣고 표시를 지운다. 토큰이 다르면(만료, 다른 쪽, 복구로 지워짐) 아무것도 안 함
+    // 표시가 이 토큰일 때만: 사본이 없으면 DB 합산 + 채우는 중 합계로 넣고 표시를 지운다. 토큰이 다르면(만료, 다른 쪽, 복구로 지워짐) 아무것도 안 함.
+    // Lua 숫자로 계산하지 않는다 (큰 값은 1e+14처럼 바뀌어 정수로 읽지 못함). DB 합산은 받은 문자열 그대로 넣고 그사이 합계는 INCRBY로 더한다 (유효 시간 유지)
     private static final RedisScript<Long> FINISH = new DefaultRedisScript<>("""
             if redis.call('HGET', KEYS[2], 't') ~= ARGV[3] then return 0 end
             if redis.call('EXISTS', KEYS[1]) == 0 then
-              local pending = tonumber(redis.call('HGET', KEYS[2], 'p') or '0')
-              redis.call('SET', KEYS[1], tostring(tonumber(ARGV[1]) + pending), 'PX', ARGV[2])
+              redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+              local pending = redis.call('HGET', KEYS[2], 'p')
+              if pending and pending ~= '0' then redis.call('INCRBY', KEYS[1], pending) end
             end
             redis.call('DEL', KEYS[2])
             return 1""", Long.class);

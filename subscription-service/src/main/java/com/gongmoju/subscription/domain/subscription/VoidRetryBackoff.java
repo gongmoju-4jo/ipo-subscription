@@ -11,7 +11,7 @@ import java.time.Duration;
  * 조회({@code findStaleVoidIds})의 SQL 식과 같은 값을 내야 함 (같은 식을 SQL에 한 번 더 쓰므로 {@code SubscriptionStaleVoidQueryTest}가 두 결과가 같은지 확인함).
  * SQL 식의 지수 상한({@link #MAX_EXPONENT})과 요청 횟수 하한(1)도 동일.
  *
- * @param initialInterval 첫 재요청 대기 시간 (0보다 커야 함)
+ * @param initialInterval 첫 재요청 대기 시간 (1밀리초 이상이어야 함)
  * @param maxInterval     대기 시간의 상한 ({@code initialInterval} 이상이어야 함)
  */
 public record VoidRetryBackoff(Duration initialInterval, Duration maxInterval) {
@@ -20,8 +20,9 @@ public record VoidRetryBackoff(Duration initialInterval, Duration maxInterval) {
     static final int MAX_EXPONENT = 19;
 
     public VoidRetryBackoff {
-        if (initialInterval == null || initialInterval.isZero() || initialInterval.isNegative()) {
-            throw new IllegalArgumentException("초기 대기 시간은 0보다 커야 합니다: " + initialInterval);
+        // 밀리초로 바꿔 계산하므로 1밀리초 미만(0.5ms 등)은 0이 되어 모든 요청 횟수에서 대기 없이 재요청하게 됨. 조회 SQL에 넘기는 초 값도 0이 됨
+        if (initialInterval == null || initialInterval.toMillis() < 1) {
+            throw new IllegalArgumentException("초기 대기 시간은 1밀리초 이상이어야 합니다: " + initialInterval);
         }
         if (maxInterval == null || maxInterval.compareTo(initialInterval) < 0) {
             throw new IllegalArgumentException("최대 대기 시간은 초기 대기 시간 이상이어야 합니다: initial=" + initialInterval + ", max=" + maxInterval);

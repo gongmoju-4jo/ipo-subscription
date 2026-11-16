@@ -40,6 +40,16 @@ class VoidRetryPropertiesTest {
     }
 
     @Test
+    @DisplayName("초기 대기 시간이 1밀리초 미만이면 설정을 만들 수 없고 1밀리초는 만들 수 있다")
+    void constructor_rejectsSubMillisecondInitialInterval() {
+        // given, when, then
+        assertThatThrownBy(() -> new VoidRetryProperties(Duration.ofNanos(500_000), MAX, 5, 100))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(new VoidRetryProperties(Duration.ofMillis(1), MAX, 5, 100).initialInterval())
+                .isEqualTo(Duration.ofMillis(1));
+    }
+
+    @Test
     @DisplayName("상한이 초기 대기 시간보다 작으면 설정을 만들 수 없다")
     void constructor_rejectsMaxIntervalLessThanInitial() {
         assertThatThrownBy(() -> new VoidRetryProperties(INITIAL, Duration.ofSeconds(29), 5, 100)).isInstanceOf(IllegalArgumentException.class);

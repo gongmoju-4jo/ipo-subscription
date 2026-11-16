@@ -93,6 +93,28 @@ class VoidRetryBackoffTest {
     }
 
     @Test
+    @DisplayName("초기 대기 시간이 1밀리초 미만이면 만들 수 없다 (밀리초로 바꿀 때 0이 되어 대기 없이 재요청하게 됨)")
+    void constructor_rejectsSubMillisecondInitial() {
+        // given, when, then
+        assertThatThrownBy(() -> new VoidRetryBackoff(Duration.ofNanos(500_000), Duration.ofMinutes(5)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new VoidRetryBackoff(Duration.ofNanos(999_999), Duration.ofMinutes(5)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("초기 대기 시간이 1밀리초이면 만들 수 있고 대기 시간이 0이 되지 않는다")
+    void constructor_acceptsOneMillisecondInitial() {
+        // given
+        VoidRetryBackoff tiny = new VoidRetryBackoff(Duration.ofMillis(1), Duration.ofMinutes(5));
+
+        // when, then
+        assertThat(tiny.waitAfter(1)).isEqualTo(Duration.ofMillis(1));
+        assertThat(tiny.waitAfter(2)).isEqualTo(Duration.ofMillis(2));
+        assertThat(tiny.initialSeconds()).isEqualTo(0.001);
+    }
+
+    @Test
     @DisplayName("상한이 초기 대기 시간보다 작으면 만들 수 없다")
     void constructor_rejectsMaxLessThanInitial() {
         assertThatThrownBy(() -> new VoidRetryBackoff(Duration.ofSeconds(30), Duration.ofSeconds(29))).isInstanceOf(IllegalArgumentException.class);

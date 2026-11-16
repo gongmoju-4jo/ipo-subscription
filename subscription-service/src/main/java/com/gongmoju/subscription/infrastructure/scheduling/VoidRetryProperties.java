@@ -26,8 +26,9 @@ public record VoidRetryProperties(
 ) {
 
     public VoidRetryProperties {
-        if (initialInterval.isZero() || initialInterval.isNegative()) {
-            throw new IllegalArgumentException("saga.void-retry.initial-interval은 0보다 커야 합니다: " + initialInterval);
+        // 대기 시간 계산(VoidRetryBackoff)이 밀리초로 바꿔 쓰므로 1밀리초 미만은 0이 되어 백오프 없이 재요청함
+        if (initialInterval.toMillis() < 1) {
+            throw new IllegalArgumentException("saga.void-retry.initial-interval은 1밀리초 이상이어야 합니다: " + initialInterval);
         }
         if (maxInterval.compareTo(initialInterval) < 0) {
             throw new IllegalArgumentException("saga.void-retry.max-interval은 initial-interval 이상이어야 합니다: initial="

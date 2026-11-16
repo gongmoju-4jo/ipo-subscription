@@ -161,6 +161,13 @@ ON true
 | 4  | 같은 시각 서비스 로그 확인 (`eventId`로 검색)                                                                                   | `docker-compose logs {서비스} \| grep {eventId}`   |
 | 5  | [3-1](#3-1-dlt로-전송되는-경우) 표로 재발행 가능 여부 판단                                                                          |                                                 |
 
+- **배포 환경 Kafka-UI**: `compose.perf.yml`에서 `tools` 프로필이라 기본 실행되지 않음
+  - 실행: `docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml up -d kafka-ui` (서비스 이름을 지정하면 프로필과 관계없이 실행)
+  - 접속: 서버의 `127.0.0.1:8989`에만 바인딩되고 SSH(22)는 열지 않음 → SSM 포트 포워딩(`portNumber="8989",localPortNumber="18989"`) 후 `http://localhost:18989`
+  - 터널 여는 법: [PROJECT_SETUP.md "Grafana, Eureka 화면"](../PROJECT_SETUP.md#grafana-eureka-화면-포트-포워딩)
+  - 확인 후 `docker compose ... stop kafka-ui`로 중지
+  - 배포 서버에서는 실행해 보지 않음 (확인하지 않음)
+
 <a id="dlt-republish"></a>
 
 ### 3-3. 재발행
@@ -202,7 +209,7 @@ docker exec ipo-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kaf
 
 > 로그 문구로 원인을 찾는다
 > - "DLT 대상", "DLT로 보냄": [3](#3-dlt-메시지-처리)
-> - "운영자 확인 필요": 자동 처리가 멈춘 상태라 아래 표대로 확인
+> - "운영자 확인 필요": 자동 처리가 중지됐거나 지연된 상태라 아래 표대로 확인
 
 - **조회**: `docker-compose logs --since 10m {서비스} | grep -B2 -A20 ' ERROR '`
 
@@ -216,9 +223,9 @@ docker exec ipo-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kaf
 | 청약  | `정상적으로는 오지 않는 ... 받음`                                                                                | 현재 상태에서 받을 수 없는 이벤트 (순서 역전, 중복)               | 청약 상태 확인 (SQL 3). DLT로 간 경우 [3](#3-dlt-메시지-처리)                                                                   |
 | 청약  | `... 맞지 않음. DLT로 보냄` / `이미 저장한 ... 결과와 다름`                                                           | 배정, 정산 결과가 청약과 불일치                            | 개발자 확인 (SQL 3, 4)                                                                                                |
 | 청약  | `청약 확정에 실패해서 보상을 시작함` / `시간 초과로 보상을 시작함`                                                             | 보상 시작 (자동 처리 중)                               | 조치 없음. 반환 완료(`CANCELLED`)까지 SQL 3으로 확인                                                                           |
-| 청약  | `반환 재요청이 최대 횟수에 도달했지만 계좌 응답이 없음. ... 운영자 확인 필요`                                                      | 증거금 반환 응답 없음, 자동 처리 중단                        | `margin.void-requested.DLT`, `margin.voided.DLT` 확인 → 계좌 서비스 상태 확인 → 원인 해결 후 [3-3](#dlt-republish) |
+| 청약  | `반환 응답이 N번째 요청까지 오지 않음. 재요청은 계속하지만 ... 운영자 확인 필요`                                                    | 증거금 반환 응답 지연 (요청 5회 이상), 재요청은 5분 간격으로 계속   | `margin.void-requested.DLT`, `margin.voided.DLT` 확인 → 계좌 서비스 상태 확인 → 원인 해결 후 [3-3](#dlt-republish) |
 | 청약  | `공모주 마감이 대기 시간 뒤 ... 넘게 막힘. ... 운영자 확인 필요`                                                           | 처리 중 청약(`PENDING` 등)이 남아 마감 불가                | SQL 5로 남은 청약 확인 → `margin.*.DLT` 확인 → 원인 해결 후 재발행                                                                |
-| 청약  | `응답 시간 초과 처리 중 오류` / `반환 재요청 처리 중 오류` / `공모주 마감 처리 중 오류`                                             | 스케줄러 1회 실패, 다음 주기에 재시도                        | 같은 오류가 반복되면 예외 확인                                                                                                |
+| 청약  | `응답 시간 초과 처리 중 오류` / `반환 재요청 처리 중 오류` / `반환 지연 알림 확인 중 오류` / `공모주 마감 처리 중 오류`                                             | 스케줄러 1회 실패, 다음 주기에 재시도                        | 같은 오류가 반복되면 예외 확인                                                                                                |
 | 청약  | `배정 전체 수량이 일반청약 물량보다 많음` / `배정 청약 건수가 확정 청약 수와 다름`                                                   | 배정 결과 검증 실패                                   | 개발자 확인 (배정 회차, 추첨 시드)                                                                                            |
 | 배정  | `배정 회차를 FAILED로 기록하지 못했습니다`                                                                          | 배정 실패 + 실패 기록도 실패                             | 조치 없음. 다음 재시도에서 `RUNNING` 회차를 다시 실행                                                                              |
 | 공통  | `Outbox 발행 연속 실패`                                                                                    | 같은 Outbox 행 발행 5회 연속 실패 (발행은 계속 시도)           | Kafka 상태 확인 (`docker-compose ps kafka`), SQL 6                                                                   |

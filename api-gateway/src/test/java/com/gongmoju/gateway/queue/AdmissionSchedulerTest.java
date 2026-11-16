@@ -14,6 +14,7 @@ import org.springframework.data.redis.connection.lettuce.LettuceClientConfigurat
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -317,6 +318,113 @@ class AdmissionSchedulerTest extends RedisTestSupport {
 
         assertThat(up(registry)).isZero();
         assertThat(failingReasons(registry)).containsExactly("other");
+    }
+
+    @Test
+    void 게이트웨이가_여러_대여도_같은_칸에서는_한_대만_입장_처리한다() {
+        UUID ipoId = UUID.randomUUID();
+        enterUsers(ipoId, 1_500);
+        // 칸 1,000초, 초당 1명 → 한 칸에 1,000명. 두 대가 모두 처리하면 0명, 한 대만 처리하면 500명이 남는다
+        // (칸이 길어 두 호출 사이에 칸 경계를 넘을 일이 사실상 없다)
+        QueueProperties properties = new QueueProperties(Duration.ofSeconds(1_000), 1, Duration.ofMinutes(5), 3, 500, 1000);
+        SimpleMeterRegistry firstRegistry = new SimpleMeterRegistry();
+        SimpleMeterRegistry secondRegistry = new SimpleMeterRegistry();
+        AdmissionScheduler first = new AdmissionScheduler(new QueueRedisRepository(TEMPLATE), properties, firstRegistry,
+                Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(5));
+        AdmissionScheduler second = new AdmissionScheduler(new QueueRedisRepository(TEMPLATE), properties, secondRegistry,
+                Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(5));
+
+        first.run();
+        second.run();
+
+        assertThat(waitingCount(ipoId)).isEqualTo(500);
+        // 건너뛴 쪽도 Redis에 정상적으로 닿았으므로 성공이다 (QueueAdmissionDown이 울리지 않는다)
+        assertThat(up(firstRegistry)).isEqualTo(1);
+        assertThat(up(secondRegistry)).isEqualTo(1);
+        assertThat(failingReasons(secondRegistry)).isEmpty();
+    }
+
+    @Test
+    void 대기자가_없으면_칸을_차지하지_않는다() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        scheduler(repository, registry, Duration.ofSeconds(5)).run();
+
+        assertThat(TEMPLATE.keys(QueueRedisRepository.ADMIT_TICK_KEY_PREFIX + "*").collectList().block()).isEmpty();
+        assertThat(up(registry)).isEqualTo(1);
+    }
+
+    @Test
+    void Redis_메모리_상한이어도_대기자가_없으면_성공이다() {
+        // 대기자가 없으면 칸을 차지하지 않아 Redis에 쓰지 않는다. redis_oom은 대기자가 있을 때 칸 차지나 허가를 쓰다 거부된 경우만이다
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AdmissionScheduler scheduler = scheduler(repository, registry, Duration.ofSeconds(5));
+        setMaxMemory("1");
+        try {
+            scheduler.run();
+        } finally {
+            setMaxMemory("0");
+        }
+
+        assertThat(up(registry)).isEqualTo(1);
+        assertThat(failingReasons(registry)).isEmpty();
+    }
+
+    @Test
+    void 마지막_대기자가_이탈한_공모주는_칸을_차지하지_않고_입장_처리_대상에서_빠진다() {
+        UUID ipoId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        repository.enter(ipoId, userId, NOW, ALIVE).block();
+        // 이탈은 대기열만 비우고 입장 처리 대상(queue:active)에서는 빼지 않는다
+        repository.leave(ipoId, userId).block();
+        assertThat(repository.activeIpoIds().collectList().block()).containsExactly(ipoId);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        scheduler(repository, registry, Duration.ofSeconds(5)).run();
+
+        assertThat(repository.activeIpoIds().collectList().block()).isEmpty();
+        assertThat(TEMPLATE.keys(QueueRedisRepository.ADMIT_TICK_KEY_PREFIX + "*").collectList().block()).isEmpty();
+        assertThat(up(registry)).isEqualTo(1);
+    }
+
+    @Test
+    void Redis_메모리_상한에서_마지막_대기자가_이탈한_공모주도_redis_oom_없이_대상에서_빠진다() {
+        UUID ipoId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        repository.enter(ipoId, userId, NOW, ALIVE).block();
+        repository.leave(ipoId, userId).block();
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AdmissionScheduler scheduler = scheduler(repository, registry, Duration.ofSeconds(5));
+        // 칸 차지(SET)는 메모리 상한에서 거부되지만, 대상에서 빼는 명령(SREM)은 허용된다
+        setMaxMemory("1");
+        try {
+            scheduler.run();
+        } finally {
+            setMaxMemory("0");
+        }
+
+        assertThat(up(registry)).isEqualTo(1);
+        assertThat(failingReasons(registry)).isEmpty();
+        assertThat(repository.activeIpoIds().collectList().block()).isEmpty();
+    }
+
+    @Test
+    void 칸_차지가_실패하면_사유를_기록하고_입장_처리하지_않는다() {
+        UUID ipoId = UUID.randomUUID();
+        enterUsers(ipoId, 3);
+        QueueRedisRepository claimFailing = new QueueRedisRepository(TEMPLATE) {
+            @Override
+            public Mono<Boolean> claimAdmitTick(Duration interval) {
+                return Mono.error(new QueryTimeoutException("시험용 시간 초과"));
+            }
+        };
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        scheduler(claimFailing, registry, Duration.ofSeconds(5)).run();
+
+        assertThat(up(registry)).isZero();
+        assertThat(failingReasons(registry)).containsExactly("redis_timeout");
+        assertThat(waitingCount(ipoId)).isEqualTo(3);
     }
 
     private AdmissionScheduler scheduler(int admitRate) {

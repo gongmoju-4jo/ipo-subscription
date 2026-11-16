@@ -11,10 +11,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -134,6 +136,27 @@ class IpoCloseSchedulerTest {
 
         scheduler.closeDueIpos(next);
         assertThat(alertCount(output)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("더는 마감 대상이 아닌 공모주(다른 인스턴스가 마감함)의 알림 시각은 다음 실행에서 지운다")
+    void closeDueIpos_dropsAlertTime_whenIpoIsNoLongerDue() {
+        // given: 막혀서 알림 시각이 남은 공모주
+        Instant first = CLOSABLE_AT.plus(ALERT_AFTER);
+        blockedByInProgress(first);
+        scheduler.closeDueIpos(first);
+        assertThat(lastAlertAt()).containsKey(ipoId);
+
+        // when: 다음 실행에서는 마감 대상이 아님 (락을 잡은 다른 인스턴스가 마감함)
+        scheduler.closeDueIpos(first.plusSeconds(5));
+
+        // then
+        assertThat(lastAlertAt()).isEmpty();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<UUID, Instant> lastAlertAt() {
+        return (Map<UUID, Instant>) ReflectionTestUtils.getField(scheduler, "lastAlertAt");
     }
 
     private void due(Instant now) {

@@ -13,6 +13,7 @@ import reactor.core.publisher.Mono;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.ArrayList;
@@ -29,7 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>게이트웨이가 여러 대여도 입장 속도는 queue.admit-rate를 넘지 않는다. 시간을 입장 주기 길이의 칸으로 나누고
  * ({@link QueueRedisRepository#claimAdmitTick}), 칸을 먼저 차지한 게이트웨이 한 대만 입장 처리하고 나머지는 그 주기를 건너뛴다 (D-34).
- * 칸은 대기자가 있을 때만 차지한다 (대기자가 없으면 지금처럼 Redis에 쓰지 않는다). 건너뛴 주기도 Redis에 정상적으로 닿았으므로 성공으로 기록한다.
+ * 칸은 대기자가 있을 때만 차지한다. 대기열이 빈 공모주가 입장 처리 대상에 남아 있으면 칸 없이 대상에서 빼기만 한다. 건너뛴 주기도 Redis에 정상적으로 닿았으므로 성공으로 기록한다.
  * 모든 게이트웨이가 같은 queue.admit-interval을 써야 같은 칸으로 판단한다.
  *
  * <p>입장 처리 결과를 지표 두 개로 내보낸다. 대기자가 없어도 매 주기 Redis를 조회하므로 요청이 없는 시간의 Redis 장애도 잡힌다.
@@ -127,23 +128,27 @@ public class AdmissionScheduler {
             if (ipoIds.isEmpty()) {
                 return Mono.empty();
             }
-            // 이번 칸을 다른 게이트웨이가 이미 처리했으면 건너뛴다
-            return repository.claimAdmitTick(properties.admitInterval())
-                    .filter(Boolean::booleanValue)
-                    .flatMap(claimed -> admitAll(ipoIds, now));
+            // 공모주마다 대기 인원을 먼저 읽어 남는 자리가 버려지지 않게 나눈다
+            return Flux.fromIterable(ipoIds).concatMap(repository::waitingCount).collectList().flatMap(counts -> {
+                long[] demands = counts.stream().mapToLong(Long::longValue).toArray();
+                if (Arrays.stream(demands).sum() == 0) {
+                    // 마지막 대기자가 이탈하면 대기열은 비어도 입장 처리 대상에는 남는다. 칸을 차지하지 않고 admit.lua로 대상에서 빼기만 한다
+                    // (허가를 주지 않아 여러 대가 같이 해도 입장 속도와 무관. Redis 메모리 상한에서도 빼는 명령은 허용되어 redis_oom이 되지 않는다)
+                    return admitShares(ipoIds, now, demands);
+                }
+                // 이번 칸을 다른 게이트웨이가 이미 처리했으면 건너뛴다
+                return repository.claimAdmitTick(properties.admitInterval())
+                        .filter(Boolean::booleanValue)
+                        .flatMap(claimed -> admitShares(ipoIds, now,
+                                allocate(properties.admitsPerTick(), demands, tick.getAndIncrement())));
+            });
         });
     }
 
-    private Mono<Void> admitAll(List<UUID> ipoIds, Instant now) {
-        long offset = tick.getAndIncrement();
-        // 공모주마다 대기 인원을 먼저 읽어 남는 자리가 버려지지 않게 나눈다
-        return Flux.fromIterable(ipoIds).concatMap(repository::waitingCount).collectList().flatMap(counts -> {
-            long[] demands = counts.stream().mapToLong(Long::longValue).toArray();
-            long[] shares = allocate(properties.admitsPerTick(), demands, offset);
-            return Flux.range(0, ipoIds.size())
-                    .concatMap(i -> admit(ipoIds.get(i), now, shares[i]))
-                    .then();
-        });
+    private Mono<Void> admitShares(List<UUID> ipoIds, Instant now, long[] shares) {
+        return Flux.range(0, ipoIds.size())
+                .concatMap(i -> admit(ipoIds.get(i), now, shares[i]))
+                .then();
     }
 
     private Mono<AdmitResult> admit(UUID ipoId, Instant now, long count) {

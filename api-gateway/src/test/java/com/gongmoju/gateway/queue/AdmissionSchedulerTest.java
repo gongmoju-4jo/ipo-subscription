@@ -371,6 +371,44 @@ class AdmissionSchedulerTest extends RedisTestSupport {
     }
 
     @Test
+    void 마지막_대기자가_이탈한_공모주는_칸을_차지하지_않고_입장_처리_대상에서_빠진다() {
+        UUID ipoId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        repository.enter(ipoId, userId, NOW, ALIVE).block();
+        // 이탈은 대기열만 비우고 입장 처리 대상(queue:active)에서는 빼지 않는다
+        repository.leave(ipoId, userId).block();
+        assertThat(repository.activeIpoIds().collectList().block()).containsExactly(ipoId);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        scheduler(repository, registry, Duration.ofSeconds(5)).run();
+
+        assertThat(repository.activeIpoIds().collectList().block()).isEmpty();
+        assertThat(TEMPLATE.keys(QueueRedisRepository.ADMIT_TICK_KEY_PREFIX + "*").collectList().block()).isEmpty();
+        assertThat(up(registry)).isEqualTo(1);
+    }
+
+    @Test
+    void Redis_메모리_상한에서_마지막_대기자가_이탈한_공모주도_redis_oom_없이_대상에서_빠진다() {
+        UUID ipoId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        repository.enter(ipoId, userId, NOW, ALIVE).block();
+        repository.leave(ipoId, userId).block();
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AdmissionScheduler scheduler = scheduler(repository, registry, Duration.ofSeconds(5));
+        // 칸 차지(SET)는 메모리 상한에서 거부되지만, 대상에서 빼는 명령(SREM)은 허용된다
+        setMaxMemory("1");
+        try {
+            scheduler.run();
+        } finally {
+            setMaxMemory("0");
+        }
+
+        assertThat(up(registry)).isEqualTo(1);
+        assertThat(failingReasons(registry)).isEmpty();
+        assertThat(repository.activeIpoIds().collectList().block()).isEmpty();
+    }
+
+    @Test
     void 칸_차지가_실패하면_사유를_기록하고_입장_처리하지_않는다() {
         UUID ipoId = UUID.randomUUID();
         enterUsers(ipoId, 3);

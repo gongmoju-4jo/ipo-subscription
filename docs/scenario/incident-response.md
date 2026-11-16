@@ -9,6 +9,7 @@
 
 - **대상**: Grafana 알림 규칙 7개 (`docker/grafana/provisioning/alerting/rules.yml`), DLT 메시지, 원장 대사 불일치
 - **알림 규칙 조건, 설정**: [PROJECT_SETUP.md "Slack 장애 알림"](../PROJECT_SETUP.md#slack-장애-알림) (이 문서는 받은 후 할 일만 다룸)
+- **SAGA 실패 시 시스템 처리**: [청약 SAGA 실패 시나리오](./saga-failure.md) (거절, 시간 초과 보상, 확정 실패 보상, 반환 재요청)
 - **명령 표기**: 문서의 `docker-compose {명령}`은 장애가 난 환경에서 실행한다
     - 배포 서버: Session Manager로 접속, `sudo -i`, `cd /opt/ipo` 후 `docker-compose` 자리에
       `docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml` 사용
@@ -124,6 +125,8 @@ ON true
 
 - **복구 확인**: 1-2분 안에 `✅ 복구 QueueAdmissionDown`
 
+<a id="dlt"></a>
+
 ## 3. DLT 메시지 처리
 
 > DLT 메시지는 원인에 따라 두 가지로 나뉜다
@@ -158,8 +161,11 @@ ON true
 | 4  | 같은 시각 서비스 로그 확인 (`eventId`로 검색)                                                                                   | `docker-compose logs {서비스} \| grep {eventId}`   |
 | 5  | [3-1](#3-1-dlt로-전송되는-경우) 표로 재발행 가능 여부 판단                                                                          |                                                 |
 
-### 3-3. 재발행 (원인 해결 후, 재발행 가능한 경우만)
+<a id="dlt-republish"></a>
 
+### 3-3. 재발행
+
+- **대상**: 원인을 해결한 후, [3-1](#3-1-dlt로-전송되는-경우) 표에서 재발행 가능한 경우만
 - **방식**: DLT 메시지 1건을 키, 본문 그대로 원래 토픽에 다시 발행 → Consumer가 같은 `eventId`로 처리
 - **중복 방지**: 이미 처리된 `eventId`면 이벤트 처리 기록(`processed_event`)으로 반영하지 않는다
 - **주의**: 원인을 해결하지 않고 재발행하면 같은 이유로 다시 DLT에 적재된다
@@ -190,6 +196,8 @@ docker exec ipo-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kaf
 - **DLT 메시지는 삭제하지 않는다**: 처리 기록으로 보관. 재발행한 메시지는 Slack 스레드에 토픽, 파티션, 오프셋, 처리 결과를 기록
 - **Git Bash**: `docker` 명령 바로 이전에 `MSYS_NO_PATHCONV=1 ` 추가
 
+<a id="error-log"></a>
+
 ## 4. ERROR 로그별 조치
 
 > 로그 문구로 원인을 찾는다
@@ -208,7 +216,7 @@ docker exec ipo-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kaf
 | 청약  | `정상적으로는 오지 않는 ... 받음`                                                                                | 현재 상태에서 받을 수 없는 이벤트 (순서 역전, 중복)               | 청약 상태 확인 (SQL 3). DLT로 간 경우 [3](#3-dlt-메시지-처리)                                                                   |
 | 청약  | `... 맞지 않음. DLT로 보냄` / `이미 저장한 ... 결과와 다름`                                                           | 배정, 정산 결과가 청약과 불일치                            | 개발자 확인 (SQL 3, 4)                                                                                                |
 | 청약  | `청약 확정에 실패해서 보상을 시작함` / `시간 초과로 보상을 시작함`                                                             | 보상 시작 (자동 처리 중)                               | 조치 없음. 반환 완료(`CANCELLED`)까지 SQL 3으로 확인                                                                           |
-| 청약  | `반환 재요청이 최대 횟수에 도달했지만 계좌 응답이 없음. ... 운영자 확인 필요`                                                      | 증거금 반환 응답 없음, 자동 처리 중단                        | `margin.void-requested.DLT`, `margin.voided.DLT` 확인 → 계좌 서비스 상태 확인 → 원인 해결 후 [3-3](#3-3-재발행-원인-해결-후-재발행-가능한-경우만) |
+| 청약  | `반환 재요청이 최대 횟수에 도달했지만 계좌 응답이 없음. ... 운영자 확인 필요`                                                      | 증거금 반환 응답 없음, 자동 처리 중단                        | `margin.void-requested.DLT`, `margin.voided.DLT` 확인 → 계좌 서비스 상태 확인 → 원인 해결 후 [3-3](#dlt-republish) |
 | 청약  | `공모주 마감이 대기 시간 뒤 ... 넘게 막힘. ... 운영자 확인 필요`                                                           | 처리 중 청약(`PENDING` 등)이 남아 마감 불가                | SQL 5로 남은 청약 확인 → `margin.*.DLT` 확인 → 원인 해결 후 재발행                                                                |
 | 청약  | `응답 시간 초과 처리 중 오류` / `반환 재요청 처리 중 오류` / `공모주 마감 처리 중 오류`                                             | 스케줄러 1회 실패, 다음 주기에 재시도                        | 같은 오류가 반복되면 예외 확인                                                                                                |
 | 청약  | `배정 전체 수량이 일반청약 물량보다 많음` / `배정 청약 건수가 확정 청약 수와 다름`                                                   | 배정 결과 검증 실패                                   | 개발자 확인 (배정 회차, 추첨 시드)                                                                                            |

@@ -317,7 +317,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 | --- | --- | --- |
 | `redis_timeout` | Redis 응답 없음 (연결 끊김 또는 응답 지연으로 시간 초과) | 명령 시간 초과(2초), 입장 처리 5초 초과. **Redis 컨테이너가 멈춘 경우도 여기로 온다** (클라이언트가 재연결을 기다리다 시간 초과로 끝나서 "느림"과 "멈춤"을 구분할 수 없다) |
 | `redis_connection` | Redis 연결 실패 (연결 거부 또는 주소를 찾을 수 없음) | 새 연결을 맺지 못함. 게이트웨이가 Redis 없이 기동했을 때 등 |
-| `redis_oom` | Redis 메모리 상한 도달 (쓰기 거부) | `OOM command not allowed` (`maxmemory`, `noeviction`). 대기자가 있을 때 입장 허가를 쓰다가 거부된 경우라, 대기자가 없으면 이 사유로는 뜨지 않는다 (그때는 진입 API가 503) |
+| `redis_oom` | Redis 메모리 상한 도달 (쓰기 거부) | `OOM command not allowed` (`maxmemory`, `noeviction`). 대기자가 있을 때 칸 차지 또는 입장 허가를 쓰다가 거부된 경우라, 대기자가 없으면 이 사유로는 뜨지 않는다 (그때는 진입 API가 503) |
 | `redis_error` | Redis 오류 (키 자료형 불일치, 스크립트 오류 등) | 위에 해당하지 않는 Redis 오류 |
 | `other` | 게이트웨이 내부 오류 (Redis 외 원인) | Redis와 무관한 오류 (코드 오류 등) |
 

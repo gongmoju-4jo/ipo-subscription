@@ -356,7 +356,7 @@ class AdmissionSchedulerTest extends RedisTestSupport {
 
     @Test
     void Redis_메모리_상한이어도_대기자가_없으면_성공이다() {
-        // 대기자가 없으면 칸을 차지하지 않아 Redis에 쓰지 않는다. redis_oom은 대기자가 있을 때 허가를 쓰다 거부된 경우만이다
+        // 대기자가 없으면 칸을 차지하지 않아 Redis에 쓰지 않는다. redis_oom은 대기자가 있을 때 칸 차지나 허가를 쓰다 거부된 경우만이다
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         AdmissionScheduler scheduler = scheduler(repository, registry, Duration.ofSeconds(5));
         setMaxMemory("1");

@@ -15,6 +15,15 @@ management:
       # 서비스별 응답 시간의 p95, p99를 Prometheus에서 계산할 수 있도록 구간(histogram)을 함께 내보낸다
       percentiles-histogram:
         http.server.requests: true
+  # 분산 추적 (Zipkin). IntelliJ는 localhost:9411(docker-compose의 zipkin), Docker는 compose가 ZIPKIN_ENDPOINT를 넣는다
+  # Zipkin이 없거나 멈춰도 요청은 그대로 처리되고 보내지 못한 span만 버린다
+  tracing:
+    sampling:
+      # 추적을 보낼 요청 비율. 로컬, 배포는 전부(1.0), 부하 측정은 compose.perf.yml이 0으로 둔다 (Boot 기본값은 0.1)
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 spring:
   application:
@@ -60,10 +69,22 @@ spring:
       auto-offset-reset: earliest
       # 처리가 끝난 레코드만 커밋한다 (리스너 ack-mode: record)
       enable-auto-commit: false
+    # Kafka 발행, 수신을 추적에 넣는다. 발행할 때 traceparent 헤더를 붙이고, 받을 때 그 헤더로 trace를 이어 간다
+    # 켜면 리스너, 템플릿 지표(spring_kafka_listener, spring_kafka_template)도 관측 기반으로 바뀌어 태그 이름이 달라진다
+    template:
+      observation-enabled: true
     listener:
       ack-mode: record
       # 토픽 파티션 수(docker/kafka/create-topics.sh 기본값 6)와 같은 수. 파티션보다 많으면 남는 Consumer는 일하지 않는다
       concurrency: 6
+      observation-enabled: true
+
+# 증거금 정산 Consumer (allocation.result) 배치 리스너 (#114)
+margin:
+  settle:
+    # 1번 수신, 트랜잭션 1개, 커밋 1번에 처리하는 최대 메시지 수 (리스너의 max.poll.records)
+    # 클수록 커밋 횟수가 감소하지만, 같은 배치의 계좌 행 잠금 보유 시간과 실패 시 1건씩 재처리하는 건수가 증가한다
+    batch-size: ${MARGIN_SETTLE_BATCH_SIZE:100}
 
 # Outbox 발행기 (서비스 3개가 같은 키)
 outbox:
@@ -97,6 +118,13 @@ jwt:
   issuer: account-service
   # 로그인 응답의 expiresIn과 같은 값 (초)
   expires-in-seconds: 3600
+
+# 첫 관리자 시드 (AdminSeedRunner). 기동할 때 이 로그인 ID의 계정이 없으면 ADMIN으로 만든다
+# 둘 다 비우면 건너뛰고, 하나만 있거나 형식(회원가입과 같은 규칙)이 틀리면 기동할 때 실패한다
+admin-seed:
+  login-id: ${ADMIN_LOGIN_ID:}
+  # 비밀번호 원문. 출력하거나 로그에 남기지 않는다
+  password: ${ADMIN_PASSWORD:}
 
 eureka:
   client:

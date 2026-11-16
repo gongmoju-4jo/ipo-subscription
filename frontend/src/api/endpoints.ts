@@ -45,6 +45,11 @@ export const ipoApi = {
 };
 
 // 관리자 전용 (Gateway가 ADMIN이 아니면 403으로 거부한다)
+// 관리자 계정 생성 (ADMIN만, 성공 201). 응답은 회원가입과 같은 형식이고 만든 계정의 역할은 항상 ADMIN이다
+export const adminUserApi = {
+  create: (body: SignUpRequest) => api.post<SignUpResponse>('/api/v1/admin/users', body),
+};
+
 export const adminIpoApi = {
   // 등록하면 OPEN 상태, 성공 201. 게이트웨이 대기열은 최대 5초 후부터 이 공모주로 진입 가능하다
   create: (body: IpoCreateRequest) => api.post<IpoCreateResponse>('/api/v1/admin/ipos', body),

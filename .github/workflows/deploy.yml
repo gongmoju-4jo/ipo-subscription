@@ -5,7 +5,8 @@ name: Deploy
 # 배포 브랜치를 main으로 바꿀 때는 branches를 main으로 바꾸고, ci.yml의 push 대상에도 main을 추가한다
 #
 # 저장소 변수(Settings → Secrets and variables → Actions → Variables)
-#   AWS_REGION, AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY, EC2_INSTANCE_ID, DEPLOY_BASE_URL(예: http://{고정 IP})
+#   AWS_REGION, AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY, EC2_INSTANCE_ID, DEPLOY_BASE_URL(예: https://{도메인})
+# 이미지: 서비스 5개(루트 Dockerfile) + web(frontend/Dockerfile, 프론트 빌드 + Caddy). ECR 저장소 ipo/{이름}
 # 스모크 계정: Parameter Store /ipo/prod/SMOKE_LOGIN_ID, SMOKE_PASSWORD (서버 안에서 deploy.sh가 사용)
 # AWS 권한은 OIDC로 받는다 (장기 액세스 키를 GitHub에 두지 않는다)
 on:
@@ -123,6 +124,7 @@ jobs:
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
       # ECR 태그는 덮어쓸 수 없다(IMMUTABLE). 이미 올라간 커밋(재배포, 롤백)은 빌드를 건너뛴다
+      # web은 frontend/Dockerfile이 있는 커밋만 만든다 (그 전 커밋으로 롤백할 때는 web 없이 배포된다)
       - name: 이미지가 이미 있는지 확인
         id: images
         run: |
@@ -131,7 +133,12 @@ jobs:
             docker manifest inspect "$ECR_REGISTRY/ipo/$m:$SHA" > /dev/null 2>&1 || missing="$missing $m"
           done
           echo "missing=${missing# }" >> "$GITHUB_OUTPUT"
-          echo "새로 빌드할 이미지: ${missing:- 없음}"
+          web=false
+          if [[ -f frontend/Dockerfile ]] && ! docker manifest inspect "$ECR_REGISTRY/ipo/web:$SHA" > /dev/null 2>&1; then
+            web=true
+          fi
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "새로 빌드할 이미지: ${missing:- 없음} / web: $web"
 
       - name: JDK 21 설정
         if: steps.images.outputs.missing != ''
@@ -158,11 +165,28 @@ jobs:
             docker push "$image"
           done
 
+      - name: web 이미지 빌드, 푸시
+        if: steps.images.outputs.web == 'true'
+        run: |
+          image="$ECR_REGISTRY/ipo/web:$SHA"
+          docker build -t "$image" frontend
+          docker push "$image"
+
       # 서버의 레포를 먼저 배포 커밋으로 맞춘 뒤 그 커밋의 deploy.sh를 실행한다
+      # web이 없는 커밋(이전 커밋으로 롤백)이면 web을 먼저 멈춘다
+      #   그 커밋의 deploy.sh는 compose에 없는 컨테이너를 정리하지 않아, web이 80을 쥔 채로 남으면 게이트웨이가 80을 열지 못한다
+      #   지우지 않고 멈추기만 하는 이유: 그 deploy.sh가 서비스를 바꾸기 전(값 검사, ECR 로그인, pull)에 실패하면
+      #   게이트웨이는 아직 127.0.0.1:8080에만 열려 있어 80, 443을 받을 곳이 없어진다. 그때는 web을 다시 띄운다
+      #   그 밖의 경우(성공, 또는 이전 게이트웨이가 80을 잡은 뒤 실패)는 web을 지운다
+      #   멈춘 web을 남겨 두면 나중에 web이 있는 커밋을 배포할 때 compose가 그 컨테이너를 재사용하며 포트가 연결되지 않았다 (로컬 실험)
       - name: EC2 배포 (SSM Run Command)
         run: |
           # SSM Run Command는 HOME이 비어 있는 환경에서 root로 실행되어 git, docker 설정 위치를 정해 준다
-          cmd="export HOME=/root && cd /opt/ipo && git fetch --quiet origin && git checkout --quiet --detach $SHA && ECR_REGISTRY=$ECR_REGISTRY AWS_REGION=$AWS_REGION bash deploy/deploy.sh $SHA"
+          # 서버의 sh가 실행한다. 작은따옴표 구간의 $는 서버에서 풀리고, 큰따옴표 구간의 $SHA 등은 여기서 풀린다
+          cmd="export HOME=/root && cd /opt/ipo && git fetch --quiet origin && git checkout --quiet --detach $SHA || exit 1"
+          cmd+='; web_stopped=0; if ! grep -q "container_name: ipo-web" compose.prod.yml && docker stop ipo-web > /dev/null 2>&1; then web_stopped=1; fi'
+          cmd+="; ECR_REGISTRY=$ECR_REGISTRY AWS_REGION=$AWS_REGION bash deploy/deploy.sh $SHA"
+          cmd+='; rc=$?; if [ "$web_stopped" = 1 ]; then if [ "$rc" -ne 0 ] && docker start ipo-web > /dev/null 2>&1; then echo "배포가 서비스를 바꾸기 전에 실패해 멈춰 둔 web(ipo-web)을 다시 띄웠습니다"; else docker rm -f ipo-web > /dev/null 2>&1; fi; fi; exit $rc'
           params="$(jq -cn --arg c "$cmd" '{commands: [$c], executionTimeout: ["900"]}')"
           command_id="$(aws ssm send-command \
             --instance-ids "$EC2_INSTANCE_ID" \
@@ -191,8 +215,10 @@ jobs:
           [[ "$status" == "Success" ]]
 
       # 비밀번호가 담긴 스모크는 서버 안에서 deploy.sh가 실행했다 (HTTP로 인터넷에 비밀번호를 보내지 않으려고)
-      # 여기서는 인터넷에서 공개 주소로 실제로 들어오는지만 본다 (보안 그룹, 고정 IP, 게이트웨이 공개). 자격 증명은 보내지 않는다
-      - name: 공개 주소 확인 (Swagger 200, 토큰 없는 API 401)
+      # 여기서는 인터넷에서 공개 주소로 실제로 들어오는지만 본다 (보안 그룹, 도메인, 인증서, web). 자격 증명은 보내지 않는다
+      # curl은 인증서를 검증한다. 인증서가 아직 없거나 틀리면 응답 코드가 000이다
+      # web이 있는 커밋은 프론트 화면, http → https 이동, 내부 경로(/ops, /prom)를 막았는지도 본다
+      - name: 공개 주소 확인
         env:
           BASE_URL: ${{ vars.DEPLOY_BASE_URL }}
         run: |
@@ -204,7 +230,23 @@ jobs:
             [[ "$s" == 200 ]] && break
             sleep 5
           done
-          [[ "$s" == 200 ]] || { echo "Swagger 화면 응답이 200이 아닙니다: $s"; exit 1; }
+          if [[ "$s" != 200 ]]; then
+            echo "Swagger 화면 응답이 200이 아닙니다: $s"
+            [[ "$s" == 000 ]] && echo "연결 또는 인증서 문제일 수 있습니다. 서버에서 web 로그를 확인하세요 (docker compose ... logs web)"
+            exit 1
+          fi
           s="$(code /api/v1/ipos)"
           [[ "$s" == 401 ]] || { echo "토큰 없는 API 응답이 401이 아닙니다: $s"; exit 1; }
-          echo "공개 주소 정상: Swagger 200, 토큰 없는 API 401"
+          if [[ -f frontend/Dockerfile ]]; then
+            s="$(code /)"
+            [[ "$s" == 200 ]] || { echo "프론트 화면 응답이 200이 아닙니다: $s"; exit 1; }
+            for p in /ops/summary /prom/api/v1/query; do
+              s="$(code "$p")"
+              [[ "$s" == 404 ]] || { echo "$p 응답이 404가 아닙니다 (외부에 열리면 안 되는 경로): $s"; exit 1; }
+            done
+            if [[ "$base" == https://* ]]; then
+              r="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 "http://${base#https://}/" || true)"
+              [[ "$r" == 30[178]" https://"* ]] || { echo "http 접속이 https로 넘어가지 않습니다: $r"; exit 1; }
+            fi
+          fi
+          echo "공개 주소 정상: Swagger 200, 토큰 없는 API 401 (web이 있으면 프론트 200, /ops, /prom 404, http → https)"

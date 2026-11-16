@@ -7,10 +7,17 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	// Prometheus 수집용 지표 (/actuator/prometheus)
 	implementation 'io.micrometer:micrometer-registry-prometheus'
+	// 분산 추적 (Micrometer Tracing + Brave → Zipkin). 버전은 Boot BOM. 주소, 샘플링은 application.yml의 management.zipkin, management.tracing
+	implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+	implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
 	implementation 'org.springframework.kafka:spring-kafka'
 	implementation 'org.springframework.cloud:spring-cloud-starter-netflix-eureka-client'
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.17'
 	runtimeOnly 'org.postgresql:postgresql'
+
+	// 스케줄러 중복 실행 방지 (common CommonSchedulerLockAutoConfiguration이 켜짐). 버전은 common/build.gradle과 같게
+	implementation 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'
+	implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.10.0'
 
 	// contextLoads 등 DB 없이 띄우는 테스트용
 	testRuntimeOnly 'com.h2database:h2'

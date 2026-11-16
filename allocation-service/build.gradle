@@ -7,6 +7,9 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	// Prometheus 수집용 지표 (/actuator/prometheus)
 	implementation 'io.micrometer:micrometer-registry-prometheus'
+	// 분산 추적 (Micrometer Tracing + Brave → Zipkin). 버전은 Boot BOM. 주소, 샘플링은 application.yml의 management.zipkin, management.tracing
+	implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+	implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
 	implementation 'org.springframework.kafka:spring-kafka'
 	implementation 'org.springframework.cloud:spring-cloud-starter-netflix-eureka-client'
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.17'
@@ -15,6 +18,8 @@ dependencies {
 	// 청약 서비스 확정 목록 조회 (D-08 A). Timeout, Circuit Breaker는 이 서비스에서 설정
 	implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
 	implementation 'org.springframework.cloud:spring-cloud-starter-circuitbreaker-resilience4j'
+	// Feign 호출을 추적에 넣는다 (배정 → 청약 확정 목록 조회가 배정 trace에 이어짐). 버전은 Spring Cloud BOM
+	implementation 'io.github.openfeign:feign-micrometer'
 
 	// contextLoads 등 DB 없이 띄우는 테스트용
 	testRuntimeOnly 'com.h2database:h2'

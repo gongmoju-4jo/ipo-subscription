@@ -12,7 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 
 @Slf4j
 @Service
@@ -22,10 +21,6 @@ public class IpoAllocationFinishService {
     // 이벤트 명세 3-2 (제안)
     public static final String CONSUMER_NAME = "subscription-allocation-finished";
     public static final String TOPIC = "allocation.finished";
-
-    // 배정 대상이었던 청약. 마감 후에는 이 집합이 바뀌지 않고, 일부는 이미 배정 결과나 정산 결과를 받아 다음 상태로 넘어갔을 수 있음
-    private static final List<SubscriptionStatus> ALLOCATION_TARGET_STATUSES =
-            List.of(SubscriptionStatus.CONFIRMED, SubscriptionStatus.ALLOCATED, SubscriptionStatus.REFUNDED);
 
     private final ProcessedEventRepository processedEventRepository;
     private final IpoRepository ipoRepository;
@@ -88,7 +83,7 @@ public class IpoAllocationFinishService {
             log.error("배정 전체 수량이 일반청약 물량보다 많음. 배정 결과 확인 필요. ipoId={}, totalAllocatedQuantity={}, retailQuantity={}",
                     ipo.getId(), event.totalAllocatedQuantity(), ipo.getRetailQuantity());
         }
-        long targetCount = subscriptionRepository.countByIpoIdAndStatusIn(ipo.getId(), ALLOCATION_TARGET_STATUSES);
+        long targetCount = subscriptionRepository.countByIpoIdAndStatusIn(ipo.getId(), SubscriptionStatus.ALLOCATION_TARGETS);
         if (event.subscriptionCount() != targetCount) {
             log.error("배정 청약 건수가 확정 청약 수와 다름. 배정에서 빠지거나 더해진 청약 확인 필요. ipoId={}, subscriptionCount={}, confirmedCount={}",
                     ipo.getId(), event.subscriptionCount(), targetCount);

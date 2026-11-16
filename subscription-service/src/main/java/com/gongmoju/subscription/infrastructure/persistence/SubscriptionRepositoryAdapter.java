@@ -14,7 +14,9 @@ import org.springframework.stereotype.Repository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -69,6 +71,18 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     @Override
     public long countByIpoIdAndStatusIn(UUID ipoId, Collection<SubscriptionStatus> statuses) {
         return jpaRepository.countByIpoIdAndStatusIn(ipoId, statuses);
+    }
+
+    @Override
+    public Map<UUID, Long> sumRequestedQuantityByIpoIds(Collection<UUID> ipoIds, Collection<SubscriptionStatus> statuses) {
+        if (ipoIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, Long> sums = new HashMap<>();
+        for (Object[] row : jpaRepository.sumRequestedQuantityByIpoIds(ipoIds, statuses)) {
+            sums.put((UUID) row[0], ((Number) row[1]).longValue());
+        }
+        return sums;
     }
 
     @Override

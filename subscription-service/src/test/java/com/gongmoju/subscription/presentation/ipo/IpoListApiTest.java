@@ -41,6 +41,7 @@ class IpoListApiTest {
 
     @BeforeEach
     void setUp() {
+        jdbcTemplate.update("DELETE FROM subscription.subscription");
         jdbcTemplate.update("DELETE FROM subscription.ipo");
     }
 
@@ -58,7 +59,7 @@ class IpoListApiTest {
     }
 
     @Test
-    void 항목은_명세의_7개_필드를_KST_시각으로_담고_상세_전용_필드는_담지_않는다() throws Exception {
+    void 항목은_명세의_8개_필드를_KST_시각으로_담고_상세_전용_필드는_담지_않는다() throws Exception {
         UUID ipoId = insertIpo("테스트 공모주 A", OffsetDateTime.parse("2026-10-28T10:00:00+09:00"), "OPEN");
 
         mockMvc.perform(get(IPOS))
@@ -70,10 +71,35 @@ class IpoListApiTest {
                 .andExpect(jsonPath("$.data.items[0].subscriptionStartAt").value("2026-11-03T10:00:00+09:00"))
                 .andExpect(jsonPath("$.data.items[0].subscriptionEndAt").value("2026-11-04T16:00:00+09:00"))
                 .andExpect(jsonPath("$.data.items[0].status").value("OPEN"))
+                .andExpect(jsonPath("$.data.items[0].competitionRate").value(0.00))
                 .andExpect(jsonPath("$.data.items[0].equalQuantity").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].maxQuantity").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].marginRate").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].refundDate").doesNotExist());
+    }
+
+    @Test
+    void 경쟁률은_공모주마다_각자의_확정된_청약으로_계산하고_상세와_같다() throws Exception {
+        UUID first = insertIpo("공모주 1", OffsetDateTime.parse("2026-10-28T10:00:00+09:00"), "OPEN");
+        UUID second = insertIpo("공모주 2", OffsetDateTime.parse("2026-10-28T11:00:00+09:00"), "CLOSED");
+        UUID none = insertIpo("공모주 3", OffsetDateTime.parse("2026-10-28T12:00:00+09:00"), "OPEN");
+        insertSubscription(first, "CONFIRMED", 200_000);
+        insertSubscription(first, "PENDING", 500_000);
+        insertSubscription(second, "ALLOCATED", 33_333);
+        insertSubscription(second, "REJECTED", 500_000);
+        insertSubscription(none, "PENDING", 500_000);
+
+        // 최신순: 공모주 3, 2, 1
+        mockMvc.perform(get(IPOS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].ipoId").value(none.toString()))
+                .andExpect(jsonPath("$.data.items[0].competitionRate").value(0.00))
+                .andExpect(jsonPath("$.data.items[1].ipoId").value(second.toString()))
+                .andExpect(jsonPath("$.data.items[1].competitionRate").value(0.33))
+                .andExpect(jsonPath("$.data.items[2].ipoId").value(first.toString()))
+                .andExpect(jsonPath("$.data.items[2].competitionRate").value(2.00));
+        mockMvc.perform(get(IPOS + "/" + second))
+                .andExpect(jsonPath("$.data.competitionRate").value(0.33));
     }
 
     @Test
@@ -233,5 +259,17 @@ class IpoListApiTest {
                 id, name, OffsetDateTime.parse("2026-11-03T10:00:00+09:00"), OffsetDateTime.parse("2026-11-04T16:00:00+09:00"),
                 status, createdAt);
         return id;
+    }
+
+    // 청약을 DB에 직접 넣는다 (경쟁률 확인용. 상태와 신청 수량만 의미 있음)
+    private void insertSubscription(UUID ipoId, String status, long requestedQuantity) {
+        UUID requestId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "INSERT INTO subscription.subscription (subscription_id, request_id, ipo_id, user_id, account_id, requested_quantity,"
+                        + " margin_amount, status, attempts, received_at, version, created_at, created_by)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, 'SYSTEM:test')",
+                UUID.randomUUID(), requestId, ipoId, UUID.randomUUID(), UUID.randomUUID(), requestedQuantity,
+                requestedQuantity * 15000, status, OffsetDateTime.parse("2026-11-03T11:00:00+09:00"),
+                OffsetDateTime.parse("2026-11-03T11:00:00+09:00"));
     }
 }

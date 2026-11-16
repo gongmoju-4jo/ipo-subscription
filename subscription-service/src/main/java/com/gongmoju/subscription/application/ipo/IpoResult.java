@@ -24,14 +24,22 @@ public record IpoResult(
         Instant subscriptionEndAt,
         LocalDate refundDate,
         IpoStatus status,
+        // 경쟁률 (F-15). 목록, 상세 조회 응답에만 내보내고, 등록과 내부 API에서는 계산하지 않아 null
+        BigDecimal competitionRate,
         // 등록 시각. 등록 응답(API 명세 3.6)에만 내보내고 조회 응답에는 넣지 않는다
         Instant createdAt
 ) {
 
+    // 경쟁률 없이 (등록, 내부 API)
     public static IpoResult from(Ipo ipo) {
+        return of(ipo, null);
+    }
+
+    // 경쟁률과 함께 (목록, 상세 조회)
+    public static IpoResult of(Ipo ipo, BigDecimal competitionRate) {
         return new IpoResult(ipo.getId(), ipo.getName(), ipo.getOfferPrice(), ipo.getRetailQuantity(),
                 ipo.getEqualQuantity(), ipo.getMinQuantity(), ipo.getMaxQuantity(), ipo.getMarginRate(),
                 ipo.getSubscriptionStartAt(), ipo.getSubscriptionEndAt(), ipo.getRefundDate(), ipo.getStatus(),
-                ipo.getCreatedAt());
+                competitionRate, ipo.getCreatedAt());
     }
 }

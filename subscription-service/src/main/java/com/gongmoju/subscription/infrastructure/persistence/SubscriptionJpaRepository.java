@@ -33,6 +33,12 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
     @Query("select count(s) from Subscription s where s.ipo.id = :ipoId and s.status in :statuses")
     long countByIpoIdAndStatusIn(@Param("ipoId") UUID ipoId, @Param("statuses") Collection<SubscriptionStatus> statuses);
 
+    // 공모주별 신청 수량 합 (경쟁률). s.ipo.id로 subscription.ipo_id에 직접 걸어 ipo 테이블을 조인하지 않는다. 결과 행: [공모주 ID, 합]
+    @Query("select s.ipo.id, sum(s.requestedQuantity) from Subscription s"
+            + " where s.ipo.id in :ipoIds and s.status in :statuses group by s.ipo.id")
+    List<Object[]> sumRequestedQuantityByIpoIds(@Param("ipoIds") Collection<UUID> ipoIds,
+                                                @Param("statuses") Collection<SubscriptionStatus> statuses);
+
     /**
      * 네이티브 쿼리는 JPA Auditing과 {@code @Version}을 거치지 않으므로 {@code created_*}, {@code updated_*}, {@code version}을 직접 채움.
      * {@code ON CONFLICT}에 대상을 적지 않아 {@code request_id}와 {@code uk_subscription_active}(같은 회원의 유효 청약) 충돌 모두 0행으로 끝남.

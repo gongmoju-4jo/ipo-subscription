@@ -1,0 +1,10 @@
+# 웹 이미지에는 빌드 결과(dist)만 들어간다. 운영 조회 서버(ops-server)는 배포하지 않는다
+node_modules
+dist
+ops-server
+.env
+.env.*
+*.local
+*.tsbuildinfo
+Dockerfile
+.dockerignore

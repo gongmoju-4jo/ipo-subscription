@@ -30,7 +30,7 @@ class MarginReserveRequestedConsumer {
 
     private final ObjectMapper objectMapper;
     private final MarginReserveService marginReserveService;
-    // 배치 크기 분포. 배치가 실제로 적용됐는지, 밀릴 때 얼마나 커지는지 본다 (지표 이름은 팀 확인 전 임시)
+    // 배치 크기 분포. 배치가 실제로 적용됐는지, 밀릴 때 얼마나 커지는지 본다
     private final DistributionSummary batchSize;
     // 배치 전체가 롤백돼서 건별 재처리로 들어간 횟수. 평소에는 0이어야 한다
     private final Counter fallbackCount;
@@ -47,8 +47,8 @@ class MarginReserveRequestedConsumer {
                 .register(meterRegistry);
     }
 
-    // id: 리스너 지표(spring_kafka_listener) name 라벨 고정용. Consumer Group은 groupId가 우선이라 그대로
-    // 리스너 지표는 배치 호출 1번이 1건으로 센다 (메시지 수가 아님)
+    // id: 리스너 이름 고정용. Consumer Group은 groupId가 우선이라 그대로
+    // 배치 리스너라 리스너 지표(spring_kafka_listener)와 분산 추적 span이 나오지 않는다. 배치 크기, 처리량은 margin.reserve.batch.size로 본다
     // max.poll.records: 한 번에 받는 최대 건수. 이 리스너에만 적용한다. 기다려서 모으지 않고 이미 밀려 있는 만큼만 받는다
     // containerFactory: 정산 Consumer와 같은 공용 배치 팩토리 (KafkaConsumerConfig, #114). 배치 수신, 오프셋 배치 커밋, 에러 핸들러 적용,
     // 리스너 지표 끄기(1건 리스너의 추적 지표와 이름이 겹침)가 한곳에서 정해진다

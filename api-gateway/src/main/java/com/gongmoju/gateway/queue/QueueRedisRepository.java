@@ -22,12 +22,14 @@ import java.util.UUID;
  *   <li>{@code queue:{ipoId}:heartbeat} Sorted Set: member = userId, score = 이탈 기한(ms). 지나면 입장 처리 때 이탈 처리된다</li>
  *   <li>{@code queue:{ipoId}:admitted:{userId}} String + TTL: 입장 허가. 값은 진입 시각(ms)</li>
  *   <li>{@code queue:active} Set: 대기자가 있는 ipoId. 입장 스케줄러가 돌 대상</li>
+ *   <li>{@code queue:admit-tick:{칸 번호}} String + TTL: 입장 처리 칸을 차지한 표시. 칸 번호 = Redis 시각(ms) ÷ 입장 주기(ms). 칸 길이의 2배 뒤 사라진다</li>
  * </ul>
  */
 @Component
 public class QueueRedisRepository {
 
     static final String ACTIVE_KEY = "queue:active";
+    static final String ADMIT_TICK_KEY_PREFIX = "queue:admit-tick:";
 
     @SuppressWarnings("rawtypes")
     private static final RedisScript<List> ENTER = script("queue/enter.lua");
@@ -36,6 +38,7 @@ public class QueueRedisRepository {
     @SuppressWarnings("rawtypes")
     private static final RedisScript<List> ADMIT = script("queue/admit.lua");
     private static final RedisScript<Long> LEAVE = RedisScript.of(new ClassPathResource("queue/leave.lua"), Long.class);
+    private static final RedisScript<Long> ADMIT_TICK = RedisScript.of(new ClassPathResource("queue/admit-tick.lua"), Long.class);
 
     private static final long STATE_NOT_IN_QUEUE = 0;
     private static final long STATE_ADMITTED = 2;
@@ -87,6 +90,20 @@ public class QueueRedisRepository {
                 Long.toString(ttl.toMillis()), Integer.toString(dropoutLimit), admittedKeyPrefix(ipoId));
         return single(redis.execute(ADMIT, keys, args))
                 .map(result -> new AdmitResult(number(result.get(0)), number(result.get(1)), number(result.get(2))));
+    }
+
+    /**
+     * 지금 칸(Redis 시각을 {@code interval} 길이로 나눈 구간)의 입장 처리를 차지한다. 칸마다 처음 부른 쪽만 true다.
+     * 게이트웨이가 여러 대여도 칸마다 한 대만 입장 처리하게 한다.
+     *
+     * @param interval 칸 길이 (입장 주기). 모든 게이트웨이가 같은 값을 써야 같은 칸으로 판단한다
+     */
+    public Mono<Boolean> claimAdmitTick(Duration interval) {
+        // 1ms 미만 주기는 칸 번호를 만들 수 없어 1ms로 본다
+        long lengthMillis = Math.max(1, interval.toMillis());
+        return redis.execute(ADMIT_TICK, List.of(), List.of(ADMIT_TICK_KEY_PREFIX, Long.toString(lengthMillis)))
+                .next()
+                .map(claimed -> claimed == 1L);
     }
 
     /**

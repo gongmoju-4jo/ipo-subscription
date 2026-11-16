@@ -163,7 +163,8 @@ ON true
 
 - **배포 환경 Kafka-UI**: `compose.perf.yml`에서 `tools` 프로필이라 기본 실행되지 않음
   - 실행: `docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml up -d kafka-ui` (서비스 이름을 지정하면 프로필과 관계없이 실행)
-  - 접속: 서버의 `127.0.0.1:8989`에만 바인딩되고 SSH(22)는 열지 않음 → SSM 포트 포워딩(`portNumber="8989",localPortNumber="18989"`) 후 `http://localhost:18989`
+  - 바인딩: 서버의 `127.0.0.1:{KAFKA_UI_PORT}`에만 바인딩, Parameter Store에 `KAFKA_UI_PORT`가 없으면 8989
+  - 접속: SSH(22)는 열지 않음 → SSM 포트 포워딩(`portNumber="{KAFKA_UI_PORT}",localPortNumber="18989"`) 후 `http://localhost:18989`
   - 터널 여는 법: [PROJECT_SETUP.md "Grafana, Eureka 화면"](../PROJECT_SETUP.md#grafana-eureka-화면-포트-포워딩)
   - 확인 후 `docker compose ... stop kafka-ui`로 중지
   - 배포 서버에서는 실행해 보지 않음 (확인하지 않음)

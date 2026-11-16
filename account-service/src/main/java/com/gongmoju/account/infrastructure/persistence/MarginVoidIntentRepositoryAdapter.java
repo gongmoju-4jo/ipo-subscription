@@ -5,6 +5,9 @@ import com.gongmoju.account.domain.margin.MarginVoidIntentRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -20,6 +23,11 @@ class MarginVoidIntentRepositoryAdapter implements MarginVoidIntentRepository {
     @Override
     public boolean existsBySubscriptionId(UUID subscriptionId) {
         return jpaRepository.existsById(subscriptionId);
+    }
+
+    @Override
+    public Set<UUID> findSubscriptionIdsWithIntent(Collection<UUID> subscriptionIds) {
+        return new HashSet<>(jpaRepository.findSubscriptionIdsIn(subscriptionIds));
     }
 
     // margin_void_intent 저장

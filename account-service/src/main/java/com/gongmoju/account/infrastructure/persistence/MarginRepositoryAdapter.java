@@ -5,6 +5,8 @@ import com.gongmoju.account.domain.margin.MarginRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,5 +25,10 @@ class MarginRepositoryAdapter implements MarginRepository {
     @Override
     public Optional<Margin> findBySubscriptionId(UUID subscriptionId) {
         return jpaRepository.findBySubscriptionId(subscriptionId);
+    }
+
+    @Override
+    public List<Margin> findAllBySubscriptionIds(Collection<UUID> subscriptionIds) {
+        return jpaRepository.findBySubscriptionIdIn(subscriptionIds);
     }
 }

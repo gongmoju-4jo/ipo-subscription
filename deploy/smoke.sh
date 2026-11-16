@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 배포 후 스모크: 게이트웨이를 거쳐 가입(처음 한 번) → 로그인 → 계좌(없으면 개설) → 입금을 실행한다
-#   SMOKE_LOGIN_ID=... SMOKE_PASSWORD=... bash deploy/smoke.sh http://127.0.0.1:80
+#   SMOKE_LOGIN_ID=... SMOKE_PASSWORD=... bash deploy/smoke.sh http://127.0.0.1:8080
 # 배포 서버에서 deploy.sh가 실행한다 (계정은 Parameter Store). 비밀번호가 HTTP로 인터넷에 나가지 않도록 서버 안의 게이트웨이로 보낸다
 # 스모크 전용 계정 하나를 계속 쓴다. 회원과 계좌는 처음 한 번만 생기고 입금만 쌓인다
 # 비밀번호는 출력하지 않고 프로세스 인자에도 넣지 않는다 (요청 본문은 표준 입력으로 curl에 넘긴다)

@@ -1,4 +1,4 @@
-# 인프라(PostgreSQL, Kafka, Redis), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
+# 인프라(PostgreSQL, Kafka, Redis), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana), 분산 추적(Zipkin), 로그 수집(Loki, Alloy)
 # 개발할 때: 인프라만 띄우고 서비스는 IntelliJ로 실행한다 (docker-compose up -d postgres kafka kafka-init kafka-ui redis)
 # 전체 확인할 때: jar를 먼저 빌드하고 전부 띄운다 (./gradlew build -x test && docker-compose up -d --build)
 # 같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다 (포트 충돌, Eureka 중복 등록)
@@ -148,6 +148,9 @@ services:
       # 대기열 입장 속도, 허가 유효 시간. 대기열 효과 측정 때만 .env에서 바꾼다 (.env.example). 기본값은 application.yml과 같게 둔다 (빈 값을 넘기면 기동에 실패한다)
       QUEUE_ADMIT_RATE: ${QUEUE_ADMIT_RATE:-433}
       QUEUE_ADMISSION_TTL: ${QUEUE_ADMISSION_TTL:-PT5M}
+      # 분산 추적. Zipkin이 떠 있지 않아도 서비스는 그대로 뜨고 span만 버린다. 샘플링 기본 1.0 (부하 측정은 compose.perf.yml이 0으로 둔다)
+      ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -174,9 +177,19 @@ services:
       DB_NAME: ${DB_NAME:-ipo}
       # 자기 계정의 비밀번호만 전달한다 (관리자 DB_PASSWORD는 전달하지 않는다)
       ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-}
+      # 정산 Consumer batch size (#114). 측정에서 값을 변경할 때만 .env에 입력한다
+      MARGIN_SETTLE_BATCH_SIZE: ${MARGIN_SETTLE_BATCH_SIZE:-100}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       EUREKA_URL: http://eureka-server:8761/eureka/
       JWT_SECRET: ${JWT_SECRET:-}
+      # 첫 관리자 계정. 비어 있으면 만들지 않는다
+      ADMIN_LOGIN_ID: ${ADMIN_LOGIN_ID:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # 원장 대사 실행 시각 (#132). .env에 없으면 매일 04:00 KST
+      LEDGER_RECONCILIATION_CRON: ${LEDGER_RECONCILIATION_CRON:-0 0 4 * * *}
+      # 분산 추적. Zipkin이 떠 있지 않아도 서비스는 그대로 뜨고 span만 버린다. 샘플링 기본 1.0 (부하 측정은 compose.perf.yml이 0으로 둔다)
+      ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
     depends_on:
       postgres:
         condition: service_healthy
@@ -205,6 +218,9 @@ services:
       SUBSCRIPTION_DB_PASSWORD: ${SUBSCRIPTION_DB_PASSWORD:-}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       EUREKA_URL: http://eureka-server:8761/eureka/
+      # 분산 추적. Zipkin이 떠 있지 않아도 서비스는 그대로 뜨고 span만 버린다. 샘플링 기본 1.0 (부하 측정은 compose.perf.yml이 0으로 둔다)
+      ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
     depends_on:
       postgres:
         condition: service_healthy
@@ -233,6 +249,9 @@ services:
       ALLOCATION_DB_PASSWORD: ${ALLOCATION_DB_PASSWORD:-}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       EUREKA_URL: http://eureka-server:8761/eureka/
+      # 분산 추적. Zipkin이 떠 있지 않아도 서비스는 그대로 뜨고 span만 버린다. 샘플링 기본 1.0 (부하 측정은 compose.perf.yml이 0으로 둔다)
+      ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}
     depends_on:
       postgres:
         condition: service_healthy
@@ -299,8 +318,59 @@ services:
       retries: 20
       start_period: 10s
 
+  # 분산 추적 저장, 조회: http://localhost:9411 (ZIPKIN_PORT로 변경 가능). 127.0.0.1에만 연다
+  # IntelliJ로 띄운 서비스도 localhost:9411로 보낸다. 서비스는 Zipkin에 의존하지 않는다 (없으면 span만 버림)
+  # 메모리에만 저장해서 컨테이너를 다시 만들면 trace가 사라진다. MEM_MAX_SPANS를 넘으면 오래된 trace부터 지운다
+  zipkin:
+    image: openzipkin/zipkin:3.6.1
+    container_name: ipo-zipkin
+    environment:
+      STORAGE_TYPE: mem
+      # 저장할 최대 span 수 (Zipkin 기본값). 넘으면 오래된 trace부터 지운다
+      MEM_MAX_SPANS: 500000
+      # 이미지 기본 힙(160m)보다 여유 있게 고정한다. 메모리가 모자라면 이미지 기본값처럼 컨테이너를 끝낸다 (멈춘 채 남지 않게)
+      JAVA_OPTS: -Xms512m -Xmx512m -XX:+ExitOnOutOfMemoryError
+      TZ: Asia/Seoul
+    ports:
+      - "127.0.0.1:${ZIPKIN_PORT:-9411}:9411"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9411/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # 로그 저장소. 포트는 내 PC에 열지 않는다 (Grafana Explore에서 조회). 7일 지난 로그는 지운다 (docker/loki/loki.yml)
+  # 이미지에 셸, wget이 없어 컨테이너 healthcheck를 두지 않는다 (준비 확인은 Grafana에서 조회되는지로 본다)
+  loki:
+    image: grafana/loki:3.7.9
+    container_name: ipo-loki
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./docker/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+
+  # 컨테이너 로그 수집기. 같은 compose 프로젝트의 컨테이너 로그를 Docker API로 읽어 Loki로 보낸다 (docker/alloy/config.alloy)
+  # IntelliJ로 띄운 서비스 로그는 모이지 않는다. 포트는 열지 않는다
+  # Docker 소켓은 읽기 전용으로 붙이지만, 소켓으로 Docker API 전체를 쓸 수 있어 호스트 관리자에 준하는 권한이다 (이미지는 Grafana 공식)
+  alloy:
+    image: grafana/alloy:v1.21.3
+    container_name: ipo-alloy
+    environment:
+      # 이 프로젝트 컨테이너만 모으는 데 쓴다 (다른 compose 프로젝트 로그는 제외)
+      COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME}
+    volumes:
+      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # 컨테이너마다 어디까지 읽었는지 저장한다. 없으면 Alloy를 다시 만들 때 같은 로그를 또 보낼 수 있다
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+
 volumes:
   postgres-data:
   kafka-data:
   prometheus-data:
   grafana-data:
+  loki-data:
+  alloy-data:

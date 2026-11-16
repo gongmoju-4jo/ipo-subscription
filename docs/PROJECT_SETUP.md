@@ -33,7 +33,7 @@ docker-compose up -d postgres kafka kafka-init kafka-ui redis
 
 필요: **JDK 21**, Docker + Compose v2 이상, IntelliJ
 
-> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, Redis(접속 대기열), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)이 있습니다.
+> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, Redis(접속 대기열), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana), 분산 추적(Zipkin), 로그 수집(Loki, Alloy)이 있습니다.
 
 ### 📌 Claude Code
 
@@ -53,12 +53,14 @@ ipo-subscription/
 ├── build.gradle            공통 버전, 의존성 (Boot 3.5.16, Cloud 2025.0.3, Java 21)
 ├── settings.gradle         모듈 목록
 ├── Dockerfile              서비스 공용
-├── docker-compose.yml      로컬 인프라(PostgreSQL, Kafka, Kafka-UI, Redis), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)
+├── docker-compose.yml      로컬 인프라(PostgreSQL, Kafka, Kafka-UI, Redis), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana, Zipkin, Loki, Alloy)
 ├── compose.perf.yml        부하 테스트용 자원 고정 ([부하 테스트 가이드](./LOADTEST.md)). 배포 환경도 같은 값을 쓴다
-├── compose.prod.yml        배포 환경(EC2)용 (ECR 이미지, 게이트웨이 80번 공개, 자동 재시작)
+├── compose.prod.yml        배포 환경(EC2)용 (ECR 이미지, web(Caddy)만 80, 443 공개, 자동 재시작)
 ├── deploy/                 서버 배포 스크립트, 배포 후 스모크 ([배포](#배포-aws))
+├── frontend/               사용자 화면 (Vite + React). 배포 환경에서는 web 이미지(Caddy)가 빌드 결과를 서빙 ([frontend/README](../frontend/README.md))
 ├── loadtest/               부하 테스트 스크립트 (시드, k6 시나리오, 검증)
 ├── docker/postgres/        서비스별 스키마, DB 계정 생성 스크립트
+├── docker/loki/, alloy/    로그 저장(Loki), 컨테이너 로그 수집(Alloy) 설정
 ├── common/                 공통 라이브러리 (실행 X)
 ├── eureka-server/
 ├── api-gateway/
@@ -77,6 +79,7 @@ ipo-subscription/
 | Kafka / Kafka-UI | 29092 / 8989 |
 | Redis | 6379 (접속 대기열. 게이트웨이만 사용) |
 | Prometheus / Grafana | 9090 / 3000 |
+| Zipkin | 9411 (Loki, Alloy는 열지 않음. Grafana에서 조회) |
 | gateway 관리 포트 | 18090 (헬스체크, 지표 수집 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
 
 ### 게이트웨이 라우팅
@@ -87,6 +90,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 | --- | --- |
 | `/api/v1/auth/**`, `/api/v1/users/**`, `/api/v1/accounts/**` | account |
 | `/api/v1/admin/allocations/**` | allocation (아래 `/api/v1/admin/**`보다 먼저 맞춘다) |
+| `/api/v1/admin/users/**` | account (아래 `/api/v1/admin/**`보다 먼저 맞춘다) |
 | `/api/v1/ipos/**`, `/api/v1/subscriptions/**`, `/api/v1/admin/**` | subscription |
 | `/api/v1/allocations/**` | allocation |
 
@@ -102,6 +106,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 📌 JWT 검증: HS256 서명, 만료, `iss`=**`account-service`**(문자열 비교), `sub`, `role`. `exp`가 없는 토큰은 거절. 실패하면 401 (만료는 `TOKEN_EXPIRED`, 그 외는 `UNAUTHORIZED`)
 - 📌 역할: **USER, ADMIN** (common `UserRole`과 같은 값). `/api/v1/admin/**`은 ADMIN만, 일반 회원은 403 `FORBIDDEN`
 - 클라이언트가 보낸 `X-User-Id`, `X-User-Role`, `X-Request-Received-At`를 모두 제거한 뒤 Gateway가 다시 설정한다 (서비스, Audit이 이 헤더를 신뢰)
+- 클라이언트가 보낸 추적 헤더(`traceparent`, `tracestate`, `baggage`, `b3`, `X-B3-*`)도 지운다. 외부 요청은 항상 새 trace로 시작하고, 서비스로 보낼 때 Gateway가 자기 `traceparent`를 붙인다 (외부가 traceId를 정하거나 샘플링을 켜지 못하게. [분산 추적](#분산-추적-zipkin))
   - `X-User-Id` = 토큰의 `sub`, `X-User-Role` = 토큰의 `role` (토큰이 없는 공개 경로에는 붙지 않음)
   - `X-Request-Received-At` = Gateway 도착 시각 (UTC ISO-8601, 밀리초, 모든 요청). 청약 마감 판단 기준
 - Gateway는 `common`을 쓰지 않아 401·403 오류 응답을 직접 공통 형식으로 만든다 (`details`는 없으면 생략)
@@ -109,6 +114,21 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
 - 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
+
+### 관리자 계정
+
+회원가입은 항상 USER다. 관리자(ADMIN)는 첫 1명을 계좌 서비스가 뜰 때 만들고, 그 뒤는 관리자가 만든다.
+
+- 첫 관리자: 계좌 서비스가 뜰 때 `.env`의 `ADMIN_LOGIN_ID` 계정이 없으면 ADMIN으로 만든다 (비밀번호 `ADMIN_PASSWORD`, 이름 "관리자", `AdminSeedRunner`)
+  - 둘 다 비우면 만들지 않는다 (로컬, CI 기본). 하나만 있거나 형식이 틀리면 계좌 서비스가 기동하지 않는다 (회원가입과 같은 규칙: 로그인 ID 영문 소문자, 숫자 4~20자, 비밀번호 8~20자)
+  - 그 로그인 ID가 이미 있으면 아무것도 바꾸지 않는다. `ADMIN_PASSWORD`를 바꿔도 이미 만든 계정의 비밀번호는 그대로다
+  - 그 로그인 ID가 일반 회원(USER)이면 승격하지 않고 WARN 로그만 남긴다
+- 그 뒤 관리자: 관리자로 로그인해 상단바의 [관리자 계정 추가] (`/admin/users/new`) 또는 `POST /api/v1/admin/users`
+  - 회원가입과 같은 항목(`loginId`, `password`, `name`)을 받고 역할은 항상 ADMIN. 누가 만들었는지는 `users.created_by`에 남는다
+  - ADMIN 확인은 게이트웨이(`/api/v1/admin/**`)와 계좌 서비스(`AdminRoleInterceptor`) 둘 다 한다. 본문 검사보다 먼저 403
+- 관리자 승격, 해제, 비밀번호 변경은 없다
+- `.env`의 두 값을 바꾼 뒤에는 IntelliJ는 계좌 서비스 재시작, Docker는 `docker-compose up -d account-service` (`restart`로는 환경변수가 바뀌지 않는다)
+- `ADMIN_PASSWORD`에 `$`를 쓰지 않는다. Spring이 값 안의 `${...}`를 다른 설정으로 바꾸려 해서, 기동이 실패하고 오류 로그에 값이 그대로 찍힌다
 
 ### 접속 대기열
 
@@ -181,9 +201,9 @@ docker-compose down -v                                     # 종료 + DB, Kafka 
   - Eureka 등록 확인은 IntelliJ 때와 같이 `http://localhost:8761` 화면에서 한다
   - Eureka 포트가 이미 사용 중이거나 Windows 예약 포트라 기동되지 않으면 `.env`에서 `EUREKA_PORT`(기본 8761)를 바꾼다
 - 기동 순서는 compose가 제어한다: postgres, kafka 준비 → 토픽 생성(`kafka-init`) → eureka-server → 서비스. 서비스가 모두 `healthy`여도 Gateway가 서비스를 찾는 데 최대 30초 걸려 처음 요청이 503일 수 있다
-- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너와 모니터링(Prometheus, Grafana)까지 전부 올라온다.** `GRAFANA_ADMIN_PASSWORD`가 비어 있으면 Grafana만 시작되지 않는다. jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui redis`)
+- ⚠️ **이름 없이 `docker-compose up`을 치면 서비스 컨테이너와 모니터링(Prometheus, Grafana, Zipkin, Loki, Alloy)까지 전부 올라온다.** `GRAFANA_ADMIN_PASSWORD`가 비어 있으면 Grafana만 시작되지 않는다. jar를 빌드하지 않았으면 이미지 빌드에서 실패한다. 인프라만 필요하면 이름을 적는다 (`docker-compose up -d postgres kafka kafka-init kafka-ui redis`)
 - ⚠️ **같은 서비스를 Docker와 IntelliJ에서 동시에 띄우지 않는다** (포트 충돌, Eureka 중복 등록). 특히 IntelliJ의 Eureka를 켠 채 Docker 전체를 띄우면 8761이 충돌한다. 일부 서비스만 IntelliJ로 띄워 컨테이너 Eureka에 붙이는 구성은 확인하지 않았고 지원하지 않는다
-- 📌 **Docker 메모리 6GB 이상 권장** (Kafka 포함 시 2GB 부족. 모니터링 포함 전체 실행 시 컨테이너 사용량 합계가 부하 중 약 3.4GB였다)
+- 📌 **Docker 메모리 6GB 이상 권장** (Kafka 포함 시 2GB 부족. 모니터링 포함 전체 실행 시 컨테이너 사용량 합계가 부하 중 약 3.4GB였다. 이 값은 Zipkin, Loki, Alloy를 빼고 잰 것이고, Zipkin, Loki, Alloy는 부하 없을 때 합계 약 0.4~0.55GB를 더 쓴다)
   - Colima: `colima stop && colima start --cpus 4 --memory 6` / Docker Desktop: Settings → Resources → Memory
 
 #### 필요한 서비스만 띄우기
@@ -203,9 +223,12 @@ docker-compose restart {서비스 이름}                                       
 | `account-service`, `subscription-service`, `allocation-service` | `postgres`, `kafka`, `kafka-init`(토픽을 만들고 종료), `eureka-server` |
 | `prometheus` | 없음 (수집 대상이 떠 있지 않아도 올라온다) |
 | `grafana` | `prometheus` |
+| `zipkin`, `loki` | 없음 |
+| `alloy` | `loki` |
 
 - 서비스를 Gateway(`http://localhost:8080`)로 호출하려면 `api-gateway`와 호출할 서비스를 함께 적는다
 - `kafka-ui`는 의존 대상이 아니라 따로 적어야 올라온다
+- 서비스는 `zipkin`, `loki`에 의존하지 않는다. 추적, 로그 검색이 필요하면 `zipkin loki alloy`를 같이 적는다 (없으면 span만 버리고 서비스는 그대로 동작)
 
 #### 모니터링
 
@@ -213,6 +236,53 @@ docker-compose restart {서비스 이름}                                       
 - Grafana: http://localhost:3000, 계정 `admin` / 비밀번호는 `.env`의 `GRAFANA_ADMIN_PASSWORD`. "측정 대시보드"가 자동으로 등록된다 (응답 시간, 처리량, Hikari, Tomcat 스레드, Kafka Producer 지연, CPU, 힙, GC)
 - 둘 다 내 PC에서만 접속되도록 127.0.0.1에 바인딩한다. 포트가 겹치거나 Windows 예약 포트면 `.env`에서 `PROMETHEUS_PORT`, `GRAFANA_PORT`를 바꾼다
 - 부하 테스트 절차는 [부하 테스트 가이드](./LOADTEST.md)
+
+#### 분산 추적 (Zipkin)
+
+요청 하나가 게이트웨이, 서비스, Kafka를 거쳐 처리되는 과정을 trace 하나로 본다.
+
+- 주소: http://localhost:9411 (`ZIPKIN_PORT`로 변경). Grafana Explore에서 데이터 소스 Zipkin을 골라도 같은 데이터가 보인다
+- trace 하나로 이어지는 구간: 게이트웨이 → 서비스(HTTP), 배정 → 청약(Feign), Kafka 발행 → 수신, Outbox. 외부 요청은 게이트웨이에서 새 trace로 시작한다 (클라이언트가 보낸 추적 헤더는 쓰지 않음)
+  - 예: 청약 신청 → 증거금 인출(계좌) → 청약 확정 / `ipo.closed` 수신 → 배정 → 배정 결과 발행 → 청약 배정 처리
+  - span 사이 빈 시간이 Outbox 발행 대기(발행 주기 1초)와 Consumer 대기다
+- Outbox 구간이 이어지는 방식: 행을 저장할 때 그 요청의 추적 문맥을 `outbox.trace_parent`에 같이 저장하고, 발행기가 그 문맥으로 보낸다. 메시지에는 `traceparent` 헤더가 붙고 받는 서비스가 이어 간다
+- 새 trace에서 시작하는 경우: 스케줄러가 시작한 흐름(공모주 마감 → `ipo.closed`), 추적 문맥 없이 저장된 Outbox 행
+- 이어지지 않는 구간: 계좌 서비스의 정산(`allocation.result` 배치 수신). Spring Kafka 3.3의 배치 리스너는 레코드마다 관측을 만들지 않아, 정산 처리 로그에는 traceId가 없고 정산 결과(`margin.settled`)는 청약 서비스 수신에서 새 trace로 시작한다. 배치 하나에 여러 배정의 메시지가 섞일 수 있어 배정 trace에 붙이지 않았다
+- 모으지 않는 것 (요청이 없어도 몇 초마다 생겨서 목록을 덮는 것)
+  - 주기 작업과 그 안의 호출: Outbox 발행 주기 실행, 대기열 입장 스케줄러(Redis), 청약 중 공모주 목록 갱신, Eureka 갱신. trace는 HTTP 요청, Kafka 수신에서만 시작한다
+  - `/actuator/**`, 추적 문맥 없이 들어온 `/internal/**`(게이트웨이의 공모주 목록 갱신), 대기열 순번 조회(`GET /api/v1/queues/{ipoId}/entries/me`, 대기 화면이 계속 부름): 지표는 남고 Zipkin으로만 보내지 않는다
+  - 게이트웨이 Spring Security 내부 단계 (`management.observations.enable.spring.security: false`)
+  - 규칙은 서비스 3개가 common `CommonTracingAutoConfiguration`, 게이트웨이가 `gateway/tracing/TracingConfig` (게이트웨이는 common을 쓰지 않음)
+- trace 찾기: 로그 줄의 `[traceId-spanId]`에서 traceId를 복사해 Zipkin 검색창에 넣거나, Grafana 로그에서 바로 이동한다 ([로그 검색](#로그-검색-loki)). 문맥이 없는 줄은 이 자리가 빈칸이다
+- 샘플링(추적을 보낼 요청 비율): `TRACING_SAMPLING_PROBABILITY`. 로컬, 배포 1.0(전부), 부하 측정(`compose.perf.yml`) 0 ([부하 테스트 가이드](./LOADTEST.md))
+- 메모리에만 저장한다. 컨테이너를 다시 만들면(배포 포함) trace가 사라지고, span이 50만 개를 넘으면 오래된 것부터 지운다
+- Zipkin이 멈춰도 서비스 동작에는 영향이 없다. 보내지 못한 span은 버리고, 서비스마다 WARN이 한 번 남는다 (`Spans were dropped due to exceptions`)
+- IntelliJ로 띄운 서비스도 `localhost:9411`로 보낸다. `docker-compose up -d zipkin`으로 Zipkin만 띄워 두면 된다
+
+#### 로그 검색 (Loki)
+
+컨테이너 로그를 Grafana 한 곳에서 검색한다. Alloy가 Docker API로 같은 compose 프로젝트 컨테이너의 로그를 읽어 Loki로 보낸다 (`docker/alloy/config.alloy`, `docker/loki/loki.yml`).
+
+- 조회: Grafana → Explore → 데이터 소스 Loki. Loki, Alloy 포트는 내 PC에 열지 않는다
+- 대상: 서비스 5개와 PostgreSQL, Kafka, Redis, Grafana 등 이 프로젝트 컨테이너 전부. IntelliJ로 띄운 서비스 로그는 모이지 않는다 (IntelliJ 콘솔로 본다)
+- 라벨: `service`(compose 서비스 이름), `container`(인스턴스 구분), `level`(Spring Boot 서비스만). traceId는 라벨이 아니라 구조화 메타데이터 `trace_id`다 (값 종류가 많은 값을 라벨로 두면 Loki가 느려진다)
+- 자주 쓰는 LogQL
+
+  | 보고 싶은 것 | LogQL |
+  | --- | --- |
+  | 한 서비스 로그 | `{service="account-service"}` |
+  | 서비스 전체 ERROR | `{service=~".+", level="ERROR"}` |
+  | 요청 하나의 로그 (서비스 전체) | `{service=~".+"} \| trace_id="{traceId}"` |
+  | 청약 ID, 계좌 ID 등으로 찾기 | `{service="subscription-service"} \|= "{청약 ID}"` |
+  | 인스턴스 하나 (`compose.scale.yml`) | `{container="{컨테이너 이름}"}` |
+  | PostgreSQL 로그 | `{service="postgres"} \|= "ERROR"` |
+
+- 로그 ↔ trace: 로그 줄을 펼치면 Links의 traceId 옆에 "Zipkin에서 trace 보기" 버튼이 있다 (오른쪽에 trace가 열림). Zipkin trace에서는 span 줄의 로그 아이콘(Explore the logs for this in split view)으로 같은 traceId의 로그(모든 서비스)를 연다
+- Spring Boot 서비스 로그의 예외 스택 트레이스는 로그 한 건으로 묶는다
+- 7일 지난 로그는 지운다 (볼륨 `loki-data`)
+- 로그 형식(`logging.pattern`)을 바꾸면 Alloy의 레벨, traceId 정규식(`config.alloy`)도 같이 고친다
+- Alloy는 Docker 소켓을 읽기 전용으로 붙이지만, 소켓으로 Docker API 전체를 쓸 수 있어 호스트 관리자에 준하는 권한이다. 이미지는 Grafana 공식 이미지를 버전 고정으로 쓰고 포트는 열지 않는다
+- 이 프로젝트 컨테이너만 고르는 데 compose 프로젝트 이름을 쓴다 (`COMPOSE_PROJECT_NAME`을 Alloy에 넘김). Windows Docker Desktop에서 확인했고, macOS(Colima)에서는 확인하지 않았다
 
 #### Slack 장애 알림
 
@@ -289,6 +359,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 | 설정 값(비밀번호, 키) | 앱이 `.env`를 직접 읽음 | compose가 `.env`를 읽어 환경변수로 전달 |
 | 서비스 포트(8081~8083) | 내 PC에 열림 (토큰 없이 직접 호출 가능) | 열지 않음, Gateway 경유만 |
 | 코드 반영 | 앱 재시작 | jar 빌드 후 이미지 재빌드 |
+| 추적, 로그 | trace는 `localhost:9411`로 감 (Zipkin을 띄운 경우), 로그는 IntelliJ 콘솔 (Loki에 안 모임) | trace, 로그 모두 Zipkin, Loki에 모임 |
 
 - DB, Kafka는 두 방식 모두 같은 컨테이너(`ipo-postgres`, `ipo-kafka`)를 써서 **데이터가 이어진다**
 - 컨테이너로 확인하는 것이 필요한 경우: 토큰 없는 직접 호출로는 못 잡는 Gateway 인증, `X-Request-Received-At`(청약 마감 판단 기준) 흐름, 환경변수 전달 누락
@@ -298,6 +369,9 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 
 - 토픽, 파티션 키, 페이로드 → **이벤트 명세 문서** 기준 (코드보다 문서 먼저 수정)
 - 실패 메시지: `{토픽}.DLT`
+- 메시지 헤더 `traceparent`: 분산 추적 문맥 (W3C). Spring Kafka가 발행할 때 붙이고 받을 때 읽어서 Consumer 코드에서 다루지 않는다. 없을 수 있다 ([분산 추적](#분산-추적-zipkin))
+- 리스너, 템플릿 지표는 관측(observation) 기반이라 태그가 `spring_kafka_listener_id`, `error`(`none` 또는 예외 이름)다 (예: `spring_kafka_listener_seconds_count{spring_kafka_listener_id="account-margin-reserve-0", error="none"}`)
+  - 계좌 서비스의 정산 배치 리스너(`account-allocation-result`)는 이 지표가 없다. Spring Kafka 3.3은 배치 리스너 관측을 지원하지 않아 예전 형식 타이머를 쓰는데, 같은 이름에 태그가 다르면 Prometheus가 1건 리스너 지표를 받지 않아 배치 팩토리에서 끈다 (`KafkaConsumerConfig`). 정산 처리량, 랙은 Kafka 클라이언트 지표(`kafka_consumer_fetch_manager_*`)로 본다
 - 접속 주소 기본값: `localhost:29092` (서비스 `application.yml`의 `KAFKA_BOOTSTRAP_SERVERS`)
 - 실행: `docker-compose up -d kafka kafka-init kafka-ui`
 - Kafka-UI: http://localhost:8989 (토픽, 컨슈머 그룹 확인)
@@ -339,22 +413,23 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 
 ### 배포 (AWS)
 
-EC2 한 대(서울 리전)에 PostgreSQL, Kafka, 서비스 5개, 모니터링을 모두 컨테이너로 띄운다. 로컬 Docker 실행과 같은 `docker-compose.yml`에 `compose.perf.yml`(자원 상한, JVM 힙), `compose.prod.yml`(배포용)을 겹쳐 쓴다.
+EC2 한 대(서울 리전)에 PostgreSQL, Kafka, 서비스 5개, 모니터링, web(프론트 + HTTPS)을 모두 컨테이너로 띄운다. 로컬 Docker 실행과 같은 `docker-compose.yml`에 `compose.perf.yml`(자원 상한, JVM 힙), `compose.prod.yml`(배포용)을 겹쳐 쓴다.
 
 #### 흐름
 
 ```
 develop 머지 → CI(build) 성공 → Deploy 워크플로
-  → jar 빌드 → 이미지 5개 빌드, ECR 푸시 (태그 = 커밋 SHA)
+  → jar 빌드 → 서비스 이미지 5개, web 이미지(프론트 빌드 + Caddy) 빌드, ECR 푸시 (태그 = 커밋 SHA)
   → SSM Run Command로 서버에서 deploy/deploy.sh 실행
-      (레포를 그 커밋으로 맞춤 → Parameter Store 값으로 .env 생성 → 이미지 받기 → up -d → 서비스 5개 healthy 대기
+      (레포를 그 커밋으로 맞춤 → Parameter Store 값으로 .env 생성 → 이미지 받기 → up -d → 서비스 5개, web healthy 대기
        → 서버 안에서 스모크: deploy/smoke.sh로 스모크 전용 계정 로그인 → 계좌 → 입금)
-  → 공개 주소 확인 (Swagger 200, 토큰 없는 API 401. 자격 증명은 보내지 않음)
+  → 공개 주소 확인 (Swagger 200, 토큰 없는 API 401, 프론트 200, /ops와 /prom 404, http → https. 자격 증명은 보내지 않음)
 ```
 
-- 비밀번호가 담긴 스모크는 서버 안에서 게이트웨이(`127.0.0.1:80`)로 보낸다. 배포 주소가 HTTP라 비밀번호를 인터넷으로 보내지 않기 위해서다. 서버 밖과는 SSM의 암호화된 채널로만 오간다
+- 비밀번호가 담긴 스모크는 서버 안에서 게이트웨이(`127.0.0.1:8080`)로 바로 보낸다. 비밀번호가 서버 밖으로 나가지 않고, 서버 밖과는 SSM의 암호화된 채널로만 오간다
 
 - 설정: `.github/workflows/deploy.yml`. CI가 실패한 커밋, PR에서 돈 CI로는 배포하지 않는다
+- ECR 저장소는 이미지마다 하나씩 6개다: `ipo/eureka-server`, `ipo/api-gateway`, `ipo/account-service`, `ipo/subscription-service`, `ipo/allocation-service`, `ipo/web` (태그 덮어쓰기 금지(IMMUTABLE), 최근 5개만 유지). 계정을 새로 꾸릴 때 하나라도 빠지면 그 이미지를 올리다 배포가 멈춘다
 - 배포는 한 번에 하나만 실행된다. 머지가 겹치면 앞 배포가 끝난 뒤 다음 배포가 실행된다
 - 자동 배포는 CI가 끝난 커밋이 아직 develop의 최신일 때만 한다. 그사이 새 커밋이 머지됐으면 건너뛰고(`gate`에 "건너뜀" 표시), 최신 커밋의 CI가 끝나면 그 커밋을 배포한다
 - 워크플로의 외부 액션은 커밋 SHA로 고정했다. 버전을 올릴 때는 해당 릴리스의 커밋 SHA로 바꾸고 주석의 버전도 같이 고친다
@@ -364,22 +439,31 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 
 #### 접속 주소
 
-- 서비스: `http://{고정 IP}/` (게이트웨이만 80번으로 공개). 통합 Swagger는 `http://{고정 IP}/swagger-ui/index.html`
-- 📌 HTTPS가 아니라 로그인 비밀번호와 토큰이 암호화되지 않고 오간다. **시연용 테스트 계정만 쓴다**
-- 서비스 포트(8081~8083), Eureka, PostgreSQL, Kafka, Prometheus, Grafana는 외부에 열지 않는다 (서비스 포트를 열면 `X-User-Id` 헤더만으로 게이트웨이 인증을 우회할 수 있다)
+- 화면: `https://{도메인}/`. 통합 Swagger는 `https://{도메인}/swagger-ui/index.html`. 도메인은 Parameter Store `SITE_DOMAIN` (Route 53에서 구매, A 레코드가 고정 IP를 가리킨다)
+- 외부에 열린 것은 web(Caddy) 하나다 (80, 443). 설정은 `frontend/Caddyfile`
+  - `/api/**`와 Swagger 경로는 게이트웨이(Docker 네트워크의 `api-gateway:8080`)로 넘기고, 나머지는 프론트 화면을 준다. 프론트와 API가 같은 주소라 CORS 설정이 없다
+  - http는 https로 넘긴다. 인증서는 Caddy가 Let's Encrypt에서 자동으로 받고 갱신한다 (DNS가 서버를 가리키고 80, 443이 열려 있어야 한다)
+  - `/ops`(시연용 운영 조회 서버), `/prom`(Prometheus)은 404다. 배포 화면은 시연 기능(API 기록 창, 처리 상세, DLT, 시스템 현황 등)을 빼고 빌드한다 (`frontend/Dockerfile`의 `VITE_DEMO=false`). 관리자 화면은 들어 있고 ADMIN 계정에만 보인다
+- 📌 HTTPS여도 공개 서버라 **시연용 테스트 계정만 쓴다**
+- 게이트웨이(8080), 서비스 포트(8081~8083), Eureka, PostgreSQL, Kafka, Prometheus, Grafana는 외부에 열지 않는다 (서비스 포트를 열면 `X-User-Id` 헤더만으로 게이트웨이 인증을 우회할 수 있다)
+- ⚠️ 인증서는 볼륨 `caddy-data`에 있다. 지우지 않는다. 지우면 다시 발급받는데, 같은 도메인은 7일에 5번까지만 발급된다 (Let's Encrypt 한도)
 
 #### 수동 실행, 롤백
 
 - GitHub → Actions → Deploy → **Run workflow**. `sha`를 비우면 선택한 브랜치의 최신 커밋, 넣으면 그 커밋을 배포한다
 - develop에 머지되어 CI가 성공한 커밋만 배포할 수 있다. 작업 브랜치의 커밋을 넣으면 AWS에 접근하기 전에 멈춘다
-- 롤백은 이전 커밋 SHA를 넣어 실행한다. ECR에 이미지가 있으면 빌드 없이 바로 배포한다 (ECR에는 서비스마다 최근 이미지 5개만 남고, 그보다 오래된 커밋은 다시 빌드한다)
+- 롤백은 이전 커밋 SHA를 넣어 실행한다. ECR에 이미지가 있으면 빌드 없이 바로 배포한다 (ECR에는 이미지마다 최근 5개만 남고, 그보다 오래된 커밋은 다시 빌드한다)
+- web이 없는 커밋(#172 이전)으로 롤백하면 워크플로가 web 컨테이너를 멈춘 뒤 배포하고, 끝나면 지운다. 게이트웨이는 다시 `http://{고정 IP}`(80)로 열린다. 배포가 서비스를 바꾸기 전(값 검사, ECR 로그인, 이미지 받기)에 실패하면 web을 다시 띄워 https 접속이 유지된다. 이때는 https가 없어 마지막 공개 주소 확인만 실패한다 (서버 배포는 정상). 그 상태로 둘 거면 저장소 변수 `DEPLOY_BASE_URL`을 `http://{고정 IP}`로 바꾼다
 - 서버에는 healthy와 스모크까지 통과한 마지막 배포 SHA가 `/opt/ipo/.last-tag`, 그 전 SHA가 `/opt/ipo/.prev-tag`에 남는다
 - DB 스키마는 되돌리지 않는다 (`ddl-auto: update`는 컬럼 추가만 반영). 스키마를 바꾸는 변경은 시연 직전에 넣지 않는다
 
 #### 비밀값
 
-- AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택), `SMOKE_LOGIN_ID`, `SMOKE_PASSWORD`
+- AWS Systems Manager Parameter Store `/ipo/prod/` (SecureString): `DB_PASSWORD`, `ACCOUNT_DB_PASSWORD`, `SUBSCRIPTION_DB_PASSWORD`, `ALLOCATION_DB_PASSWORD`, `JWT_SECRET`, `GRAFANA_ADMIN_PASSWORD`, `SLACK_WEBHOOK_URL`(선택), `SMOKE_LOGIN_ID`, `SMOKE_PASSWORD`, `ADMIN_LOGIN_ID`, `ADMIN_PASSWORD`
 - `SMOKE_LOGIN_ID`(영문 소문자, 숫자 4~20자), `SMOKE_PASSWORD`(8~20자, 작은따옴표 `'` 불가)는 배포 후 스모크 전용 계정이다. 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 이 계정 하나를 계속 쓴다: 처음 배포 때 가입하고 계좌를 하나 연 뒤로는 로그인과 입금(1,000원)만 해서 배포마다 회원이 늘지 않는다. 시연에는 쓰지 않는다 (배포마다 잔고가 늘어난다). `.env`에는 넣지 않는다
+- `SITE_DOMAIN`(String, 비밀값 아님): 인증서를 받을 도메인만 적는다 (예: `example.com`. `https://`, `/`, `www.` 없이). 형식이 틀리거나 없으면 서비스를 바꾸기 전에 배포가 멈춘다
+- `ADMIN_LOGIN_ID`(영문 소문자, 숫자 4~20자, `SMOKE_LOGIN_ID`와 다른 값), `ADMIN_PASSWORD`(8~20자, 공백 없는 영문, 숫자, 특수문자. `$`, 작은따옴표 `'`, 역슬래시 `\` 불가)는 첫 관리자 계정이다 ([관리자 계정](#관리자-계정)). 형식이 틀리면 서비스를 바꾸기 전에 배포가 멈춘다. 서버 주소가 공개돼 있으니 `admin`처럼 짐작하기 쉬운 ID를 피하고 비밀번호는 무작위 값을 쓴다
+  - ⚠️ 첫 배포 때 한 번만 계정을 만든다. 그 뒤 파라미터를 바꿔도 계정의 비밀번호는 바뀌지 않는다
 - 배포할 때마다 서버의 `/opt/ipo/.env`(권한 600)를 다시 만든다. 서버의 `.env`를 손으로 고치지 않는다 (다음 배포 때 덮어쓴다)
 - ⚠️ DB 비밀번호 4개는 첫 배포 뒤 바꾸지 않는다. PostgreSQL 볼륨이 처음 만들어질 때 한 번만 계정을 만들어서, 바꾸면 서비스가 DB에 접속하지 못한다
 - ⚠️ `GRAFANA_ADMIN_PASSWORD`도 Grafana가 처음 뜰 때 한 번만 쓴다. 바꾸려면 Grafana 화면에서 바꾸고 파라미터도 같은 값으로 맞춘다
@@ -393,7 +477,7 @@ develop 머지 → CI(build) 성공 → Deploy 워크플로
 | `AWS_DEPLOY_ROLE_ARN` | 배포용 IAM 역할 ARN |
 | `ECR_REGISTRY` | `{계정 ID}.dkr.ecr.ap-northeast-2.amazonaws.com` |
 | `EC2_INSTANCE_ID` | 배포 서버 인스턴스 ID |
-| `DEPLOY_BASE_URL` | `http://{고정 IP}` (공개 주소 확인이 사용) |
+| `DEPLOY_BASE_URL` | `https://{도메인}` (공개 주소 확인이 사용) |
 
 - 인스턴스를 새로 만들면 `EC2_INSTANCE_ID`와 배포 역할의 SSM 권한 대상 인스턴스를 같이 바꾼다
 
@@ -407,12 +491,13 @@ docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml ps
 docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml logs --tail 100 {서비스 이름}
 ```
 
-- ⚠️ `down -v`는 쓰지 않는다. DB, Kafka 데이터가 지워진다
+- 인증서 발급 확인: `docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml logs web | grep -i "certificate obtained"`. 안 나오면 `logs --tail 100 web`에서 오류를 본다 (DNS, 80/443 보안 그룹). 실패해도 Caddy가 간격을 늘리며 다시 시도한다
+- ⚠️ `down -v`는 쓰지 않는다. DB, Kafka 데이터와 인증서(`caddy-data`)가 지워진다
 - ⚠️ 서버의 `/opt/ipo` 파일을 직접 고치지 않는다. 배포 스크립트가 레포를 배포 커밋으로 바꿀 때 실패한다
 
 #### Grafana, Eureka 화면 (포트 포워딩)
 
-Grafana, Eureka, Prometheus는 외부에 열지 않는다. 팀원은 본인 IAM 사용자로 AWS에 로그인한 뒤 SSM 터널을 열어 내 PC 주소(`localhost`)로 본다.
+Grafana, Eureka, Prometheus, Zipkin은 외부에 열지 않는다 (Loki는 Grafana에서 조회). 팀원은 본인 IAM 사용자로 AWS에 로그인한 뒤 SSM 터널을 열어 내 PC 주소(`localhost`)로 본다.
 
 1. 처음 한 번 설치 (AWS CLI 2.32.0 이상, Session Manager 플러그인)
 
@@ -443,6 +528,7 @@ aws ssm start-session --region ap-northeast-2 --target {인스턴스 ID} --docum
 | Grafana | `3000` → `13000` | `http://localhost:13000` | `admin` / Parameter Store의 `GRAFANA_ADMIN_PASSWORD` (콘솔 → Systems Manager → Parameter Store → 값 표시) |
 | Eureka | `8761` → `18761` | `http://localhost:18761` | 없음 |
 | Prometheus | `9090` → `19090` | `http://localhost:19090` | 없음 |
+| Zipkin | `9411` → `19411` | `http://localhost:19411` | 없음 |
 
 - 화면마다 터널 창을 하나씩 연다 (명령의 두 숫자만 바꾼다)
 - 로컬 포트를 `13000`처럼 바꾸는 이유: 내 PC에서 로컬 Docker의 Grafana(3000) 등이 떠 있어도 겹치지 않게
@@ -451,6 +537,7 @@ aws ssm start-session --region ap-northeast-2 --target {인스턴스 ID} --docum
 #### 비용, 중지
 
 - 쓰지 않을 때는 EC2를 **중지**한다 (콘솔 → 인스턴스 상태 → 인스턴스 중지). **종료**는 서버와 디스크를 지운다
+- 도메인(`.com`)은 연 단위로 따로 결제된다 (AWS 크레딧으로 낼 수 없다). 자동 갱신은 꺼 두었으니 계속 쓰려면 만료 전에 Route 53에서 직접 갱신한다. 호스팅 영역 요금(월 $0.50)은 도메인이 만료돼도 나오므로, 그만 쓸 때는 호스팅 영역도 지운다
 - 중지 중에도 디스크와 고정 IP 요금은 나온다. 다시 시작하면 컨테이너는 `restart: unless-stopped`로 자동으로 뜬다
 - 중지 중에 develop에 머지되면 Deploy가 실패한다. 서버를 켠 뒤 Run workflow로 다시 배포한다
 - 배포 환경에서는 부하 테스트를 하지 않는다 (시연 데이터, 장애 알림이 섞인다)
@@ -505,9 +592,11 @@ subscription-service/.../com/gongmoju/subscription/
 | `response/PageResponse` | 공통 목록 응답 |
 | `swagger/` | 오류 응답 예시 자동 생성 (`@ErrorCodeExamples`, `ErrorCodeOperationCustomizer`) |
 | `feign/` | 헤더 전달, 에러 디코더, 재시도, Feign 예외 처리 (Feign 있는 서비스만) |
-| `outbox/` | Outbox 엔티티, 저장소, 발행기, 설정(`outbox.publisher.*`), 자동 설정 (Kafka, JPA 있는 서비스만) |
+| `outbox/` | Outbox 엔티티, 저장소, 발행기, 설정(`outbox.publisher.*`), 자동 설정 (Kafka, JPA 있는 서비스만). 저장할 때의 추적 문맥(`trace_parent`)을 발행 때 이어 붙임 (Micrometer Tracing 있는 서비스만) |
 | `event/` | 처리한 이벤트 기록(중복 수신 방지): 엔티티, 포트(`ProcessedEventRepository`), 구현, 자동 설정 (JPA 있는 서비스만) |
-| `config/` | 위 기능 + Swagger 공통 설정 자동 등록 (AutoConfiguration). `outbox/`, `event/`의 자동 설정은 각 폴더에 있음 |
+| `schedulerlock/` | 스케줄러 중복 실행 방지(ShedLock) 락 저장소, 자동 설정 (ShedLock 의존성과 DB가 있는 서비스만. 지금은 계좌, 청약). [아래](#스케줄러-중복-실행-방지-shedlock) |
+| `tracing/` | 분산 추적 수집 제외 규칙 (주기 작업, `/actuator/**` 등. Micrometer Tracing 있는 서비스만). [분산 추적](#분산-추적-zipkin) |
+| `config/` | 위 기능 + Swagger 공통 설정 자동 등록 (AutoConfiguration). `outbox/`, `event/`, `schedulerlock/`, `tracing/`의 자동 설정은 각 폴더에 있음 |
 
 > 💡 서비스는 자기 패키지(`com.gongmoju.{서비스}`)만 스캔하므로 common 설정은 `AutoConfiguration.imports`로 자동 등록됩니다. 서비스에 `JpaAuditingConfig`, `SwaggerConfig`를 따로 만들지 않습니다.
 >
@@ -569,6 +658,7 @@ compileOnly 'org.springframework.boot:spring-boot-starter-data-jpa'   // BaseEnt
 compileOnly 'org.springframework.cloud:spring-cloud-starter-openfeign' // feign/
 compileOnly 'org.springframework.kafka:spring-kafka'                  // outbox/ (발행기)
 compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
+compileOnly 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'          // schedulerlock/ (provider-jdbc-template도 같은 버전)
 ```
 
 > 💡 `compileOnly`: common은 빌드할 때만 라이브러리를 참고하고, 서비스에 넘겨주지 않습니다.
@@ -578,6 +668,57 @@ compileOnly 'io.swagger.core.v3:swagger-annotations-jakarta:2.2.22'   // @Schema
 
 - common에 라이브러리 추가 → common엔 `compileOnly` + 서비스엔 `implementation`
   - 서비스쪽 누락 시 `ClassNotFoundException` → 서비스 `build.gradle`에 의존성 추가
+
+### 스케줄러 중복 실행 방지 (ShedLock)
+
+인스턴스를 2개 이상 띄우면 `@Scheduled` 작업이 인스턴스마다 돈다. `@SchedulerLock`을 붙이면 같은 작업은 한 번에 한 인스턴스만 실행하고, 나머지는 그 차례를 건너뛴다 (기다리지 않음)
+
+- 락은 서비스 자기 스키마의 `shedlock` 표에 작업 이름마다 한 줄로 남는다. 표는 계좌, 청약 `schema.sql`이 만든다 (다른 서비스에 붙일 때는 ShedLock 의존성 두 줄과 같은 표를 추가)
+- `shedlock` 표의 시각 컬럼은 팀 규칙과 달리 `TIMESTAMP`다. ShedLock이 DB 시각을 시간대 없는 UTC로 넣고 비교해서, `TIMESTAMPTZ`면 접속 시간대(IntelliJ로 띄운 KST 등)에 따라 락 시각이 9시간 어긋날 수 있다. 서비스에서 따로 만들지 말고 `schema.sql`의 정의를 그대로 쓴다
+- 락 만료는 DB 시각으로 판단한다 (인스턴스마다 시계가 조금 달라도 같은 기준)
+- `@SchedulerLock`을 붙이지 않은 스케줄러는 지금처럼 인스턴스마다 돈다. 이 설정이 들어와도 붙이기 전까지 동작은 바뀌지 않는다
+- 게이트웨이는 common, DB를 쓰지 않아 이 방식을 쓰지 않는다. Outbox 발행기는 방식 결정 전이라 아직 붙이지 않는다 (#149)
+
+붙이는 방법 (의존성, 설정은 이미 되어 있어 어노테이션만 추가)
+
+```java
+@Scheduled(fixedDelayString = "${ipo.close.interval:PT5S}")
+@SchedulerLock(name = "IpoCloseScheduler.closeDueIpos", lockAtMostFor = "PT1M", lockAtLeastFor = "PT4S")
+void closeDueIpos() { ... }
+```
+
+- 메서드는 public이 아니어도 된다 (package-private 메서드와 `@Scheduled` 실행에서 락이 걸리는 것을 `CommonSchedulerLockAutoConfigurationTest`가 확인)
+- `name`: `{클래스}.{메서드}`. 표가 서비스 스키마마다 따로라 서비스 이름은 붙이지 않는다. 64자 이하. 한 번 정하면 바꾸지 않는다 (바꾸면 옛 이름과 새 이름이 서로를 막지 못한다)
+- `lockAtMostFor`: 락을 잡은 인스턴스가 작업 중에 죽어도 이 시간이 지나면 풀린다. **가장 오래 걸리는 실행보다 넉넉히 길게** 잡는다. 실행이 이 시간을 넘기면 다른 인스턴스가 같은 작업을 동시에 시작한다. 적지 않으면 기본값 10분
+- `lockAtLeastFor`: 작업이 빨리 끝나도 이 시간 동안은 락을 놓지 않는다. **주기보다 조금 짧게** 잡는다
+  - 락은 "동시 실행"만 막는다. `lockAtLeastFor`가 0이면 A가 끝나자마자 B가 실행할 수 있어, 겹치지만 않을 뿐 인스턴스 수만큼 자주 돈다 (주기 5초, 인스턴스 2개면 5초에 최대 2번)
+  - cron 작업도 꼭 둔다. 인스턴스끼리 시계가 몇 초 다르면 A가 04:00:00에 끝낸 뒤 B가 04:00:02에 같은 작업을 또 실행한다
+
+추천값 (실제 실행 시간을 보고 담당자가 정한다)
+
+| 스케줄러 | 주기 | `lockAtMostFor` | `lockAtLeastFor` | 담당 |
+| --- | --- | --- | --- | --- |
+| `IpoCloseScheduler.closeDueIpos` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
+| `PendingTimeoutScheduler.handleTimedOutPending` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
+| `VoidRetryScheduler.retryStaleVoid` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
+| `LedgerReconciliationScheduler.reconcile` (계좌) | 매일 04:00 | `PT30M` | `PT5M` | 계좌 |
+
+- 주기를 설정값으로 바꿀 수 있는 스케줄러는 `lockAtLeastFor`도 주기에 맞춰야 한다. 어노테이션 값에 `"${키:기본값}"` 형식의 설정값을 쓸 수 있다
+
+확인 방법 (인스턴스 2개 환경, [부하 테스트 가이드](./LOADTEST.md) 3-5절)
+
+```bash
+# 이미지는 build/libs의 jar를 복사만 한다. 빌드를 빼면 이전 코드로 떠서 붙이기 전 결과가 나올 수 있다
+./gradlew build -x test && docker-compose -f docker-compose.yml -f compose.scale.yml up -d --build
+# 락을 잡은 인스턴스(locked_by = 컨테이너 호스트 이름)와 시각. 계좌는 account.shedlock
+docker exec ipo-postgres psql -U postgres -d ipo -c "SELECT name, locked_by, locked_at, lock_until FROM subscription.shedlock"
+```
+
+- 건너뛴 인스턴스는 로그를 남기지 않는다. 스케줄러가 실행마다 남기는 로그를 **모든 인스턴스를 합쳐 일정 시간(예: 1분) 동안** 세어 붙이기 전과 붙인 뒤를 비교한다
+  - 주기 5초, 인스턴스 2개면 1분에 붙이기 전 약 24번(12번 x 2), 붙인 뒤 약 12번. 붙인 뒤 횟수가 인스턴스 1개일 때와 같으면 정상이다
+  - 주기 하나(5초) 구간으로 세지 않는다. 인스턴스마다 깨어나는 시점이 달라, 락이 정상이어도 A가 0초, B가 4.5초에 실행하면(락은 4초까지) 한 구간에 두 번 찍힐 수 있다
+  - 실행 시각이 겹치지 않는지만 보는 것으로는 부족하다. 금방 끝나는 작업은 락이 없어도 거의 겹치지 않고, `lockAtLeastFor`가 없으면 겹치지 않으면서 5초에 두 번 돌 수 있어서, 줄어든 실행 횟수로 확인한다
+- 테스트에서 스케줄러를 `new`로 만들어 메서드를 부르면 락이 걸리지 않는다 (지금 스케줄러 테스트는 모두 이 방식이라 영향 없음). 스프링 빈으로 받아 여러 번 부르는 테스트는 `lockAtLeastFor` 때문에 두 번째 호출부터 건너뛸 수 있다
 
 ---
 
@@ -836,6 +977,11 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
 - **account-service 또는 api-gateway가 기동할 때 `JWT_SECRET` 오류**
   - `.env`의 `JWT_SECRET`이 비어 있거나, Base64가 아니거나, 디코딩 후 32바이트 미만 → [JWT 키](#-jwt-키)대로 값을 채움
 
+- **account-service가 기동할 때 `ADMIN_LOGIN_ID` 또는 `ADMIN_PASSWORD` 오류 (`adminSeedRunner`)**
+  - 둘 중 하나만 있음, 로그인 ID 형식(영문 소문자, 숫자 4~20자), 비밀번호 길이(8~20자) 오류 → 둘 다 채우거나 둘 다 비운다. 오류 메시지에 어느 값이 문제인지 나온다
+  - `Could not resolve placeholder`가 나오면 `ADMIN_PASSWORD`에 `$`가 들어간 것 → `$` 없는 값으로 바꾼다. 이 오류 로그에는 비밀번호가 그대로 찍히니 이슈, 메신저에 붙이지 않는다
+  - 바꾼 뒤 Docker는 `docker-compose up -d account-service` ([관리자 계정](#관리자-계정))
+
 - **Gateway(8080)로 호출하면 `401`, 서비스 포트로 직접 호출하면 정상**
   - 정상. Gateway는 `Authorization: Bearer {accessToken}`이 필요 (공개 경로 제외). 만료는 `TOKEN_EXPIRED`이니 다시 로그인
 
@@ -861,9 +1007,22 @@ JWT_SECRET=팀 공용 키 (팀에서 승인한 비밀 관리 도구로 공유)
   - Grafana → Alerting → Alert rules에서 규칙 상태(Normal, Pending, Firing)와 오류를 확인한다
   - ⚠️ Slack 전송이 실패하면 Grafana 오류 로그에 Webhook URL이 그대로 찍힐 수 있다. 로그를 이슈, PR, 메신저에 붙일 때는 `hooks.slack.com/services/...` 부분을 지운다
 
+- **Zipkin에 trace가 안 보임**
+  - `zipkin` 컨테이너가 떠 있는지 확인한다 (서비스는 Zipkin 없이도 뜬다). 서비스 로그에 `Spans were dropped due to exceptions`가 있으면 Zipkin에 닿지 못한 것
+  - 샘플링이 0인지 확인한다: `docker exec ipo-account-service printenv TRACING_SAMPLING_PROBABILITY` (`compose.perf.yml`로 띄우면 0)
+  - 서비스가 막 다시 떴으면 게이트웨이가 찾는 데 최대 30초 걸린다. 그 사이 요청은 503이다
+  - 주기 작업과 `/actuator/**`는 일부러 모으지 않는다 ([분산 추적](#분산-추적-zipkin))
+
+- **Grafana에서 Loki 로그가 안 보임**
+  - `loki`, `alloy` 컨테이너가 떠 있는지 확인한다. `docker-compose logs alloy`에서 Docker 소켓 오류(`permission denied`, `no such file`)를 본다
+  - IntelliJ로 띄운 서비스 로그는 원래 모이지 않는다
+  - 다른 compose 프로젝트 이름(`-p`)으로 띄운 컨테이너는 모이지 않는다. 같은 `-p`로 띄운 Alloy가 그 프로젝트만 모은다
+  - 로그 줄에 traceId가 있는데 `trace_id`로 안 찾아지면 로그 형식이 바뀐 것. `docker/alloy/config.alloy`의 정규식을 맞춘다
+
 - **Docker에서 서비스가 `unhealthy`이거나 `starting`에서 안 넘어감**
   - `docker-compose logs {서비스 이름}`에서 `APPLICATION FAILED`나 `ERROR`를 확인한다
   - `JWT_SECRET`(account, gateway) 또는 서비스별 DB 비밀번호가 `.env`에 비어 있거나 형식이 틀리면 기동에 실패한다 → [JWT 키](#-jwt-키), [DB와 설정](#10-db와-설정)
+  - account-service는 `ADMIN_LOGIN_ID`, `ADMIN_PASSWORD` 형식이 틀려도 기동에 실패한다 → [관리자 계정](#관리자-계정)
   - 서비스는 postgres, kafka, `kafka-init`(토픽 생성 완료), eureka-server가 준비된 뒤에 시작한다. 앞 단계가 `healthy`인지 `docker-compose ps`로 본다
 
 - **`docker-compose up`을 쳤더니 이미지 빌드 오류 (`build/libs/*.jar` 없음)**

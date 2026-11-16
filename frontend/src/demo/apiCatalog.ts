@@ -71,6 +71,10 @@ const CATALOG: { method: string; pattern: RegExp; desc: ApiDescription }[] = [
     desc: { title: '내 청약 목록', service: 'Gateway → subscription-service' },
   },
   {
+    method: 'POST', pattern: /^\/api\/v1\/admin\/users$/,
+    desc: { title: '관리자 계정 생성 (관리자)', service: 'Gateway → account-service', point: 'Gateway와 계좌 서비스가 둘 다 ADMIN인지 확인해요(아니면 403). 회원가입과 같은 항목을 받지만 역할은 항상 ADMIN이고, 누가 만들었는지 created_by에 남아요' },
+  },
+  {
     method: 'POST', pattern: /^\/api\/v1\/admin\/ipos$/,
     desc: { title: '공모주 등록 (관리자)', service: 'Gateway → subscription-service', point: 'Gateway가 ADMIN 토큰만 통과시켜요(아니면 403). 등록하면 바로 OPEN이고, 대기열은 게이트웨이 목록 갱신(최대 5초) 후부터 진입 가능해요' },
   },

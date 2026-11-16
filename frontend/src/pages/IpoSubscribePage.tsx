@@ -8,6 +8,7 @@ import { Card, ErrorBox, Loading, Money } from '../components/ui';
 import { formatWon } from '../lib/format';
 import { ipoStatusLabel } from '../lib/status';
 import { DesignNote } from '../demo/DesignNote';
+import { DEMO } from '../demo/flag';
 import { IpoInfoCard } from '../components/IpoInfoCard';
 import { useAdmission } from '../queue/useAdmission';
 import { AdmissionTimer, QueueSheet } from '../queue/QueueUi';
@@ -205,26 +206,30 @@ export function IpoSubscribePage() {
 
         <div className="stack">
           <IpoInfoCard ipo={d} />
-          <DesignNote title="몰릴 때는 대기열로 순서대로">
-            <ul className="dots">
-              <li>청약 화면은 게이트웨이의 공모주별 대기열을 지나야 열려요. 1초마다 서비스가 받을 수 있는 만큼(433명)만 입장시켜요.</li>
-              <li>입장 허가를 받으면 허가 유효 시간 안에 청약해야 하고, 게이트웨이가 청약 신청마다 그 공모주의 입장 허가를 확인해요.</li>
-              <li>대기열 순번은 청약 화면에 들어가는 순서일 뿐이고 배정 순위와는 관계없어요.</li>
-            </ul>
-          </DesignNote>
-          <DesignNote title="몰려도 밀리지 않는 접수">
-            <ul className="dots">
-              <li>청약 요청은 DB 처리를 기다리지 않고 Kafka에 저장된 것을 확인(acks=all)한 뒤 바로 202로 답해요.</li>
-              <li>증거금 인출과 확정은 Consumer가 뒤에서 처리해요.</li>
-              <li>정식 측정에서 오픈 직후 피크 433건/초를 평균 8.0ms, 오류 0으로 받았어요 (정식측정-9).</li>
-            </ul>
-          </DesignNote>
-          <DesignNote title="버튼을 여러 번 눌러도 청약은 1건">
-            <ul className="dots">
-              <li>이 화면이 만든 요청 ID(requestId)로 청약 ID를 정해서, 같은 요청이 다시 와도 같은 청약으로 처리해요.</li>
-              <li>계좌 서비스는 처리 기록(processed_event)으로 같은 이벤트를 한 번만 반영해 증거금이 두 번 인출되지 않아요.</li>
-            </ul>
-          </DesignNote>
+          {DEMO && (
+            <>
+              <DesignNote title="몰릴 때는 대기열로 순서대로">
+                <ul className="dots">
+                  <li>청약 화면은 게이트웨이의 공모주별 대기열을 지나야 열려요. 1초마다 서비스가 받을 수 있는 만큼(433명)만 입장시켜요.</li>
+                  <li>입장 허가를 받으면 허가 유효 시간 안에 청약해야 하고, 게이트웨이가 청약 신청마다 그 공모주의 입장 허가를 확인해요.</li>
+                  <li>대기열 순번은 청약 화면에 들어가는 순서일 뿐이고 배정 순위와는 관계없어요.</li>
+                </ul>
+              </DesignNote>
+              <DesignNote title="몰려도 밀리지 않는 접수">
+                <ul className="dots">
+                  <li>청약 요청은 DB 처리를 기다리지 않고 Kafka에 저장된 것을 확인(acks=all)한 뒤 바로 202로 답해요.</li>
+                  <li>증거금 인출과 확정은 Consumer가 뒤에서 처리해요.</li>
+                  <li>정식 측정에서 오픈 직후 피크 433건/초를 평균 8.0ms, 오류 0으로 받았어요 (정식측정-9).</li>
+                </ul>
+              </DesignNote>
+              <DesignNote title="버튼을 여러 번 눌러도 청약은 1건">
+                <ul className="dots">
+                  <li>이 화면이 만든 요청 ID(requestId)로 청약 ID를 정해서, 같은 요청이 다시 와도 같은 청약으로 처리해요.</li>
+                  <li>계좌 서비스는 처리 기록(processed_event)으로 같은 이벤트를 한 번만 반영해 증거금이 두 번 인출되지 않아요.</li>
+                </ul>
+              </DesignNote>
+            </>
+          )}
         </div>
       </div>
 

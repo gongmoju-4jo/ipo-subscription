@@ -251,7 +251,7 @@ class VoidRetrySchedulerTest {
     }
 
     @Test
-    @DisplayName("반환 지연 알림 조회가 실패해도 예외를 밖으로 던지지 않고, 재요청 처리는 이미 끝나 있다")
+    @DisplayName("반환 지연 알림 조회가 실패해도 예외를 밖으로 던지지 않고, 재요청 처리는 그대로 진행한다")
     void retryStaleVoid_doesNotThrow_whenAlertLookupFails() {
         // given
         UUID target = UUID.randomUUID();

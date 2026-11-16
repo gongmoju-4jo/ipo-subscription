@@ -60,8 +60,11 @@ class VoidRetryScheduler {
      * 지정한 시각을 기준으로 반환 재요청 대상을 조회해 건별로 처리, 오래 걸리는 반환은 알림 간격마다 ERROR 로그 기록
      */
     void retryStaleVoid(Instant now) {
-        retry(now);
+        // 알림 조회를 재요청보다 먼저 한다. 초기 간격 = 상한(고정 간격)이면 재요청 대상과 알림 대상이 같은 순간 생기는데,
+        // 재요청이 먼저 마지막 요청 시각을 갱신하면 그 청약이 알림 대상에서 빠져 알림이 영영 나가지 않는다.
+        // 고정 간격에서는 이번 주기에 재요청 대상인 청약만 알림에 잡혀 요약의 총 건수가 실제보다 작을 수 있다 (알림 자체는 나감)
         alertLongVoiding(now);
+        retry(now);
     }
 
     private void retry(Instant now) {

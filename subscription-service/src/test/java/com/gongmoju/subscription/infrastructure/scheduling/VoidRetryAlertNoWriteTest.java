@@ -9,6 +9,7 @@ import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.slf4j.LoggerFactory;
@@ -111,6 +112,24 @@ class VoidRetryAlertNoWriteTest {
         assertThat(subscription().get("attempts")).isEqualTo(properties.alertAttempts());
         assertThat(subscription().get("version")).isEqualTo(0L);
         assertThat(outboxCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("초기 간격과 상한이 같은 설정에서 재요청 대기가 끝난 반환 지연 청약은 재요청도 나가고 알림 ERROR 로그도 남는다")
+    void retryAndAlert_bothHappen_whenInitialEqualsMaxInterval() {
+        // given: 30초 고정 간격. 요청 횟수가 알림 기준 이상이고 마지막 요청 뒤 31초가 지나 재요청 대기(30초)와 알림 최소 경과(30초)를 같은 순간 넘음
+        VoidRetryProperties fixed = new VoidRetryProperties(Duration.ofSeconds(30), Duration.ofSeconds(30), properties.alertAttempts(), 100);
+        VoidRetryScheduler scheduler = new VoidRetryScheduler(subscriptionRepository, voidRetryService, fixed, ALERT_INTERVAL);
+        Instant lastRequestedAt = Instant.now().minusSeconds(31).truncatedTo(ChronoUnit.MICROS);
+        insertSubscription("COMPENSATING", "TIMEOUT", properties.alertAttempts(), lastRequestedAt);
+
+        // when
+        scheduler.retryStaleVoid(Instant.now());
+
+        // then: 재요청이 나가 요청 횟수가 늘었고, 알림도 나감 (재요청이 먼저 요청 시각을 갱신해도 알림이 빠지지 않음)
+        assertThat(subscription().get("attempts")).isEqualTo(properties.alertAttempts() + 1);
+        List<ILoggingEvent> errors = logAppender.list.stream().filter(e -> e.getLevel() == Level.ERROR).toList();
+        assertThat(errors).anySatisfy(e -> assertThat(e.getFormattedMessage()).contains(subscriptionId.toString()));
     }
 
     private void insertSubscription(String status, String cancelReason, int attempts, Instant lastRequestedAt) {

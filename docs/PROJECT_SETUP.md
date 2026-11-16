@@ -33,7 +33,7 @@ docker-compose up -d postgres kafka kafka-init kafka-ui redis
 
 필요: **JDK 21**, Docker + Compose v2 이상, IntelliJ
 
-> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, Redis(접속 대기열), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)이 있습니다.
+> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, Redis(접속 대기열, 경쟁률 사본), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana)이 있습니다.
 
 ### 📌 Claude Code
 
@@ -75,7 +75,7 @@ ipo-subscription/
 | account / subscription / allocation | 8081 / 8082 / 8083 |
 | PostgreSQL | 5432 |
 | Kafka / Kafka-UI | 29092 / 8989 |
-| Redis | 6379 (접속 대기열. 게이트웨이만 사용) |
+| Redis | 6379 (게이트웨이 접속 대기열, 청약 서비스 경쟁률 사본) |
 | Prometheus / Grafana | 9090 / 3000 |
 | gateway 관리 포트 | 18090 (헬스체크, 지표 수집 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
 
@@ -150,6 +150,23 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
   - 새로 등록된 공모주는 다음 갱신(최대 5초) 뒤부터 진입할 수 있다
 - Redis에 접속할 수 없으면 503 `SERVICE_UNAVAILABLE` (대기열 없이 통과시키지 않음)
 
+### 경쟁률 사본 (Redis)
+
+공모주 목록, 상세의 경쟁률(`competitionRate`, F-15)은 청약 서비스가 게이트웨이와 같은 Redis에 둔 사본에서 읽는다. 기준은 DB의 청약 행이고, 사본은 조회마다 DB에서 합산하지 않으려고 둔다 (조회마다 합산하면 확정 청약 10만 건 공모주에서 PostgreSQL이 막혀 청약 접수까지 멈춘다. S7, [부하 테스트 가이드](./LOADTEST.md))
+
+- 키: 공모주마다 `competition:requested:{ipoId}` = 배정 대상 청약(`CONFIRMED`, `ALLOCATED`, `REFUNDED`)의 신청 수량 합. 채우는 동안에는 `competition:loading:{ipoId}`(채우는 중 표시이자 그사이 확정의 합, 30초 뒤 자동 삭제)
+- 청약이 확정되면 커밋 뒤에 더한다. 사본이 있으면 사본에, 채우는 중이면 채우는 중 합계에 더하고, 둘 다 없으면 더하지 않는다 (다음 조회의 DB 합산에 들어 있음)
+- 사본이 없으면(처음, Redis 재시작, 만료) 조회가 채운다: 채우는 중 표시 → DB 합산 → DB 합산 + 채우는 중 합계로 넣기. 채우는 동안 확정된 청약이 빠지지 않게 하려는 순서다
+  - 같은 공모주는 서비스 안에서 한 요청만 합산하고 나머지는 그 결과를 기다린다. 인스턴스가 여럿이면 채우는 중 표시를 먼저 만든 쪽만 넣는다
+  - 조회는 트랜잭션 없이 돌아 기다리는 요청이 DB 커넥션을 쥐지 않는다
+- 사본은 5분 뒤 만료되어 DB로 다시 계산된다 (`ipo.competition-rate.ttl`). DB 커밋과 Redis 갱신이 한 트랜잭션이 아니라서 남는 아주 드문 오차를 이 시간 안에 바로잡는다
+  - 커밋 직후 Redis에 더하기 전에 서비스가 죽으면 그 확정이 빠진다
+  - 커밋과 Redis 더하기 사이의 아주 짧은 틈에 채우는 중 표시가 생기면 같은 확정이 두 번 세질 수 있다
+  - 경쟁률은 화면 표시용이라 배정 계산에는 쓰지 않는다 (배정은 DB의 확정 청약으로 따로 계산)
+- Redis 장애: 경쟁률을 DB로 계산하고 청약 접수, 확정은 그대로 동작한다. 실패하면 10초(`retry-after`) 동안 Redis를 부르지 않고, 그동안 더하지 못한 공모주는 Redis가 돌아오면 사본을 지워 DB로 다시 채운다 (낮은 값이 남지 않게). Redis 상태는 청약 서비스 health에 넣지 않는다 (경쟁률 하나로 서비스 전체가 DOWN이 되지 않게)
+- 투자자 취소(`CANCEL_REQUESTED`)는 아직 구현 전이라 사본에서 빼는 코드가 없다. 구현하면 취소 커밋 뒤에 빼야 한다
+- Redis 없이 띄우는 테스트는 `ipo.competition-rate.redis-enabled=false` (조회마다 DB 합산)
+
 📌 청약 신청(`POST /api/v1/subscriptions`)은 그 공모주의 **입장 허가가 있어야** 서비스로 간다 (`AdmissionCheckFilter`)
 
 - 요청 본문의 `ipoId`로 허가를 확인한다. 다른 공모주의 허가로는 신청할 수 없다. 본문은 바꾸지 않고 서비스로 보낸다
@@ -172,7 +189,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 ### IntelliJ
 
-1. `docker-compose up -d postgres kafka kafka-init kafka-ui redis` (Kafka가 필요 없는 작업이면 `postgres`만. 게이트웨이를 띄우면 `redis`도 필요). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
+1. `docker-compose up -d postgres kafka kafka-init kafka-ui redis` (Kafka가 필요 없는 작업이면 `postgres`만. 게이트웨이를 띄우면 `redis`도 필요. 청약 서비스는 `redis`가 없어도 뜨고 경쟁률만 DB로 계산한다). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
 2. `⌘8`/`Alt+8` Services 창 → Eureka 실행 → 나머지 실행
 3. http://localhost:8080/api/v1/unknown → 401 JSON(`UNAUTHORIZED`)이면 게이트웨이 정상 (토큰이 필요한 경로라서)
 

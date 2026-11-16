@@ -1,0 +1,187 @@
+package com.gongmoju.subscription.application.ipo;
+
+import com.gongmoju.subscription.domain.ipo.CompetitionRateCounter;
+import com.gongmoju.subscription.domain.ipo.Ipo;
+import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
+import com.gongmoju.subscription.domain.subscription.SubscriptionStatus;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.lang.reflect.Constructor;
+import java.math.BigDecimal;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@DisplayName("경쟁률 계산 (사본과 DB)")
+class CompetitionRateReaderTest {
+
+    private final CompetitionRateCounter counter = mock(CompetitionRateCounter.class);
+    private final SubscriptionRepository repository = mock(SubscriptionRepository.class);
+    private final CompetitionRateReader reader = new CompetitionRateReader(counter, repository);
+
+    @Test
+    @DisplayName("사본에 있는 공모주는 DB를 합산하지 않고, 없는 공모주만 채우는 중 표시 → DB 합산 → 채우기 순서로 넣는다")
+    void rates_usesCounter_andLoadsOnlyMissingFromDatabase() {
+        // given
+        Ipo cached = ipo(100);
+        Ipo missing = ipo(100);
+        when(counter.find(anyCollection())).thenReturn(Map.of(cached.getId(), 250L));
+        when(counter.startLoading(anyCollection())).thenReturn(Set.of(missing.getId()));
+        when(repository.sumRequestedQuantityByIpoIds(anyCollection(), eq(SubscriptionStatus.ALLOCATION_TARGETS)))
+                .thenReturn(Map.of(missing.getId(), 50L));
+
+        // when
+        Map<UUID, BigDecimal> rates = reader.rates(List.of(cached, missing));
+
+        // then
+        assertThat(rates.get(cached.getId())).isEqualByComparingTo("2.50");
+        assertThat(rates.get(missing.getId())).isEqualByComparingTo("0.50");
+        InOrder order = inOrder(counter, repository);
+        order.verify(counter).startLoading(argThat((Collection<UUID> ids) -> ids.size() == 1 && ids.contains(missing.getId())));
+        order.verify(repository).sumRequestedQuantityByIpoIds(argThat((Collection<UUID> ids) -> ids.size() == 1 && ids.contains(missing.getId())),
+                eq(SubscriptionStatus.ALLOCATION_TARGETS));
+        order.verify(counter).finishLoading(Map.of(missing.getId(), 50L));
+    }
+
+    @Test
+    @DisplayName("DB에 배정 대상 청약이 없는 공모주는 0으로 사본에 넣고 경쟁률은 0.00이다")
+    void rates_storesZero_whenNoTargetSubscriptions() {
+        Ipo ipo = ipo(100);
+        when(counter.find(anyCollection())).thenReturn(Map.of());
+        when(counter.startLoading(anyCollection())).thenReturn(Set.of(ipo.getId()));
+        when(repository.sumRequestedQuantityByIpoIds(anyCollection(), any())).thenReturn(Map.of());
+
+        assertThat(reader.rates(List.of(ipo)).get(ipo.getId())).isEqualByComparingTo("0.00");
+        verify(counter).finishLoading(Map.of(ipo.getId(), 0L));
+    }
+
+    @Test
+    @DisplayName("다른 인스턴스가 채우는 중인 공모주는 DB로 계산해 응답하되 사본에 넣지 않는다")
+    void rates_doesNotStore_whenAnotherInstanceIsLoading() {
+        Ipo ipo = ipo(100);
+        when(counter.find(anyCollection())).thenReturn(Map.of());
+        when(counter.startLoading(anyCollection())).thenReturn(Set.of());
+        when(repository.sumRequestedQuantityByIpoIds(anyCollection(), any())).thenReturn(Map.of(ipo.getId(), 70L));
+
+        assertThat(reader.rates(List.of(ipo)).get(ipo.getId())).isEqualByComparingTo("0.70");
+        verify(counter).finishLoading(Map.of());
+    }
+
+    @Test
+    @DisplayName("사본이 모두 있으면 DB를 부르지 않는다")
+    void rates_doesNotQueryDatabase_whenAllCached() {
+        Ipo ipo = ipo(100);
+        when(counter.find(anyCollection())).thenReturn(Map.of(ipo.getId(), 100L));
+
+        assertThat(reader.rates(List.of(ipo)).get(ipo.getId())).isEqualByComparingTo("1.00");
+        verify(repository, never()).sumRequestedQuantityByIpoIds(anyCollection(), any());
+    }
+
+    @Test
+    @DisplayName("사본이 없는 같은 공모주를 여러 요청이 동시에 읽으면 DB 합산은 한 번만 하고 모두 같은 값을 받는다")
+    void rates_loadsOnce_whenConcurrentRequestsMissSameIpo() throws Exception {
+        // given: DB 합산이 끝나지 않은 동안 다른 요청들이 들어옴
+        Ipo ipo = ipo(100);
+        when(counter.find(anyCollection())).thenReturn(Map.of());
+        when(counter.startLoading(anyCollection())).thenReturn(Set.of(ipo.getId()));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(repository.sumRequestedQuantityByIpoIds(anyCollection(), any())).thenAnswer(inv -> {
+            started.countDown();
+            release.await(5, TimeUnit.SECONDS);
+            return Map.of(ipo.getId(), 300L);
+        });
+        ExecutorService pool = Executors.newFixedThreadPool(5);
+        try {
+            Future<Map<UUID, BigDecimal>> first = pool.submit(() -> reader.rates(List.of(ipo)));
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+            List<Future<Map<UUID, BigDecimal>>> others = List.of(
+                    pool.submit(() -> reader.rates(List.of(ipo))),
+                    pool.submit(() -> reader.rates(List.of(ipo))),
+                    pool.submit(() -> reader.rates(List.of(ipo))));
+            Thread.sleep(200);  // 나머지 요청이 계산 중인 결과를 기다리는 상태가 되게
+
+            // when
+            release.countDown();
+
+            // then
+            assertThat(first.get(5, TimeUnit.SECONDS).get(ipo.getId())).isEqualByComparingTo("3.00");
+            for (Future<Map<UUID, BigDecimal>> f : others) {
+                assertThat(f.get(5, TimeUnit.SECONDS).get(ipo.getId())).isEqualByComparingTo("3.00");
+            }
+            verify(repository, times(1)).sumRequestedQuantityByIpoIds(anyCollection(), any());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("DB 합산이 Error로 끝나도 기다리던 요청은 멈추지 않고, 한 번 다시 계산해 값을 받는다")
+    void rates_followersDoNotHang_whenLoaderFailsWithError() throws Exception {
+        // given: 첫 합산은 Error, 다시 계산하면 성공
+        Ipo ipo = ipo(100);
+        when(counter.find(anyCollection())).thenReturn(Map.of());
+        when(counter.startLoading(anyCollection())).thenReturn(Set.of(ipo.getId()));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(repository.sumRequestedQuantityByIpoIds(anyCollection(), any()))
+                .thenAnswer(inv -> {
+                    started.countDown();
+                    release.await(5, TimeUnit.SECONDS);
+                    throw new StackOverflowError("loader failed");
+                })
+                .thenReturn(Map.of(ipo.getId(), 400L));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Map<UUID, BigDecimal>> leader = pool.submit(() -> reader.rates(List.of(ipo)));
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<Map<UUID, BigDecimal>> follower = pool.submit(() -> reader.rates(List.of(ipo)));
+            Thread.sleep(200);  // 기다리는 상태가 되게
+
+            // when
+            release.countDown();
+
+            // then
+            assertThat(follower.get(5, TimeUnit.SECONDS).get(ipo.getId())).isEqualByComparingTo("4.00");
+            assertThat(catchThrowable(() -> leader.get(5, TimeUnit.SECONDS))).hasCauseInstanceOf(StackOverflowError.class);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private static Ipo ipo(long retailQuantity) {
+        try {
+            Constructor<Ipo> constructor = Ipo.class.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            Ipo ipo = constructor.newInstance();
+            ReflectionTestUtils.setField(ipo, "id", UUID.randomUUID());
+            ReflectionTestUtils.setField(ipo, "retailQuantity", retailQuantity);
+            return ipo;
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}

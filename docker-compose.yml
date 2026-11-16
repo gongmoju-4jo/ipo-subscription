@@ -95,7 +95,7 @@ services:
       kafka:
         condition: service_healthy
 
-  # 접속 대기열 상태 저장소 (api-gateway만 쓴다). 호스트(IntelliJ로 띄운 게이트웨이)는 localhost:6379(REDIS_PORT로 변경 가능), 컨테이너는 redis:6379로 접속한다
+  # 접속 대기열 상태 저장소(api-gateway)와 경쟁률 사본(subscription-service, 기준은 DB라 비어도 DB로 다시 채움). 호스트(IntelliJ로 띄운 서비스)는 localhost:6379(REDIS_PORT로 변경 가능), 컨테이너는 redis:6379로 접속한다
   # 메모리가 차도 키를 지우지 않는다(noeviction). 지우면 대기 중인 사람이 조용히 사라지고, 차면 쓰기가 오류로 드러난다
   # 디스크에 저장하지 않는다(RDB, AOF 끔). 대기열은 화면용 임시 상태라 재시작하면 비고, 투자자는 다시 진입한다 (청약, 돈 데이터와 무관)
   redis:
@@ -209,6 +209,8 @@ services:
       DB_NAME: ${DB_NAME:-ipo}
       SUBSCRIPTION_DB_PASSWORD: ${SUBSCRIPTION_DB_PASSWORD:-}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      # 경쟁률 사본(F-15). Redis를 기다리지 않고 뜬다 (Redis가 없어도 경쟁률은 DB로 계산하고 청약 접수는 그대로)
+      REDIS_HOST: redis
       EUREKA_URL: http://eureka-server:8761/eureka/
     depends_on:
       postgres:

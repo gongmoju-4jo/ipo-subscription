@@ -6,8 +6,6 @@ import com.gongmoju.common.util.PageableUtils;
 import com.gongmoju.subscription.domain.ipo.Ipo;
 import com.gongmoju.subscription.domain.ipo.IpoRepository;
 import com.gongmoju.subscription.domain.ipo.IpoStatus;
-import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
-import com.gongmoju.subscription.domain.subscription.SubscriptionStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -16,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,7 +27,7 @@ public class IpoService {
     private static final Set<String> LIST_SORTABLE_FIELDS = Set.of("createdAt");
 
     private final IpoRepository ipoRepository;
-    private final SubscriptionRepository subscriptionRepository;
+    private final CompetitionRateReader competitionRateReader;
 
     /**
      * 관리자가 공모주를 등록한다 (API 명세 3.6, F-18). 등록 규칙은 도메인({@link Ipo#register})이 확인한다.
@@ -51,16 +48,17 @@ public class IpoService {
     /**
      * 공모주 목록을 조회한다. 청약 시작 전, 진행 중, 마감된 종목을 모두 돌려준다.
      * 정렬을 지정하지 않으면 등록 시각 최신순이고, 같은 시각이면 ID 순이다 (시드는 등록 시각이 모두 같다).
-     * 경쟁률은 한 페이지의 공모주를 한 번에 합산해 붙인다 ({@link #competitionRates}).
+     * 경쟁률은 한 페이지의 공모주를 한 번에 붙인다 ({@link CompetitionRateReader}: 사본에서 읽고, 없는 공모주만 DB로 한 번에 합산).
+     * 트랜잭션을 걸지 않는다: 공모주 조회와 DB 합산이 각자 저장소 호출 동안만 커넥션을 쓰고, 다른 요청의 합산을 기다리는 동안에는 커넥션을 쥐지 않게
+     * (OSIV가 꺼져 있고 공모주에 지연 로딩 연관이 없어 트랜잭션 밖에서 값을 읽어도 됨).
      *
      * @param pageable 페이지 정보
      * @return 공모주 페이지. 없으면 빈 페이지
      * @throws BusinessException 정렬할 수 없는 필드면 VALIDATION_ERROR(400)
      */
-    @Transactional(readOnly = true)
     public Page<IpoResult> list(Pageable pageable) {
         Page<Ipo> ipos = ipoRepository.findAll(PageableUtils.toStablePageable(pageable, LIST_SORTABLE_FIELDS));
-        Map<UUID, BigDecimal> rates = competitionRates(ipos.getContent());
+        Map<UUID, BigDecimal> rates = competitionRateReader.rates(ipos.getContent());
         return ipos.map(ipo -> IpoResult.of(ipo, rates.get(ipo.getId())));
     }
 
@@ -77,33 +75,15 @@ public class IpoService {
     }
 
     /**
-     * 공모주 한 건을 경쟁률과 함께 조회한다.
+     * 공모주 한 건을 경쟁률과 함께 조회한다. 목록과 같은 이유로 트랜잭션을 걸지 않는다.
      *
      * @param ipoId 공모주 ID
      * @return 공모주
      * @throws BusinessException 없으면 RESOURCE_NOT_FOUND(404)
      */
-    @Transactional(readOnly = true)
     public IpoResult get(UUID ipoId) {
         Ipo ipo = ipoRepository.findById(ipoId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "공모주를 찾을 수 없습니다.", "ipoId"));
-        return IpoResult.of(ipo, competitionRates(List.of(ipo)).get(ipo.getId()));
-    }
-
-    /**
-     * 공모주들의 경쟁률(F-15)을 계산한다. 배정 대상 청약({@link SubscriptionStatus#ALLOCATION_TARGETS}: 확정, 배정 완료, 환불 완료 청약)의
-     * 신청 수량을 공모주별로 한 번의 조회로 합산하고, 계산 규칙은 {@link Ipo#competitionRate}가 정한다.
-     * 접수(PENDING) 직후가 아니라 확정된 뒤 반영된다.
-     *
-     * @return 공모주 ID → 경쟁률. 해당 청약이 없는 공모주는 0.00
-     */
-    private Map<UUID, BigDecimal> competitionRates(List<Ipo> ipos) {
-        Map<UUID, Long> requested = subscriptionRepository.sumRequestedQuantityByIpoIds(
-                ipos.stream().map(Ipo::getId).toList(), SubscriptionStatus.ALLOCATION_TARGETS);
-        Map<UUID, BigDecimal> rates = new HashMap<>();
-        for (Ipo ipo : ipos) {
-            rates.put(ipo.getId(), ipo.competitionRate(requested.getOrDefault(ipo.getId(), 0L)));
-        }
-        return rates;
+        return IpoResult.of(ipo, competitionRateReader.rates(List.of(ipo)).get(ipo.getId()));
     }
 }

@@ -10,6 +10,10 @@ management:
     web:
       exposure:
         include: health,prometheus
+  health:
+    redis:
+      # Redis는 경쟁률 사본만 쓴다. Redis 장애로 서비스 health가 DOWN이 되면 컨테이너 헬스체크, Eureka가 청약 접수까지 막으므로 health에 넣지 않는다 (경쟁률은 DB로 계산)
+      enabled: false
   metrics:
     distribution:
       # 서비스별 응답 시간의 p95, p99를 Prometheus에서 계산할 수 있도록 구간(histogram)을 함께 내보낸다
@@ -32,6 +36,17 @@ spring:
       # 기본값 10은 HTTP 요청, 리스너 스레드(concurrency), 스케줄러가 함께 써서 부하 중 커넥션 대기가 생긴다
       # 리스너 concurrency를 바꾸면 같이 본다. minimum-idle을 정하지 않아 늘 이만큼 연결을 잡으므로 서비스 합계가 PostgreSQL max_connections(100)를 넘지 않게 한다
       maximum-pool-size: 30
+  data:
+    redis:
+      # 경쟁률 사본 저장소 (게이트웨이 접속 대기열과 같은 Redis). IntelliJ는 localhost(.env의 REDIS_PORT, 기본 6379), Docker는 compose가 REDIS_HOST=redis를 넣는다
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # 장애 때 확정 Consumer와 조회가 오래 기다리지 않게 짧게 둔다 (기본값은 응답 대기 60초). 실패하면 ipo.competition-rate.retry-after 동안 Redis를 부르지 않는다
+      timeout: 300ms
+      connect-timeout: 300ms
+      # Redis는 키 몇 개만 직접 다룬다 (Spring Data Redis 저장소 없음). 켜 두면 JPA와 함께 기동할 때마다 저장소 검사, 경고 로그가 생긴다
+      repositories:
+        enabled: false
   sql:
     init:
       # schema.sql(제약, 부분 인덱스), data.sql(공모주 시드)을 기동할 때마다 실행한다. 두 파일 모두 여러 번 실행해도 된다
@@ -75,6 +90,11 @@ outbox:  # Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks
     send-timeout: 10s             # Producer의 delivery.timeout.ms(10s) 이상으로 맞춘다. 발행기가 실패로 처리한 뒤 Producer가 재시도하지 않게 한다
 
 ipo:
+  competition-rate:  # 경쟁률 사본 (F-15). 기준은 DB의 청약 행이고 Redis는 조회마다 DB 합산을 하지 않으려는 사본
+    redis-enabled: true   # false면 Redis 없이 조회마다 DB로 합산한다 (테스트)
+    ttl: PT5M             # 사본 유효 시간. 만료되면 다음 조회가 DB로 다시 계산한다 (DB 커밋과 Redis 갱신이 한 트랜잭션이 아니라 생기는 오차를 이 시간 안에 바로잡음)
+    loading-ttl: PT30S    # 채우는 중 표시의 유효 시간. 채우던 요청이 죽어도 이 시간 뒤 다른 쪽이 채움 (DB 합산 시간보다 넉넉히)
+    retry-after: PT10S    # Redis 호출이 실패하면 이 시간 동안 Redis를 부르지 않고 DB로 계산한다
   close:  # 공모주 마감 스케줄러 (F-13, D-16)
     enabled: true         # false면 스케줄 실행을 끈다
     interval: PT5S        # 이전 실행이 끝난 뒤 다시 확인하기까지 쉬는 시간

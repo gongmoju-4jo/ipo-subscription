@@ -618,7 +618,7 @@ bash loadtest/s7.sh --batch S7-db
 ALLOW_DIRTY=1 WARM=0 RATE=5 LIST_RATES=5 REPS=1 DURATION=10s GAP=5 bash loadtest/s7.sh --batch S7-smoke   # 스모크 (결과는 측정값으로 쓰지 않음)
 ```
 
-- 흐름: 이 커밋으로 빌드, 배포하고 jar를 확인(`s2.sh`와 같은 방식) → `BASELINE_DIR`(기본 `loadtest/data/baseline-s7`) 복원 → `pg_stat_statements` 확장 생성 → docker stats 기록 시작 → 토큰 재발급 → 워밍업(`WARM=1`, 청약 200 + 목록 216건/초로 `warmup.py`가 평평하다고 판정할 때까지) → 회차(`REPS`, 기본 3)마다 목록 속도(`LIST_RATES`, 기본 "433 866")별로: 새 공모주 준비 → 쿼리 통계 초기화 → k6 → 소진 대기 → 쿼리 통계, `report.py` → `GAP`초 쉼 → 후처리(`자원.md`, `요약.md`)
+- 흐름: 이 커밋으로 빌드, 배포하고 jar를 확인(`s2.sh`와 같은 방식) → `BASELINE_DIR`(기본 `loadtest/data/baseline-s7`) 복원 → `pg_stat_statements` 확장 생성 → 경쟁률 사본(Redis `competition:*`) 키 삭제 (복원은 DB만 되돌리므로) → docker stats 기록 시작 → 토큰 재발급 → 워밍업(`WARM=1`, 청약 200 + 목록 216건/초로 `warmup.py`가 평평하다고 판정할 때까지) → 회차(`REPS`, 기본 3)마다 목록 속도(`LIST_RATES`, 기본 "433 866")별로: 새 공모주 준비 → 쿼리 통계 초기화 → k6 → 소진 대기 → 쿼리 통계, `report.py` → `GAP`초 쉼 → 후처리(`자원.md`, `요약.md`)
 - 이름: 공모주 이름(`<이름>-l<목록 속도>-r<회차>-<번호>`)이 30자를 넘으면 시작 전에 멈춥니다. 기본값이면 `--batch`는 19자 이하이고, `DURATION`, `REPS`, `LIST_RATES`를 키우면 더 짧아야 합니다. 이미 있는 결과 폴더 이름이면 멈춥니다. Windows는 폴더 이름의 대소문자를 구분하지 않아 `S7-smoke`와 `s7-smoke`도 같은 이름입니다.
 - 볼 것: 요청 종류별(`kind`: `subscribe`, `list`) 응답 시간, 실패율, 검사 통과율, 밀린 요청, k6 종료 코드(`요약.md`), 청약 서비스 Hikari(`report.md`. k6 값은 청약과 목록을 합친 값이라 서버 지표용으로 봅니다), 컨테이너 CPU(`자원.md`, Redis 포함), 쿼리별 호출 수와 시간(`slow-queries-<run>.txt`)
 - 판정: 아래 중 하나라도 넘으면 k6 종료 코드가 99입니다. `s7.sh`는 종료 코드를 `진행.log`, 실행별 `k6-exit.txt`, `요약.md`에 남기고 다음 실행을 계속합니다.

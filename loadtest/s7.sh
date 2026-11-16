@@ -157,6 +157,9 @@ main() {
   wait_all_healthy 600 || die 1 "복원 뒤 컨테이너가 600초 안에 모두 healthy가 되지 않음"
   # 쿼리 통계: 스냅샷 DB에는 확장이 없을 수 있어 만든다 (compose.perf.yml이 미리 읽어 들이도록 설정한다)
   pg "create extension if not exists pg_stat_statements" > /dev/null 2>&1 || say "pg_stat_statements 확장을 만들지 못함 (쿼리 통계 없이 진행)"
+  # 경쟁률 사본(Redis): 복원은 DB만 되돌리므로 이전 실행의 사본이 남으면 값이 복원된 DB와 달라진다. 사본 키만 지워 첫 조회가 DB로 다시 채우게 한다
+  # (접속 대기열 키는 건드리지 않음. 경쟁률 사본이 없는 코드에서는 지울 키가 없어 그대로 지나감)
+  docker exec ipo-redis sh -c "redis-cli --scan --pattern 'competition:*' | xargs -r redis-cli del" > /dev/null 2>&1     || say "경쟁률 사본(Redis) 키를 지우지 못함 (사본이 남아 있으면 유효 시간 안에 값이 복원된 DB와 다를 수 있음)"
   K6_NET="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' ipo-api-gateway | awk '{print $1}')"
   record_env
   echo "run_id,scenario,phase,repeat,target_rate,duration_s,expected_requests,ipo_ids,k6_start,k6_end,drain_s,drain_end" > "$MANIFEST"

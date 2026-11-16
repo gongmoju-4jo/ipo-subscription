@@ -15,6 +15,15 @@ management:
       # 서비스별 응답 시간의 p95, p99를 Prometheus에서 계산할 수 있도록 구간(histogram)을 함께 내보낸다
       percentiles-histogram:
         http.server.requests: true
+  # 분산 추적 (Zipkin). IntelliJ는 localhost:9411(docker-compose의 zipkin), Docker는 compose가 ZIPKIN_ENDPOINT를 넣는다
+  # Zipkin이 없거나 멈춰도 요청은 그대로 처리되고 보내지 못한 span만 버린다
+  tracing:
+    sampling:
+      # 추적을 보낼 요청 비율. 로컬, 배포는 전부(1.0), 부하 측정은 compose.perf.yml이 0으로 둔다 (Boot 기본값은 0.1)
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 spring:
   application:
@@ -62,9 +71,14 @@ spring:
     consumer:
       auto-offset-reset: earliest       # 그룹이 처음 생길 때 이미 쌓인 메시지(인출, 배정, 정산 결과 등)를 놓치지 않도록 처음부터 읽음
       enable-auto-commit: false         # 처리가 끝난 레코드만 커밋함 (리스너 ack-mode: record)
+    # Kafka 발행, 수신을 추적에 넣는다. 발행할 때 traceparent 헤더를 붙이고, 받을 때 그 헤더로 trace를 이어 간다
+    # 켜면 리스너, 템플릿 지표(spring_kafka_listener, spring_kafka_template)도 관측 기반으로 바뀌어 태그 이름이 달라진다
+    template:
+      observation-enabled: true
     listener:
       ack-mode: record
       concurrency: 6                    # 토픽 파티션 수(docker/kafka/create-topics.sh 기본값 6)와 같은 수. 파티션보다 많으면 남는 Consumer는 일하지 않음
+      observation-enabled: true
 
 outbox:  # Outbox 발행기 (서비스 3개가 같은 키). Producer 설정(acks, 멱등, max.block.ms)은 위 spring.kafka.producer를 함께 쓴다
   publisher:
@@ -78,6 +92,8 @@ ipo:
   close:  # 공모주 마감 스케줄러 (F-13, D-16)
     enabled: true         # false면 스케줄 실행을 끈다
     interval: PT5S        # 이전 실행이 끝난 뒤 다시 확인하기까지 쉬는 시간
+    lock-at-least-for: PT4S  # 인스턴스가 여러 개일 때 한 번 실행한 뒤 락을 쥐고 있는 최소 시간 (ShedLock). interval보다 조금 짧게, interval을 바꾸면 같이 바꾼다
+    lock-at-most-for: PT1M   # 실행 중 인스턴스가 죽었을 때 락이 풀리기까지의 시간 (ShedLock). 가장 긴 실행보다 넉넉히, lock-at-least-for보다 길게 (짧으면 마감이 실행되지 않음)
     grace-period: PT20S   # 마감 시각 뒤 대기 시간. 마감 직전에 게이트웨이에 도착해 아직 처리 중인 접수가 거절되지 않게 기다린다 (마감 보장은 공모주 행 잠금이 맡음, D-29)
     alert-after: PT5M     # 대기 시간 뒤 이 시간 동안 마감하지 못하면 ERROR 로그. 이후 같은 간격으로 반복하고, 강제로 마감하지는 않는다
 
@@ -88,7 +104,13 @@ saga:
     response-timeout: PT30S  # 마지막 요청 시각에서 설정 시간이 지나면 응답이 없음으로 판정 (이벤트 명세에서 30초 확정. 같은 Consumer 재시도 합계 7초보다 길어야 함)
     max-attempts: 3          # 총 인출 요청 횟수. 접수 90초 뒤 시간 초과 보상 (임시값, 부하 테스트 뒤 조정)
     batch-size: 100          # 한 번에 처리하는 최대 건수 (오래된 순)
-    alert-interval: PT5M     # 재요청 최대 횟수에 도달 시 ERROR 로그 기록 간격 (마감 스케줄러의 ipo.close.alert-after와 동일 값)
+    alert-interval: PT5M     # 증거금 반환이 오래 걸리는 청약의 ERROR 로그 기록 간격 (마감 스케줄러의 ipo.close.alert-after와 동일 값)
+
+  void-retry:  # 증거금 반환 재요청. 최대 횟수 없이 간격을 늘려 가며 응답이 올 때까지 재요청 (실행 간격, 사용 여부, 알림 간격은 saga.timeout.*와 같이 사용)
+    initial-interval: PT30S  # 첫 재요청 대기 시간. 요청할 때마다 2배 (30초, 60초, 120초, 240초 ...) (임시값, 부하 테스트 뒤 조정)
+    max-interval: PT5M       # 재요청 대기 시간 상한. 해당 간격으로 계속 재요청 (임시값)
+    alert-attempts: 5        # 요청 횟수가 해당 값 이상일 때 응답 없으면 알림 로그 대상 (보상 시작 약 7분 30초 뒤) (임시값)
+    batch-size: 100          # 한 번에 처리하는 최대 건수 (오래된 순)
 
 eureka:
   client:

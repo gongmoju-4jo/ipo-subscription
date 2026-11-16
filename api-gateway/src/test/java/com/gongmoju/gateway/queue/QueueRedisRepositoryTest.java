@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -230,6 +231,36 @@ class QueueRedisRepositoryTest extends RedisTestSupport {
         UUID upperUser = UUID.fromString(userId.toString().toUpperCase());
 
         assertThat(repository.find(upperIpo, upperUser, ALIVE).block().position()).isEqualTo(1);
+    }
+
+    @Test
+    void 같은_칸의_입장_처리는_처음_차지한_쪽만_한다() {
+        // 칸 길이 1시간: 두 호출 사이에 칸 경계를 넘을 일이 사실상 없다
+        Duration interval = Duration.ofHours(1);
+
+        assertThat(repository.claimAdmitTick(interval).block()).isTrue();
+        assertThat(repository.claimAdmitTick(interval).block()).isFalse();
+    }
+
+    @Test
+    void 칸이_바뀌면_다시_차지할_수_있다() throws InterruptedException {
+        Duration interval = Duration.ofMillis(200);
+
+        assertThat(repository.claimAdmitTick(interval).block()).isTrue();
+        Thread.sleep(250);
+        assertThat(repository.claimAdmitTick(interval).block()).isTrue();
+    }
+
+    @Test
+    void 칸_키는_칸_길이의_2배_뒤_사라진다() {
+        Duration interval = Duration.ofMinutes(1);
+
+        repository.claimAdmitTick(interval).block();
+
+        List<String> keys = TEMPLATE.keys(QueueRedisRepository.ADMIT_TICK_KEY_PREFIX + "*").collectList().block();
+        assertThat(keys).hasSize(1);
+        Duration ttl = TEMPLATE.getExpire(keys.get(0)).block();
+        assertThat(ttl).isPositive().isLessThanOrEqualTo(interval.multipliedBy(2));
     }
 
     private QueueState enter(UUID userId, Instant at) {

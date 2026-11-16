@@ -13,19 +13,25 @@ import reactor.core.publisher.Mono;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 입장 스케줄러. queue.admit-interval마다 대기자가 있는 공모주에 입장 인원을 나눠 앞에서부터 허가를 준다.
  *
  * <p>입장 인원(queue.admit-rate)은 전체 공모주 합이다. 공모주별로 주면 대기자가 있는 공모주 수만큼 서비스 유입이 곱해진다.
  * 나누는 방식은 {@link #allocate}: 대기자가 적은 공모주는 바로 들어가고 남는 자리는 대기자가 많은 공모주로 넘긴다.
- * 게이트웨이 1대 전제: 여러 대면 대수만큼 입장시킨다 (스크립트가 원자라 같은 사람이 두 번 허가받지는 않는다).
+ *
+ * <p>게이트웨이가 여러 대여도 입장 속도는 queue.admit-rate를 넘지 않는다. 시간을 입장 주기 길이의 칸으로 나누고
+ * ({@link QueueRedisRepository#claimAdmitTick}), 칸을 먼저 차지한 게이트웨이 한 대만 입장 처리하고 나머지는 그 주기를 건너뛴다 (D-34).
+ * 칸은 대기자가 있을 때만 차지한다. 대기열이 빈 공모주가 입장 처리 대상에 남아 있으면 칸 없이 대상에서 빼기만 한다. 건너뛴 주기도 Redis에 정상적으로 닿았으므로 성공으로 기록한다.
+ * 모든 게이트웨이가 같은 queue.admit-interval을 써야 같은 칸으로 판단한다.
  *
  * <p>입장 처리 결과를 지표 두 개로 내보낸다. 대기자가 없어도 매 주기 Redis를 조회하므로 요청이 없는 시간의 Redis 장애도 잡힌다.
  * <ul>
@@ -55,7 +61,8 @@ public class AdmissionScheduler {
     private final Map<AdmissionFailureReason, AtomicInteger> failing = new EnumMap<>(AdmissionFailureReason.class);
     // 직전 주기의 실패 사유. 성공이면 null (스케줄러 스레드 하나만 읽고 쓴다)
     private AdmissionFailureReason currentFailure;
-    private long tick;
+    // 나머지 자리를 받을 공모주를 돌리는 값. 칸을 차지해 입장 처리한 주기에만 늘린다
+    private final AtomicLong tick = new AtomicLong();
 
     @Autowired
     public AdmissionScheduler(QueueRedisRepository repository, QueueProperties properties, MeterRegistry meterRegistry) {
@@ -117,7 +124,6 @@ public class AdmissionScheduler {
 
     Mono<Void> admitOnce() {
         Instant now = clock.instant();
-        long offset = tick++;
         return repository.activeIpoIds().collectList().flatMap(ipoIds -> {
             if (ipoIds.isEmpty()) {
                 return Mono.empty();
@@ -125,12 +131,24 @@ public class AdmissionScheduler {
             // 공모주마다 대기 인원을 먼저 읽어 남는 자리가 버려지지 않게 나눈다
             return Flux.fromIterable(ipoIds).concatMap(repository::waitingCount).collectList().flatMap(counts -> {
                 long[] demands = counts.stream().mapToLong(Long::longValue).toArray();
-                long[] shares = allocate(properties.admitsPerTick(), demands, offset);
-                return Flux.range(0, ipoIds.size())
-                        .concatMap(i -> admit(ipoIds.get(i), now, shares[i]))
-                        .then();
+                if (Arrays.stream(demands).sum() == 0) {
+                    // 마지막 대기자가 이탈하면 대기열은 비어도 입장 처리 대상에는 남는다. 칸을 차지하지 않고 admit.lua로 대상에서 빼기만 한다
+                    // (허가를 주지 않아 여러 대가 같이 해도 입장 속도와 무관. Redis 메모리 상한에서도 빼는 명령은 허용되어 redis_oom이 되지 않는다)
+                    return admitShares(ipoIds, now, demands);
+                }
+                // 이번 칸을 다른 게이트웨이가 이미 처리했으면 건너뛴다
+                return repository.claimAdmitTick(properties.admitInterval())
+                        .filter(Boolean::booleanValue)
+                        .flatMap(claimed -> admitShares(ipoIds, now,
+                                allocate(properties.admitsPerTick(), demands, tick.getAndIncrement())));
             });
         });
+    }
+
+    private Mono<Void> admitShares(List<UUID> ipoIds, Instant now, long[] shares) {
+        return Flux.range(0, ipoIds.size())
+                .concatMap(i -> admit(ipoIds.get(i), now, shares[i]))
+                .then();
     }
 
     private Mono<AdmitResult> admit(UUID ipoId, Instant now, long count) {

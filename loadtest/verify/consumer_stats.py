@@ -17,7 +17,8 @@
   재발행         account.outbox topic=margin.reserved 건수 - 인출 성공 (이미 PENDING인 증거금에 온 재요청) (DB)
   기타           고유 이벤트 처리 - 성공 - 거절 - 재발행 (선행 반환으로 건너뜀, POSTED/VOIDED 증거금에 온 요청)
   전체 수신      spring_kafka_listener_seconds_count 증가분 (Prometheus, 중복 수신과 재시도 포함)
-  오류           위 리스너 지표의 result=failure 증가분
+  오류           위 리스너 지표의 result=failure 증가분 (지금 형식은 error가 none이 아닌 것. 아래 LISTENER_Q)
+                 인출 Consumer가 공용 배치 리스너 팩토리를 쓰면(#162) 리스너 지표가 없다. 이때 전체 수신, 오류는 '-'로 두고 나머지는 그대로 구한다 (아래 BATCH_Q)
   랙             sum(kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"}) (Consumer가 계산한 값. 처리 중 멈추면 갱신이 늦다)
 병목 의심 (단계마다): 랙 증가 추세 AND 처리량 정체. 자동 분석은 후보만 찾는다
   랙 증가 추세  실행마다 부하 중 랙의 기울기(최소제곱) > 0. 반복 중 과반이면 그 단계는 증가 추세
@@ -41,8 +42,22 @@ import urllib.request
 
 CONSUMER = "account-margin-reserve"
 LAG_Q = 'sum(kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"})'
-LISTENER_Q = 'sum by (result) (spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"})'
-LISTENER_SCRAPE_Q = 'max(timestamp(spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"}))'
+# 리스너 지표는 분산 추적(#165)에서 Kafka 수신 관측을 켜면서 태그가 바뀌었다. 예전 회차를 다시 분석할 수 있게 두 형식을 함께 읽는다
+#   예전: name=리스너 ID, result=success/failure (Spring Kafka 타이머)
+#   지금: spring_kafka_listener_id=리스너 ID, error=none/예외 이름 (관측). error를 예전 result 값으로 바꿔 읽는다
+# 같은 시각에 두 형식이 함께 수집되지는 않는다 (서비스를 다시 띄우면 이전 형식 시계열은 끊긴다)
+LISTENER_OLD = 'spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"}'
+LISTENER_NEW = 'spring_kafka_listener_seconds_count{spring_kafka_listener_id=~"account-margin-reserve-[0-9]+"}'
+LISTENER_NEW_AS_RESULT = ('label_replace(label_replace(' + LISTENER_NEW + ', "result", "failure", "error", ".+"),'
+                          ' "result", "success", "error", "none")')
+LISTENER_Q = 'sum by (result) (' + LISTENER_OLD + ' or ' + LISTENER_NEW_AS_RESULT + ')'
+# timestamp()는 셀렉터에 바로 써야 수집 시각이 나온다 (or 결과에 쓰면 평가 시각이 나와 수집이 끊겨도 알 수 없다)
+LISTENER_SCRAPE_Q = 'max(timestamp(' + LISTENER_OLD + ') or timestamp(' + LISTENER_NEW + '))'
+# 인출 Consumer는 공용 배치 리스너 팩토리(KafkaConsumerConfig)를 쓰고, 이 팩토리는 리스너 지표(spring_kafka_listener)를 끈다
+# (1건 리스너의 관측 지표와 이름이 겹쳐 지표가 빠지기 때문). 그래서 리스너 시계열이 없는 것이 수집 실패가 아닐 수 있다.
+# 배치 Consumer가 직접 내보내는 지표(margin.reserve.batch.size)가 있을 때만 정상으로 보고 전체 수신, 오류를 '-'로 둔다.
+# 둘 다 없으면 수집이 안 된 것이라 예전처럼 실패한다 (수집 누락을 0으로 넘기지 않음)
+BATCH_Q = 'count(margin_reserve_batch_size_count)'
 # 평가 시각마다 랙을 보고한 파티션 수. Consumer가 죽어 파티션 시계열이 사라지면 합계 랙이 작게 나와 병목을 놓친다
 LAG_PARTITIONS_Q = 'count(count by (partition) (kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"}))'
 LAG_SAMPLES_Q = 'max(count_over_time(kafka_consumer_fetch_manager_records_lag{{topic="margin_reserve-requested"}}[{d}s]))'
@@ -135,7 +150,9 @@ def prom_get(base, path, params):
 
 
 def query_prom(run, base, get=prom_get):
-    """(원본 응답 dict, 랙 [(t, v)], 리스너 {result: [(t, v)]}, 저장 샘플 수, 리스너 최종 수집 시각, 랙 보고 파티션 수 최솟값). 랙 시계열이 없으면 RuntimeError"""
+    """(원본 응답 dict, 랙 [(t, v)], 리스너 {result: [(t, v)]}, 저장 샘플 수, 리스너 최종 수집 시각, 랙 보고 파티션 수 최솟값). 랙 시계열이 없으면 RuntimeError.
+    리스너 시계열이 없어도 배치 Consumer 지표(BATCH_Q)가 있으면 리스너와 최종 수집 시각을 None으로 돌려준다 (배치 리스너는 리스너 지표를 끔).
+    둘 다 없으면 RuntimeError"""
     w0, w1, stop = run["start"], run["w1"], run["stop"]
     rng = {"start": w0, "end": w1, "step": STEP}
     raw = {"lag": get(base, "/api/v1/query_range", {"query": LAG_Q, **rng}),
@@ -144,6 +161,8 @@ def query_prom(run, base, get=prom_get):
            # 범위 조회는 시작부터 5초 간격으로만 평가해 마지막 평가가 stop + STEP보다 이를 수 있다. 수집 확인과 같은 시각의 값을 따로 읽어 마지막 값으로 쓴다
            "listener_end": get(base, "/api/v1/query", {"query": LISTENER_Q, "time": stop + STEP}),
            "listener_scrape": get(base, "/api/v1/query", {"query": LISTENER_SCRAPE_Q, "time": stop + STEP}),
+           # 리스너 시계열이 없을 때 배치 Consumer인지 구분한다 (구간이 아니라 소진 확인 직후 시각의 존재 여부)
+           "batch_listener": get(base, "/api/v1/query", {"query": BATCH_Q, "time": stop + STEP}),
            "lag_samples": get(base, "/api/v1/query", {"query": LAG_SAMPLES_Q.format(d=w1 - w0), "time": w1}),
            # 랙 조회와 같은 평가 시각(start부터 STEP 간격)으로 본다
            "lag_partitions": get(base, "/api/v1/query_range", {"query": LAG_PARTITIONS_Q, **rng})}
@@ -157,12 +176,15 @@ def query_prom(run, base, get=prom_get):
         pts = listener.setdefault(s["metric"].get("result", "?"), [])
         if not pts or pts[-1][0] < stop + STEP:
             pts.append((stop + STEP, float(s["value"][1])))
+    batch_listener = False
     if not listener:
-        raise RuntimeError(f"{run['run']}: 리스너 시계열이 없음 ({LISTENER_Q})")
+        if not raw["batch_listener"]["data"]["result"]:
+            raise RuntimeError(f"{run['run']}: 리스너 시계열이 없음 ({LISTENER_Q}). 배치 Consumer 지표({BATCH_Q})도 없어 수집 실패로 봄")
+        listener, batch_listener = None, True
     smp = raw["lag_samples"]["data"]["result"]
     samples = int(float(smp[0]["value"][1])) if smp else 0
     sc = raw["listener_scrape"]["data"]["result"]
-    scrape = float(sc[0]["value"][1]) if sc else 0.0
+    scrape = None if batch_listener else (float(sc[0]["value"][1]) if sc else 0.0)
     pr = raw["lag_partitions"]["data"]["result"]
     counts = {int(float(t)): int(float(v)) for t, v in pr[0]["values"]} if pr else {}
     # 범위 조회의 모든 평가 시각(start부터 STEP 간격)을 본다. 랙과 파티션 값이 함께 빠진 시각도 0개로 센다
@@ -220,21 +242,28 @@ def analyze(run, db, lag, listener, samples, scrape, partitions):
     lag_load = [(t, v) for t, v in lag if t <= run["end"]]
     rate_load = db["processed_load"] / load if load > 0 else 0.0
     j = judge_run(lag_load)
-    ok = increase(listener.get("success", []), run["start"])
-    fail = increase(listener.get("failure", []), run["start"])
-    received = ok + fail
+    if listener is None:
+        # 배치 리스너는 리스너 지표가 없어서 전체 수신, 오류를 알 수 없다 (0이 아니라 없음)
+        fail = received = None
+    else:
+        ok = increase(listener.get("success", []), run["start"])
+        fail = increase(listener.get("failure", []), run["start"])
+        received = ok + fail
     span = db["last"] - db["first"]
     return dict(run=run["run"], rate=run["rate"], rep=run["rep"], load_s=load, window_s=window,
                 success=db["success"], success_rate=db["success"] / span if span > 0 else 0.0,
                 success_rate_window=db["success"] / window if window > 0 else 0.0,
                 processed=db["processed"], processed_load_rate=rate_load, rejected=db["rejected"],
                 republished=db["reserved"] - db["success"], other=db["processed"] - db["success"] - db["rejected"] - (db["reserved"] - db["success"]),
-                received=received, failure=fail, error_pct=(fail / received * 100) if received else 0.0,
+                received=received, failure=fail,
+                error_pct=None if received is None else ((fail / received * 100) if received else 0.0),
                 samples=samples, samples_expected=(run["w1"] - run["start"]) // STEP, listener_scrape=scrape,
                 partitions=partitions, **j)
 
 
 def check_scrape(r, run):
+    if r["listener_scrape"] is None:  # 배치 리스너: 리스너 지표가 없어 확인할 수집 시각이 없음
+        return None
     if r["listener_scrape"] < run["stop"]:
         return f"{r['run']}: 리스너 최종 수집 시각이 소진 확인({kst(run['w1'])}초) 이전 → 마지막 처리분이 전체 수신에서 빠졌을 수 있음"
     return None
@@ -264,7 +293,8 @@ def stage_rows(results):
         processed = med("processed_load_rate")
         plateau = prev_max is not None and processed <= prev_max
         out.append(dict(rate=rate, n=len(rs), success_rate=med("success_rate"), processed_load_rate=processed,
-                        lag_max=med("lag_max"), lag_end=med("lag_end"), lag_slope=med("lag_slope"), error_pct=med("error_pct"),
+                        lag_max=med("lag_max"), lag_end=med("lag_end"), lag_slope=med("lag_slope"),
+                        error_pct=None if any(r["error_pct"] is None for r in rs) else med("error_pct"),
                         rises=n_rise, rising=rising, prev_max=prev_max, plateau=plateau, suspect=rising and plateau))
         prev_max = max(r["processed_load_rate"] for r in rs)
     return out
@@ -277,6 +307,11 @@ def kst(t):
 
 def render(batch, env, runs, results, stages, problems, clock=None):
     yn = lambda b: "예" if b else "아니오"
+    na = lambda v, fmt: "-" if v is None else format(v, fmt)  # 리스너 지표가 없는 배치 리스너는 값 없음
+    # 전체 수신, 오류가 없는 실행이 있으면 이유를 정의에 적는다
+    na_note = (["- (이 결과) 전체 수신, 오류는 '-': 인출 Consumer가 공용 배치 리스너 팩토리를 써서 리스너 지표(spring_kafka_listener)가 없다. "
+                "배치 호출 수와 메시지 수는 Prometheus의 margin_reserve_batch_size_count, _sum에서 볼 수 있다. 나머지 열은 DB와 Kafka 클라이언트 지표라 그대로 유효"]
+               if any(r["received"] is None for r in results) else [])
     L = [f"# 증거금 인출 Consumer 처리량 ({batch})", "", "## 측정 환경 (env.txt)", ""] + [f"- `{x}`" for x in env] + [""]
     L += ["## 정의", "",
           "- 측정 구간: k6 시작부터 소진 확인 초 끝까지 (manifest drain_end). 부하 중: k6 시작부터 종료까지",
@@ -284,6 +319,7 @@ def render(batch, env, runs, results, stages, problems, clock=None):
           "- 고유 처리 건/초(부하 중): processed_event 건수(중복 eventId, DLT 제외) / 부하 시간",
           "- 재발행: 이미 PENDING인 증거금에 온 재요청 (margin.reserved Outbox - 성공). 기타: 고유 처리 - 성공 - 거절 - 재발행",
           "- 전체 수신, 오류: 리스너 지표(spring_kafka_listener) 증가분. 중복 수신과 재시도 포함",
+          *na_note,
           "- 랙 증가 추세(실행): 부하 중 랙 기울기(최소제곱) > 0",
           "- 랙 증가 추세(단계): 반복 중 과반이 위 조건",
           "- 처리량 정체(단계): 목표를 올렸는데 고유 처리 건/초 중앙값이 이전 단계 반복 중 최댓값 이하. 첫 단계는 판정하지 않음. 병목 의심 = 둘 다",
@@ -294,7 +330,8 @@ def render(batch, env, runs, results, stages, problems, clock=None):
     for s in stages:
         prev = "-" if s["prev_max"] is None else f"{s['prev_max']:.1f}"
         L.append(f"| {s['rate']} | {s['n']} | {s['success_rate']:.1f} | {s['processed_load_rate']:.1f} | {prev} | {'-' if s['prev_max'] is None else yn(s['plateau'])} | "
-                 f"{s['lag_max']:.0f} | {s['lag_end']:.0f} | {s['lag_slope']:.2f} | {s['rises']}/{s['n']} | {s['error_pct']:.2f}% | "
+                 f"{s['lag_max']:.0f} | {s['lag_end']:.0f} | {s['lag_slope']:.2f} | {s['rises']}/{s['n']} | "
+                 f"{'-' if s['error_pct'] is None else format(s['error_pct'], '.2f') + '%'} | "
                  f"{'병목 의심' if s['suspect'] else '의심 없음'} |")
     first = next((s for s in stages if s["suspect"]), None)
     L += ["", "**자동 분석:** " + (f"목표 {first['rate']}건/초부터 Consumer 병목 의심 (랙 증가 추세 + 처리량 정체). "
@@ -305,7 +342,7 @@ def render(batch, env, runs, results, stages, problems, clock=None):
           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for run, r in zip(runs, results):
         L.append(f"| {r['run']} | {kst(run['start'])}-{kst(run['end'])}+{run['drain']}s | {r['success']} | {r['success_rate']:.1f} | {r['processed']} | "
-                 f"{r['rejected']} | {r['republished']} | {r['other']} | {r['received']:.0f} | {r['failure']:.0f} | {r['lag_max']:.0f}/{r['lag_end']:.0f} | "
+                 f"{r['rejected']} | {r['republished']} | {r['other']} | {na(r['received'], '.0f')} | {na(r['failure'], '.0f')} | {r['lag_max']:.0f}/{r['lag_end']:.0f} | "
                  f"{r['lag_slope']:.2f} | {yn(r['rising'])} | {r['samples']}/{r['samples_expected']} | {r['partitions']} |")
     L += ["", "## 시간 기준", "",
           "| 실행 | 소진 확인 시각 | DB 집계 구간 | 고유 처리(부하 중) 구간 | 랙 조회 구간 | 리스너 누적값 기준 | 리스너 최종 수집 시각 |",
@@ -314,8 +351,10 @@ def render(batch, env, runs, results, stages, problems, clock=None):
         w1 = run["w1"]
         basis = "drain_end" if run["exact"] else "근사: k6 종료 + drain_s"
         L.append(f"| {r['run']} | {kst(w1)} ({basis}) | {kst(run['start'])} 이상, {kst(run['stop'])} 미만 | {kst(run['start'])}-{kst(run['end'])} | "
-                 f"{kst(run['start'])}-{kst(w1)} (5초 간격 평가) | {kst(run['start'])} 직전 수집 → {kst(run['stop'] + STEP)} 직전 수집 | "
-                 f"{kst(r['listener_scrape']) if r['listener_scrape'] else '없음'} |")
+                 f"{kst(run['start'])}-{kst(w1)} (5초 간격 평가) | "
+                 + ("- | -" if r["listener_scrape"] is None else
+                    f"{kst(run['start'])} 직전 수집 → {kst(run['stop'] + STEP)} 직전 수집 | "
+                    f"{kst(r['listener_scrape']) if r['listener_scrape'] else '없음'}") + " |")
     L += ["", "- DB 집계: margin.created_at, processed_event.processed_at, outbox.created_at이 구간 안인 행. 시각은 서비스 컨테이너(JVM) 시계",
           "- 구간 경계(k6 시작, 종료, 소진 확인)는 official.sh가 이 PC 시계로 정수 초 단위로 기록. 소진 확인 초는 그 초 전체를 포함한다",
           "- 근사로 표시된 실행: drain_end가 없는 예전 manifest라 k6 종료 + drain_s로 계산. 소진 대기 시작부터 잰 정수 초라 실제 확인보다 최대 약 2초 이를 수 있다",
@@ -336,7 +375,10 @@ def write_csv(path, runs, series):
         w = csv.writer(f)
         w.writerow(["run_id", "epoch", "time_kst", "phase", "lag", "listener_success_total", "listener_failure_total", "margin_created_in_5s"])
         for run, (lag, listener, buckets) in zip(runs, series):
-            lv = dict(lag); ok = dict(listener.get("success", [])); fail = dict(listener.get("failure", []))
+            lv = dict(lag)
+            # 배치 리스너(listener가 None)는 리스너 누적값이 없어 해당 열을 비운다
+            ok = dict(listener.get("success", [])) if listener else {}
+            fail = dict(listener.get("failure", [])) if listener else {}
             # 리스너 마지막 값(소진 확인 뒤 수집 시각)처럼 랙 평가 시각에 없는 시각도 행으로 남긴다. 그 시각의 랙은 빈 값
             for t in sorted(set(lv) | set(ok) | set(fail)):
                 phase = "load" if t <= run["end"] else "drain" if t <= run["w1"] else "after"

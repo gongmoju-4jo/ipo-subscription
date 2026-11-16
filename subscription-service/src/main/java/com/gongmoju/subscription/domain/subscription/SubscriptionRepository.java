@@ -3,6 +3,7 @@ package com.gongmoju.subscription.domain.subscription;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -19,8 +20,8 @@ public interface SubscriptionRepository {
     Optional<Subscription> findByIdAndUserId(UUID subscriptionId, UUID userId);
 
     /**
-     * {@code INSERT ... ON CONFLICT (request_id) DO NOTHING} 기반 저장. 같은 {@code requestId}의 청약이 없을 때만 저장하며, 저장하면 {@code true}, 이미 있으면 {@code false}를 반환함.
-     * 다른 UNIQUE 위반({@code uk_subscription_active})은 삼키지 않고 예외로 전파함.
+     * {@code INSERT ... ON CONFLICT DO NOTHING} 기반 저장. 저장하면 {@code true}, UNIQUE 충돌이면 저장하지 않고 {@code false}를 반환함.
+     * 충돌은 같은 {@code requestId}의 청약, 또는 같은 회원, 같은 종목의 유효 청약({@code uk_subscription_active}, {@code PENDING}을 저장할 때)이며 둘을 구분하지 않음.
      */
     boolean insertIfAbsent(Subscription subscription);
 
@@ -35,7 +36,8 @@ public interface SubscriptionRepository {
     Optional<Subscription> findByRequestId(UUID requestId);
 
     /**
-     * 이중청약 판정용 조회. 같은 회원이 같은 종목에 유효한 청약({@code REJECTED}, {@code CANCELLED}가 아닌 것)을 보유했는지 확인함.
+     * 이중청약 확인용 조회. 같은 회원이 같은 종목에 유효한 청약({@code REJECTED}, {@code CANCELLED}가 아닌 것)을 보유했는지 확인함.
+     * 접수에서는 저장이 충돌하고 같은 {@code requestId}가 없을 때만 씀.
      */
     boolean existsActiveByIpoIdAndUserId(UUID ipoId, UUID userId);
 
@@ -54,22 +56,24 @@ public interface SubscriptionRepository {
 
     /**
      * 반환 재요청 대상 조회 (이벤트 명세 3-5, 상태 전이도의 멈춘 SAGA 정리).
-     * 마지막 요청 시각이 {@code lastRequestedBefore}보다 이르고 요청 횟수가 {@code maxAttempts} 미만인 {@code COMPENSATING}, {@code CANCEL_REQUESTED} 청약 ID를
-     * 오래된 순으로 최대 {@code limit}건 조회함. 미발행 {@code margin.void-requested} Outbox 항목이 있는 청약은 제외함.
+     * 마지막 요청 시각에서 대기 시간({@link VoidRetryBackoff#waitAfter})이 지난 {@code COMPENSATING}, {@code CANCEL_REQUESTED} 청약 ID를
+     * 오래된 순으로 최대 {@code limit}건 조회함. 요청 횟수 상한은 없음(응답이 올 때까지 재요청).
+     * 미발행 {@code margin.void-requested} Outbox 항목이 있는 청약은 제외함.
      */
-    List<UUID> findStaleVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit);
+    List<UUID> findStaleVoidIds(Instant now, VoidRetryBackoff backoff, int limit);
 
     /**
-     * 반환 재요청 최대 횟수에 이른 청약 조회 (알림 대상). {@link #findStaleVoidIds}와 같은 상태, 시각 조건에서 요청 횟수가 {@code maxAttempts} 이상인 청약 ID를
-     * 오래된 순으로 최대 {@code limit}건 조회함. 재요청 대상 조회와 나눈 이유는 최대 횟수에 이른 청약은 계속 남아 재요청 대상의 건수 제한을 채우지 않게 하기 위함.
+     * 오래 걸리는 반환 조회 (알림 대상, 읽기 전용). 요청 횟수가 {@code alertAttempts} 이상이고 마지막 요청 뒤 {@code minAge}가 지난
+     * {@code COMPENSATING}, {@code CANCEL_REQUESTED} 청약을 오래된 순으로 최대 {@code limit}건 조회함. 청약을 변경하지 않음.
+     * {@code minAge}는 방금 요청해 응답이 오는 중인 청약을 알리지 않기 위한 값임.
      */
-    List<UUID> findExhaustedVoidIds(Instant lastRequestedBefore, int maxAttempts, int limit);
+    List<Subscription> findLongVoiding(Instant now, int alertAttempts, Duration minAge, int limit);
 
     /**
-     * 반환 재요청 최대 횟수에 이른 청약의 총 건수. {@link #findExhaustedVoidIds}와 같은 조건이며 건수 제한이 없음.
+     * 오래 걸리는 반환의 총 건수. {@link #findLongVoiding}과 같은 조건이며 건수 제한이 없음.
      * 상세 조회는 앞쪽 {@code limit}건만 가져오므로, 대상이 그보다 많을 때 빠진 건수를 알리는 데 씀.
      */
-    long countExhaustedVoid(Instant lastRequestedBefore, int maxAttempts);
+    long countLongVoiding(Instant now, int alertAttempts, Duration minAge);
 
     // 공모주의 청약 중 주어진 상태들의 건수 (마감 조건의 진행 중 SAGA 건수, ipo.closed의 confirmedCount, 배정 완료 때 배정 대상 청약 수)
     long countByIpoIdAndStatusIn(UUID ipoId, Collection<SubscriptionStatus> statuses);

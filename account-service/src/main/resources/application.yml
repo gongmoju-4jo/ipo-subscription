@@ -15,6 +15,15 @@ management:
       # 서비스별 응답 시간의 p95, p99를 Prometheus에서 계산할 수 있도록 구간(histogram)을 함께 내보낸다
       percentiles-histogram:
         http.server.requests: true
+  # 분산 추적 (Zipkin). IntelliJ는 localhost:9411(docker-compose의 zipkin), Docker는 compose가 ZIPKIN_ENDPOINT를 넣는다
+  # Zipkin이 없거나 멈춰도 요청은 그대로 처리되고 보내지 못한 span만 버린다
+  tracing:
+    sampling:
+      # 추적을 보낼 요청 비율. 로컬, 배포는 전부(1.0), 부하 측정은 compose.perf.yml이 0으로 둔다 (Boot 기본값은 0.1)
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 spring:
   application:
@@ -36,6 +45,9 @@ spring:
       hibernate.default_schema: account
       # 스키마는 init.sh가 만든다 (같은 이름). 서비스 계정은 DB CREATE 권한이 없어서 이 설정은 동작하지 않아도 된다
       hibernate.hbm2ddl.create_namespaces: true
+      hibernate.jdbc.batch_size: 100    # 한 번에 묶는 최대 건수.
+      hibernate.order_inserts: true     # 한 트랜잭션의 INSERT, UPDATE를 종류별로 모아 JDBC 배치 전송. 같은 테이블끼리 이어 붙여야 배치로 묶임.
+      hibernate.order_updates: true
     # schema.sql을 Hibernate가 테이블을 만든 뒤에 실행한다
     defer-datasource-initialization: true
   sql:
@@ -60,10 +72,15 @@ spring:
       auto-offset-reset: earliest
       # 처리가 끝난 레코드만 커밋한다 (리스너 ack-mode: record)
       enable-auto-commit: false
+    # Kafka 발행, 수신을 추적에 넣는다. 발행할 때 traceparent 헤더를 붙이고, 받을 때 그 헤더로 trace를 이어 간다
+    # 켜면 리스너, 템플릿 지표(spring_kafka_listener, spring_kafka_template)도 관측 기반으로 바뀌어 태그 이름이 달라진다
+    template:
+      observation-enabled: true
     listener:
       ack-mode: record
       # 토픽 파티션 수(docker/kafka/create-topics.sh 기본값 6)와 같은 수. 파티션보다 많으면 남는 Consumer는 일하지 않는다
       concurrency: 6
+      observation-enabled: true
 
 # 증거금 정산 Consumer (allocation.result) 배치 리스너 (#114)
 margin:
@@ -71,6 +88,12 @@ margin:
     # 1번 수신, 트랜잭션 1개, 커밋 1번에 처리하는 최대 메시지 수 (리스너의 max.poll.records)
     # 클수록 커밋 횟수가 감소하지만, 같은 배치의 계좌 행 잠금 보유 시간과 실패 시 1건씩 재처리하는 건수가 증가한다
     batch-size: ${MARGIN_SETTLE_BATCH_SIZE:100}
+
+# 증거금 인출 Consumer 배치 (#162). 밀린 메시지를 묶어 한 트랜잭션으로 처리한다
+margin-reserve:
+  batch:
+    # 한 번에 받는 최대 건수 (이 리스너에만 적용. 기다려서 모으지 않고 이미 밀려 있는 만큼만 받는다)
+    max-poll-records: 100
 
 # Outbox 발행기 (서비스 3개가 같은 키)
 outbox:

@@ -159,6 +159,17 @@ docker-compose -f docker-compose.yml -f compose.perf.yml up -d
 - 컨테이너가 상한과 함께 다시 만들어집니다 (DB, Kafka 데이터는 유지).
 - 상한과 JVM 힙(G1 명시)은 `compose.perf.yml` 맨 위 표를 봅니다. 머신에 맞게 고치고, 쓴 값은 측정 환경 기록에 적습니다.
 - `kafka-ui`는 이 구성에서 기본 실행에서 빠집니다 (필요하면 `docker-compose -f docker-compose.yml -f compose.perf.yml up -d kafka-ui`).
+- 분산 추적은 샘플링 0이라 Zipkin으로 보내지 않습니다 (서비스 4개 `TRACING_SAMPLING_PROBABILITY=0`). 요청마다 span을 만들어 보내는 일이 서비스 CPU 상한 안에서 돌아 측정값에 섞이지 않게 하려는 것입니다. 로그에는 traceId가 그대로 남고, Outbox를 거쳐도 같은 traceId로 이어져 Loki에서 요청 하나의 로그를 서비스 전체에서 찾을 수 있습니다.
+- 원인 분석에 trace가 필요하면 낮은 속도(200건/초 이하)의 진단 실행에서만 샘플링을 올립니다. 정식 측정에는 쓰지 않습니다 (600건/초에서 계좌, 게이트웨이가 이미 CPU 상한에 닿아 있음).
+  ```bash
+  TRACING_SAMPLING_PROBABILITY=1.0 docker-compose -f docker-compose.yml -f compose.perf.yml up -d api-gateway account-service subscription-service allocation-service
+  ```
+  - 끝나면 0으로 돌린 뒤 정식 측정을 합니다. `${TRACING_SAMPLING_PROBABILITY:-0}`은 값이 없을 때만 0이라, `.env`에 적었거나 셸에서 `export`했다면 명령 앞 변수만 빼도 1.0이 남습니다.
+    1. `.env`의 `TRACING_SAMPLING_PROBABILITY` 줄을 지우거나 주석 처리하고, 셸에서 `export`했다면 `unset TRACING_SAMPLING_PROBABILITY`
+    2. 변수 없이 다시 실행: `docker-compose -f docker-compose.yml -f compose.perf.yml up -d api-gateway account-service subscription-service allocation-service`
+    3. 확인: `docker exec ipo-account-service printenv TRACING_SAMPLING_PROBABILITY`가 `0`
+  - 1.0에서는 청약 1건에 span이 약 9개라, Zipkin(최대 50만 span)에는 빠른 속도일수록 최근 몇 분만 남습니다.
+- 로그 수집(Alloy, Loki)은 샘플링과 관계없이 돕니다. 서비스 상한 밖의 별도 컨테이너라 서비스 측정값에 직접 섞이지 않지만 PC 전체 CPU는 나눠 씁니다. `docker stats` 기록과 `자원.md`에 `ipo-zipkin`, `ipo-loki`, `ipo-alloy`도 나옵니다.
 
 ### 3-4. 기준 상태 스냅샷 만들기 (한 번)
 
@@ -274,16 +285,18 @@ docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml up
 | 게이트웨이 | `api-gateway`(8080 공개) + `api-gateway-2`(포트 비공개) | `ipo-api-gateway`, `ipo-api-gateway-2` |
 
 - 외부 요청은 계속 `api-gateway`(8080) 하나로만 들어갑니다. `api-gateway-2`는 입장 스케줄러와 청약 중 공모주 목록 갱신이 두 벌 도는 상황을 만듭니다
+  - 입장 처리는 1초 칸마다 한 대만 해서 입장 속도는 1대일 때와 같습니다 ([프로젝트 세팅 가이드](./PROJECT_SETUP.md#접속-대기열)). 확인은 대기자를 넣고 1분 동안 줄어든 인원(`ZCARD queue:{ipoId}:waiting`)을 1대일 때와 비교합니다
+  - 청약 중 공모주 목록 갱신은 게이트웨이마다 5초마다 돌아 청약 서비스 내부 API 호출이 대수만큼 늘어납니다
 - `api-gateway-2`는 `compose.perf.yml`의 `api-gateway`와 같은 상한(CPU 1.0, 메모리 1g, 힙 512m)이 `compose.scale.yml`에 따로 적혀 있습니다. perf 값을 바꾸면 같이 바꿉니다
 - Prometheus는 `docker/prometheus/prometheus.scale.yml`로 바뀌어 서비스 이름을 DNS로 조회해 인스턴스를 모두 수집합니다. job 이름이 같아 대시보드, 알림 규칙을 그대로 씁니다. 인스턴스는 `instance` 라벨(`IP:포트`)로 구분합니다 (컨테이너를 다시 만들면 IP가 바뀔 수 있습니다)
 - 확인
   - Eureka(http://localhost:8761): 서비스마다 인스턴스 2개
   - Prometheus(http://localhost:9090/targets): 서비스마다 대상 2개 UP
-  - `docker stats --no-stream`: 인스턴스별 메모리. perf와 같이 쓰면 상한 합계가 CPU 14, 메모리 약 13.75GB로 3-3절 기준 PC(CPU 10, 메모리 12GB)보다 큽니다. 상한은 넘을 수 없는 값일 뿐이라 뜨기는 하지만, 실제 사용량이 Docker 메모리를 넘으면 컨테이너가 강제 종료됩니다 (부하 없을 때 합계 약 6.2GB)
+  - `docker stats --no-stream`: 인스턴스별 메모리. perf와 같이 쓰면 상한 합계가 CPU 15.25, 메모리 약 15.25GB로 3-3절 기준 PC(CPU 10, 메모리 12GB)보다 큽니다. 상한은 넘을 수 없는 값일 뿐이라 뜨기는 하지만, 실제 사용량이 Docker 메모리를 넘으면 컨테이너가 강제 종료됩니다 (부하 없을 때 합계 약 6.2GB. Zipkin, Loki, Alloy를 빼고 잰 값이고, 이 셋은 부하 없을 때 약 0.4~0.55GB를 더 씁니다)
 - 서비스 계정 DB 커넥션이 기동만으로 한도에 닿습니다. Hikari 풀(청약 30, 계좌 10, 배정 10)이 2개씩이면 100개인데, PostgreSQL `max_connections` 100에서 슈퍼유저 예약 3개를 빼면 97개라 일부 인스턴스는 풀을 다 채우지 못합니다
 - `official.sh`, `g2_run.sh`는 고정 컨테이너 이름(`ipo-account-service` 등)을 써서 이 구성에서는 컨테이너를 찾지 못합니다. 인스턴스별 로그는 실행할 때와 같은 `-f` 목록으로 `docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml logs {서비스 이름}`(인스턴스가 앞에 표시됨)이나 위 컨테이너 이름으로 봅니다
 - 끌 때는 같은 `-f` 목록으로 `stop`이나 `down`을 합니다
-- 단일 인스턴스로 돌아갈 때는 `compose.scale.yml`을 빼고 `--remove-orphans`를 붙입니다. 붙이지 않으면 `api-gateway-2`가 계속 떠서 입장 스케줄러가 두 벌 돕니다
+- 단일 인스턴스로 돌아갈 때는 `compose.scale.yml`을 빼고 `--remove-orphans`를 붙입니다. 붙이지 않으면 `api-gateway-2`가 계속 떠서 자원을 씁니다 (입장 처리는 칸마다 한 대라 입장 속도는 그대로입니다)
 
   ```bash
   docker-compose -f docker-compose.yml -f compose.perf.yml up -d --remove-orphans
@@ -368,6 +381,8 @@ S3, S4 (Synthetic Data) 판정 기준. 회차마다 유효성, 정합성, 성능
 종료 코드: 0 정상, 2 워밍업이 최대 시간 안에 정상 상태에 닿지 않음 또는 판정 실패, 3 토큰, 4 예수금, 5 버전(dirty, jar 불일치), 6 소진 대기, 7 기동, 8 k6, 9 사전 점검, 10 부하는 끝났고 후처리 일부 실패, 11 공모주 생성, 12 잠금·결과 폴더, 13 도구 없음, 14 기준 상태 복원 실패
 
 결과를 쓸 때 같이 적는 한계: k6와 서비스가 같은 PC, Prometheus 5초 수집, docker stats 5초 간격 순간값(조회 1번에 약 2~3초, 조회도 CPU를 씀), 토큰 재발급의 로그인 요청, S1은 공모가 `S1_PRICE`원 종목 (금액만 다르고 처리 경로는 같다고 보지만 확인하지 않았습니다)
+
+분산 추적 계측(#165)이 들어간 커밋 이후 회차를 그 전 회차와 비교할 때는 조건 차이를 같이 적습니다. 샘플링 0이라 span을 보내지는 않지만 관측 생성, 로그 traceId, Outbox 문맥 저장(행당 약 55바이트), Kafka 헤더는 그대로 돌고, 로그 수집 컨테이너 2개가 PC CPU를 나눠 씁니다. 그 영향 크기는 측정하지 않았습니다. Kafka 리스너 지표의 태그도 바뀌었습니다 (`consumer_stats.py`는 두 형식을 모두 읽습니다).
 
 ### 대량 환불 측정 (g2_run.sh)
 
@@ -695,6 +710,7 @@ python loadtest/tests/test_s6_summary.py  # S6 여러 회차 요약 (중앙값, 
 python loadtest/tests/test_s6_judge.py    # S6 판정 (회차 무효 조건, 결과 위반, 입력 오류(요청 수 불일치, stage, 이벤트 시각, 없는 검사 결과), DLT 증가와 중복 수신 기록, 종료 코드 0, 3, 4, 1)
 python loadtest/tests/test_docker_stats.py   # docker stats 정리 (단위 변환, 실행 구간, 다른 실행의 k6 섞임, 빠진 구간은 실패)
 python loadtest/tests/test_consumer_stats.py # 인출 Consumer 정리 (랙 증가 추세 + 처리량 정체만 병목 의심, 조회 실패와 수집 누락은 실패)
+python loadtest/tests/test_consumer_stats_promql.py # 인출 Consumer 리스너 조회식을 promtool로 실행 (새 형식 error → result 변환, 예전 형식, 다른 리스너 제외, 수집 시각). Docker가 필요하고 없으면 건너뛴다
 python loadtest/tests/test_autovacuum.py  # 실행별 autovacuum 차이 (새 테이블, 기록 없는 실행, 통계 초기화, 형식 오류)
 python loadtest/tests/test_synthetic.py   # 행동 CSV 규칙과 기대 결과, 생성 코드 재실행 결과가 커밋한 CSV와 같은지, 생성 코드가 응답 원문과 같은지
 ```

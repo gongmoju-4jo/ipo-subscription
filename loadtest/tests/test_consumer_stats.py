@@ -146,9 +146,12 @@ class Main(unittest.TestCase):
         return dict(success=1000, processed=1010, processed_load=900, rejected=5, reserved=1003, first=run["start"] + 1.0,
                     last=run["start"] + 11.0, buckets={run["start"] - run["start"] % 5: 400})
 
-    def fake_prom(self, lag=(0, 0, 0, 0), samples=3, listener=True, scrape_after=3, partitions=6):
+    def fake_prom(self, lag=(0, 0, 0, 0), samples=3, listener=True, scrape_after=3, partitions=6, batch_listener=False):
         def f(run, base):
             pts = lag_points(lag, run["start"])
+            if batch_listener:
+                # 배치 리스너: 리스너 시계열이 없고(None) 최종 수집 시각도 없음. query_prom이 배치 지표로 정상임을 확인한 결과
+                return {"raw": run["run"]}, pts, None, samples, None, partitions
             lis = {"success": [(run["start"], 0.0), (run["start"] + 15, 1010.0)]} if listener else {}
             if not lis:
                 raise RuntimeError("리스너 시계열이 없음")
@@ -194,6 +197,55 @@ class Main(unittest.TestCase):
 
     def test_missing_listener_series_fails(self):
         self.assertEqual(self.run_main(prom=self.fake_prom(listener=False)), 1)
+
+    def listener_missing_call(self, batch_present):
+        """리스너 시계열은 없고 랙, 파티션 등은 있는 Prometheus 응답. batch_present면 배치 Consumer 지표(BATCH_Q)가 있다"""
+        def call(base, path, params):
+            q = params.get("query", "")
+            if "listener" in q:
+                return prom_resp([])
+            if q == cs.BATCH_Q:
+                return prom_resp([{"metric": {}, "value": [T0, "1"]}] if batch_present else [])
+            if path.endswith("query_range"):
+                return prom_resp([{"metric": {}, "values": [[T0, "0"]]}])
+            return prom_resp([{"value": [T0, "3"]}])
+        return call
+
+    def test_listener_missing_with_batch_metric_is_not_a_failure(self):
+        # 인출 Consumer가 공용 배치 팩토리를 쓰면 리스너 지표가 없다. 배치 지표가 있으면 수집 실패가 아니라서 리스너, 최종 수집 시각이 None
+        run = dict(run="r", start=T0, end=T0 + 10, drain=5, w1=T0 + 15, stop=T0 + 16, exact=True)
+        _, _, listener, _, scrape, _ = cs.query_prom(run, "http://x", get=self.listener_missing_call(batch_present=True))
+        self.assertIsNone(listener)
+        self.assertIsNone(scrape)
+
+    def test_listener_missing_without_batch_metric_fails(self):
+        # 리스너 시계열도 배치 지표도 없으면 수집이 안 된 것이라 예전처럼 실패 (0으로 넘기지 않음)
+        run = dict(run="r", start=T0, end=T0 + 10, drain=5, w1=T0 + 15, stop=T0 + 16, exact=True)
+        with self.assertRaises(RuntimeError) as ctx:
+            cs.query_prom(run, "http://x", get=self.listener_missing_call(batch_present=False))
+        self.assertIn("리스너 시계열이 없음", str(ctx.exception))
+
+    def test_batch_listener_outputs_dash_for_received_and_errors(self):
+        # 전체 수신, 오류는 '-', 나머지(성공, 고유 처리, 거절, 랙)는 그대로. 문제로 치지 않아 종료 코드 0
+        self.assertEqual(self.run_main(prom=self.fake_prom(batch_listener=True)), 0)
+        md = read(os.path.join(self.out, "인출.md"))
+        self.assertIn("| 1000 | 100.0 | 1010 | 5 | 3 | 2 | - | - | 0/0 |", md)  # 성공, 성공 건/초, 고유 처리, 거절, 재발행, 기타, 전체 수신, 오류, 랙
+        self.assertIn("전체 수신, 오류는 '-'", md)
+        self.assertIn("| 0/3 | - | 의심 없음 |", md)  # 단계표: 랙 증가 추세 반복, 오류율 '-'
+        self.assertNotIn("## 문제", md)
+        self.assertNotIn("리스너 최종 수집 시각이 소진 확인", md)
+        rows = list(csv.reader(io.StringIO(read(os.path.join(self.out, "인출.csv")))))
+        r1 = [r for r in rows[1:] if r[0] == "b1-S1-100-r1"]
+        self.assertTrue(r1)
+        self.assertTrue(all(r[5] == "" and r[6] == "" for r in r1))  # 리스너 누적 성공, 실패 열이 빔
+        self.assertTrue(any(r[4] != "" for r in r1))  # 랙은 그대로 기록
+
+    def test_listener_series_present_keeps_received_and_errors(self):
+        # 리스너 지표가 있는 1건 리스너 Consumer(예전 코드, 예전 회차 재분석)는 이전과 같이 숫자로 나온다
+        self.assertEqual(self.run_main(), 0)
+        md = read(os.path.join(self.out, "인출.md"))
+        self.assertIn("| 1000 | 100.0 | 1010 | 5 | 3 | 2 | 1010 | 0 |", md)
+        self.assertNotIn("전체 수신, 오류는 '-'", md)
 
     def test_missing_lag_series_fails(self):
         def call(path, params):

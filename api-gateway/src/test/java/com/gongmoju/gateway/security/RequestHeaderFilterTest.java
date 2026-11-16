@@ -118,6 +118,28 @@ class RequestHeaderFilterTest {
         assertThat(chainCalls).hasValue(1);
     }
 
+    @Test
+    void 클라이언트가_보낸_추적_헤더는_서비스에_전달되지_않는다() {
+        MockServerHttpRequest request = MockServerHttpRequest.get("/api/v1/accounts")
+                .header("traceparent", "00-11111111111111111111111111111111-2222222222222222-01")
+                .header("tracestate", "evil=1")
+                .header("baggage", "injected=hello")
+                .header("b3", "11111111111111111111111111111111-2222222222222222-1")
+                .header("X-B3-TraceId", "11111111111111111111111111111111")
+                .header("x-b3-spanid", "2222222222222222")
+                .header("X-B3-Sampled", "1")
+                .header("Authorization", "Bearer token")
+                .build();
+
+        filterAt("2026-11-02T00:59:59.123Z", request);
+
+        HttpHeaders headers = forwardedHeaders();
+        assertThat(headers.keySet()).noneMatch(name -> name.equalsIgnoreCase("traceparent")
+                || name.equalsIgnoreCase("tracestate") || name.equalsIgnoreCase("baggage")
+                || name.equalsIgnoreCase("b3") || name.toLowerCase().startsWith("x-b3-"));
+        assertThat(headers.getFirst("Authorization")).isEqualTo("Bearer token");
+    }
+
     private void filterAt(String instant, MockServerHttpRequest request) {
         Clock clock = Clock.fixed(Instant.parse(instant), ZoneOffset.UTC);
         new RequestHeaderFilter(clock).filter(MockServerWebExchange.from(request), chain).block();

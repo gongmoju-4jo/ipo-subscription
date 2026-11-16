@@ -28,7 +28,7 @@ import java.util.UUID;
 @Getter
 @Entity
 @Table(name = "outbox")
-@EntityListeners(AuditingEntityListener.class)
+@EntityListeners({AuditingEntityListener.class, OutboxTraceParentListener.class})
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Outbox {
 
@@ -76,6 +76,11 @@ public class Outbox {
     @Column(nullable = false)
     private int retryCount;
 
+    // 저장할 때의 추적 문맥 (W3C traceparent, 55자). 발행기가 이 문맥을 이어서 보내 요청과 그 뒤 처리가 trace 하나로 보인다
+    // 추적이 없거나 요청 밖(스케줄러)에서 만든 행은 null이고, 발행은 새 trace로 한다. 메시지 본문에는 싣지 않는다 (Kafka 헤더로 감)
+    @Column(name = "trace_parent", length = 55)
+    private String traceParent;
+
     /**
      * 발행 대기 행을 만든다. Kafka로 보내는 일은 발행기가 따로 한다.
      * <p>
@@ -98,6 +103,15 @@ public class Outbox {
         outbox.messageKey = messageKey;
         outbox.payload = payload;
         return outbox;
+    }
+
+    /**
+     * 저장할 때의 추적 문맥을 남긴다. 저장 직전에 {@link OutboxTraceParentListener}가 부른다.
+     *
+     * @param traceParent W3C traceparent. 문맥이 없으면 null
+     */
+    void recordTraceParent(String traceParent) {
+        this.traceParent = traceParent;
     }
 
     /**

@@ -9,6 +9,7 @@ import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.slf4j.LoggerFactory;
@@ -31,13 +32,14 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 최대 횟수 도달 알림 경로가 실제 서비스(저장소, 건별 처리 서비스)로 실행될 때 청약과 Outbox를 바꾸지 않는지를 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
- * 알림 경로는 재요청 서비스({@code handle})를 재사용해 청약 정보를 얻으므로, {@code handle}이 최대 횟수에 이른 청약에서 아무것도 바꾸지 않는다는 전제에 의존함.
- * 스케줄러 단위 테스트는 {@code handle}을 가짜로 대신해서 이 전제를 확인하지 못하므로, 이 테스트가 전제가 깨지는 것(알림 중 재요청이 나가는 것)을 잡아냄.
+ * 반환 지연 알림 경로가 실제 서비스(저장소, 건별 처리 서비스)로 실행될 때 청약과 Outbox를 바꾸지 않는지를 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
+ * 알림은 읽기 전용 조회({@code findLongVoiding})로 청약 정보를 얻고 재요청 서비스({@code handle})를 거치지 않음.
+ * 스케줄러 단위 테스트는 저장소를 가짜로 대신해서 알림 조회가 실제로 읽기만 하는지 확인하지 못하므로, 이 테스트가 알림 중 청약이나 Outbox가 바뀌는 것을 잡아냄.
+ * 재요청 대기 시간이 아직 지나지 않은 청약으로 확인하므로, 같은 실행에서 재요청이 나가 값이 바뀌는 경우와 구분됨.
  */
 @Testcontainers
 @SpringBootTest(properties = "eureka.client.enabled=false")
-@DisplayName("최대 횟수 도달 알림 경로는 청약과 Outbox를 바꾸지 않는다 (PostgreSQL)")
+@DisplayName("반환 지연 알림 경로는 청약과 Outbox를 바꾸지 않는다 (PostgreSQL)")
 class VoidRetryAlertNoWriteTest {
 
     private static final Duration ALERT_INTERVAL = Duration.ofMinutes(5);
@@ -55,7 +57,7 @@ class VoidRetryAlertNoWriteTest {
     private SubscriptionVoidRetryService voidRetryService;
 
     @Autowired
-    private PendingTimeoutProperties properties;
+    private VoidRetryProperties properties;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -92,12 +94,12 @@ class VoidRetryAlertNoWriteTest {
 
     @ParameterizedTest(name = "{0}, {1}")
     @CsvSource({"COMPENSATING, TIMEOUT", "COMPENSATING, CONFIRM_FAILED", "CANCEL_REQUESTED, USER_CANCEL"})
-    @DisplayName("최대 횟수에 이른 청약에 알림 경로를 실행하면 ERROR 로그만 남고 상태, 요청 횟수, 요청 시각, version, Outbox가 그대로이다")
-    void alertPath_changesNothing_forExhaustedSubscription(String status, String cancelReason) {
-        // given
+    @DisplayName("요청 횟수가 알림 기준 이상이고 다음 재요청 대기 중인 청약에 알림 경로를 실행하면 ERROR 로그만 남고 상태, 요청 횟수, 요청 시각, version, Outbox가 그대로이다")
+    void alertPath_changesNothing_forLongVoidingSubscription(String status, String cancelReason) {
+        // given: 요청 횟수가 알림 기준 이상이고, 마지막 요청 뒤 60초가 지남 (알림 최소 경과 30초는 지났고, 이 횟수의 재요청 대기 시간 300초는 아직 안 지남)
         VoidRetryScheduler scheduler = new VoidRetryScheduler(subscriptionRepository, voidRetryService, properties, ALERT_INTERVAL);
-        Instant lastRequestedAt = Instant.now().minus(properties.responseTimeout()).minusSeconds(10).truncatedTo(ChronoUnit.MICROS);
-        insertSubscription(status, cancelReason, properties.maxAttempts(), lastRequestedAt);
+        Instant lastRequestedAt = Instant.now().minusSeconds(60).truncatedTo(ChronoUnit.MICROS);
+        insertSubscription(status, cancelReason, properties.alertAttempts(), lastRequestedAt);
         Map<String, Object> before = subscription();
 
         // when
@@ -107,9 +109,27 @@ class VoidRetryAlertNoWriteTest {
         List<ILoggingEvent> errors = logAppender.list.stream().filter(e -> e.getLevel() == Level.ERROR).toList();
         assertThat(errors).anySatisfy(e -> assertThat(e.getFormattedMessage()).contains(subscriptionId.toString(), status));
         assertThat(subscription()).isEqualTo(before);
-        assertThat(subscription().get("attempts")).isEqualTo(properties.maxAttempts());
+        assertThat(subscription().get("attempts")).isEqualTo(properties.alertAttempts());
         assertThat(subscription().get("version")).isEqualTo(0L);
         assertThat(outboxCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("초기 간격과 상한이 같은 설정에서 재요청 대기가 끝난 반환 지연 청약은 재요청도 나가고 알림 ERROR 로그도 남는다")
+    void retryAndAlert_bothHappen_whenInitialEqualsMaxInterval() {
+        // given: 30초 고정 간격. 요청 횟수가 알림 기준 이상이고 마지막 요청 뒤 31초가 지나 재요청 대기(30초)와 알림 최소 경과(30초)를 같은 순간 넘음
+        VoidRetryProperties fixed = new VoidRetryProperties(Duration.ofSeconds(30), Duration.ofSeconds(30), properties.alertAttempts(), 100);
+        VoidRetryScheduler scheduler = new VoidRetryScheduler(subscriptionRepository, voidRetryService, fixed, ALERT_INTERVAL);
+        Instant lastRequestedAt = Instant.now().minusSeconds(31).truncatedTo(ChronoUnit.MICROS);
+        insertSubscription("COMPENSATING", "TIMEOUT", properties.alertAttempts(), lastRequestedAt);
+
+        // when
+        scheduler.retryStaleVoid(Instant.now());
+
+        // then: 재요청이 나가 요청 횟수가 늘었고, 알림도 나감 (재요청이 먼저 요청 시각을 갱신해도 알림이 빠지지 않음)
+        assertThat(subscription().get("attempts")).isEqualTo(properties.alertAttempts() + 1);
+        List<ILoggingEvent> errors = logAppender.list.stream().filter(e -> e.getLevel() == Level.ERROR).toList();
+        assertThat(errors).anySatisfy(e -> assertThat(e.getFormattedMessage()).contains(subscriptionId.toString()));
     }
 
     private void insertSubscription(String status, String cancelReason, int attempts, Instant lastRequestedAt) {

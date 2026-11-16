@@ -8,9 +8,11 @@
 #   2. Parameter Store(PARAM_PATH)의 비밀값으로 .env를 만든다 (권한 600)
 #      첫 관리자 계정(ADMIN_LOGIN_ID, ADMIN_PASSWORD)도 여기서 형식을 검사한다. account-service가 기동할 때 이 계정이 없으면 만든다
 #   3. ECR에 로그인해 이미지를 받고 docker compose up -d
-#   4. 서비스 5개가 healthy가 될 때까지 기다린다. 실패하면 상태와 로그를 출력하고 종료 코드 1
-#   5. 서버 안에서 게이트웨이(127.0.0.1:80)로 스모크 (deploy/smoke.sh). 계정은 Parameter Store의 SMOKE_LOGIN_ID, SMOKE_PASSWORD
-#      스모크 비밀번호가 인터넷(HTTP)으로 나가지 않는다. 서버 밖과는 SSM의 암호화된 채널로만 오간다
+#      compose 파일에 없는 컨테이너는 지운다 (--remove-orphans). web이 없는 이전 커밋으로 롤백할 때 남은 web이 80을 쥐고 있으면 게이트웨이가 뜨지 못한다
+#   4. 서비스 5개와 web이 healthy가 될 때까지 기다린다. 실패하면 상태와 로그를 출력하고 종료 코드 1
+#   5. 서버 안에서 게이트웨이(127.0.0.1:8080)로 스모크 (deploy/smoke.sh). 계정은 Parameter Store의 SMOKE_LOGIN_ID, SMOKE_PASSWORD
+#      web이 없던 이전 구성 커밋으로 롤백하면 web은 기다리지 않고, 스모크는 그 구성의 게이트웨이 주소(127.0.0.1:80)로 보낸다
+#      공개 주소(web)를 거치지 않고 서버 안에서만 보낸다. 서버 밖과는 SSM의 암호화된 채널로만 오간다
 #   6. 스모크까지 통과하면 .last-tag를 기록한다
 #
 # down -v는 쓰지 않는다 (DB, Kafka 데이터가 지워진다)
@@ -38,7 +40,6 @@ main() {
   local region="${AWS_REGION:-ap-northeast-2}"
   local param_path="${PARAM_PATH:-/ipo/prod/}"
   local health_timeout="${HEALTH_TIMEOUT:-300}"
-  local smoke_url="${SMOKE_BASE_URL:-http://127.0.0.1:80}"   # 서버 안의 게이트웨이 (compose.prod.yml의 80 → 8080)
   local services=(eureka-server api-gateway account-service subscription-service allocation-service)
   local required=(DB_PASSWORD ACCOUNT_DB_PASSWORD SUBSCRIPTION_DB_PASSWORD ALLOCATION_DB_PASSWORD JWT_SECRET GRAFANA_ADMIN_PASSWORD ADMIN_LOGIN_ID ADMIN_PASSWORD)
 
@@ -50,6 +51,19 @@ main() {
   local full_sha
   full_sha="$(git rev-parse HEAD)"
 
+  # 배포할 커밋에 web(Caddy)이 있는지에 따라 기다릴 대상과 스모크 주소가 다르다
+  # 이 스크립트는 checkout 전에 읽힌 버전이 끝까지 실행되므로, 서버에서 web이 없던 커밋으로 손으로 롤백할 때도 맞게 동작하도록 여기서 정한다
+  #   web 있음: 게이트웨이는 서버 안 127.0.0.1:8080, web이 healthy여야 하고 SITE_DOMAIN이 필요하다
+  #   web 없음: 게이트웨이가 80으로 공개된 이전 구성
+  local smoke_url
+  if grep -q 'container_name: ipo-web' compose.prod.yml; then
+    services+=(web)
+    required+=(SITE_DOMAIN)
+    smoke_url="${SMOKE_BASE_URL:-http://127.0.0.1:8080}"
+  else
+    smoke_url="${SMOKE_BASE_URL:-http://127.0.0.1:80}"
+  fi
+
   echo "== 2. Parameter Store(${param_path})로 .env 생성"
   local registry
   registry="${ECR_REGISTRY:-$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${region}.amazonaws.com}"
@@ -59,7 +73,7 @@ main() {
   chmod 600 "$tmp"
   # 값은 화면에 출력하지 않는다
   # Compose는 따옴표 없는 .env 값의 $를 변수로 바꾼다. 작은따옴표로 감싸 값을 그대로 넘기고, 작은따옴표가 든 값은 받지 않는다
-  local params name value invalid=() smoke_id="" smoke_pw="" admin_id="" admin_pw=""
+  local params name value invalid=() smoke_id="" smoke_pw="" admin_id="" admin_pw="" site_domain=""
   params="$(aws ssm get-parameters-by-path --region "$region" --path "$param_path" --with-decryption \
     --query 'Parameters[].[Name,Value]' --output text)"
   while IFS=$'\t' read -r name value; do
@@ -71,6 +85,7 @@ main() {
       # 첫 관리자 계정은 .env에도 넣는다 (아래에서 형식만 따로 검사)
       ADMIN_LOGIN_ID) admin_id="$value" ;;
       ADMIN_PASSWORD) admin_pw="$value" ;;
+      SITE_DOMAIN) site_domain="$value" ;;
     esac
     if [[ "$value" == *"'"* ]]; then
       invalid+=("${name##*/}")
@@ -102,6 +117,10 @@ main() {
   if [[ -n "$admin_pw" ]] && ! admin_password_ok "$admin_pw"; then
     missing+=("ADMIN_PASSWORD(8~20자, 공백 없는 영문, 숫자, 특수문자. \$, 작은따옴표, 역슬래시 불가)")
   fi
+  # 인증서를 받을 도메인. Caddyfile의 사이트 주소에 그대로 들어가므로 도메인 형식만 받는다 (https://, /, 공백, 대문자 불가)
+  if [[ -n "$site_domain" ]] && [[ ! "$site_domain" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]]; then
+    missing+=("SITE_DOMAIN(도메인만, 예: example.com)")
+  fi
   # 스모크 계정은 일반 회원으로 가입하므로 같은 로그인 ID면 관리자가 만들어지지 않는다
   if [[ -n "$admin_id" && "$admin_id" == "$smoke_id" ]]; then
     missing+=("ADMIN_LOGIN_ID(SMOKE_LOGIN_ID와 달라야 함)")
@@ -126,9 +145,9 @@ main() {
     | docker login --username AWS --password-stdin "$registry" > /dev/null
   local compose=(docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml)
   "${compose[@]}" pull --quiet
-  "${compose[@]}" up -d
+  "${compose[@]}" up -d --remove-orphans
 
-  echo "== 4. 서비스 healthy 대기 (최대 ${health_timeout}초)"
+  echo "== 4. 서비스, web healthy 대기 (최대 ${health_timeout}초)"
   local deadline=$((SECONDS + health_timeout)) svc status pending
   while :; do
     pending=()

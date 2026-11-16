@@ -17,7 +17,7 @@
   재발행         account.outbox topic=margin.reserved 건수 - 인출 성공 (이미 PENDING인 증거금에 온 재요청) (DB)
   기타           고유 이벤트 처리 - 성공 - 거절 - 재발행 (선행 반환으로 건너뜀, POSTED/VOIDED 증거금에 온 요청)
   전체 수신      spring_kafka_listener_seconds_count 증가분 (Prometheus, 중복 수신과 재시도 포함)
-  오류           위 리스너 지표의 result=failure 증가분
+  오류           위 리스너 지표의 result=failure 증가분 (지금 형식은 error가 none이 아닌 것. 아래 LISTENER_Q)
   랙             sum(kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"}) (Consumer가 계산한 값. 처리 중 멈추면 갱신이 늦다)
 병목 의심 (단계마다): 랙 증가 추세 AND 처리량 정체. 자동 분석은 후보만 찾는다
   랙 증가 추세  실행마다 부하 중 랙의 기울기(최소제곱) > 0. 반복 중 과반이면 그 단계는 증가 추세
@@ -41,8 +41,17 @@ import urllib.request
 
 CONSUMER = "account-margin-reserve"
 LAG_Q = 'sum(kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"})'
-LISTENER_Q = 'sum by (result) (spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"})'
-LISTENER_SCRAPE_Q = 'max(timestamp(spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"}))'
+# 리스너 지표는 분산 추적(#165)에서 Kafka 수신 관측을 켜면서 태그가 바뀌었다. 예전 회차를 다시 분석할 수 있게 두 형식을 함께 읽는다
+#   예전: name=리스너 ID, result=success/failure (Spring Kafka 타이머)
+#   지금: spring_kafka_listener_id=리스너 ID, error=none/예외 이름 (관측). error를 예전 result 값으로 바꿔 읽는다
+# 같은 시각에 두 형식이 함께 수집되지는 않는다 (서비스를 다시 띄우면 이전 형식 시계열은 끊긴다)
+LISTENER_OLD = 'spring_kafka_listener_seconds_count{name=~"account-margin-reserve-[0-9]+"}'
+LISTENER_NEW = 'spring_kafka_listener_seconds_count{spring_kafka_listener_id=~"account-margin-reserve-[0-9]+"}'
+LISTENER_NEW_AS_RESULT = ('label_replace(label_replace(' + LISTENER_NEW + ', "result", "failure", "error", ".+"),'
+                          ' "result", "success", "error", "none")')
+LISTENER_Q = 'sum by (result) (' + LISTENER_OLD + ' or ' + LISTENER_NEW_AS_RESULT + ')'
+# timestamp()는 셀렉터에 바로 써야 수집 시각이 나온다 (or 결과에 쓰면 평가 시각이 나와 수집이 끊겨도 알 수 없다)
+LISTENER_SCRAPE_Q = 'max(timestamp(' + LISTENER_OLD + ') or timestamp(' + LISTENER_NEW + '))'
 # 평가 시각마다 랙을 보고한 파티션 수. Consumer가 죽어 파티션 시계열이 사라지면 합계 랙이 작게 나와 병목을 놓친다
 LAG_PARTITIONS_Q = 'count(count by (partition) (kafka_consumer_fetch_manager_records_lag{topic="margin_reserve-requested"}))'
 LAG_SAMPLES_Q = 'max(count_over_time(kafka_consumer_fetch_manager_records_lag{{topic="margin_reserve-requested"}}[{d}s]))'

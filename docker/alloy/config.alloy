@@ -1,0 +1,85 @@
+// 컨테이너 로그 수집 (Grafana Alloy → Loki)
+// 같은 compose 프로젝트의 컨테이너 로그를 Docker API로 읽어 Loki로 보낸다. 서비스 코드, 로그 설정은 바꾸지 않는다
+// IntelliJ로 띄운 서비스는 컨테이너가 아니라서 모이지 않는다
+
+// 같은 compose 프로젝트의 컨테이너만 찾는다 (같은 PC의 다른 프로젝트 컨테이너는 모으지 않는다)
+// COMPOSE_PROJECT는 docker-compose.yml이 compose 프로젝트 이름으로 넣는다
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=" + sys.env("COMPOSE_PROJECT")]
+  }
+}
+
+// Loki 라벨은 적게 둔다 (라벨 값 조합마다 저장 단위가 생긴다). traceId 같은 값은 라벨로 두지 않는다
+//   service   compose 서비스 이름 (예: account-service). 인스턴스를 여러 개 띄워도 같은 값
+//   container 컨테이너 이름 (예: ipo-account-service). 인스턴스를 구분한다
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.docker.containers.targets
+  relabel_rules    = discovery.relabel.containers.rules
+  refresh_interval = "5s"
+  forward_to       = [loki.process.containers.receiver]
+}
+
+loki.process "containers" {
+  // Spring Boot 서비스 로그만 다룬다. 다른 컨테이너(PostgreSQL, Kafka 등)는 형식이 달라 그대로 보낸다
+  // 로그 형식(Boot 기본): 2026-11-15T20:37:49.244+09:00  INFO 1 --- [account-service] [스레드] [traceId-spanId] 로거 : 메시지
+  //   traceId가 없는 줄은 [traceId-spanId] 자리가 같은 폭의 빈칸이다. 추적 의존성이 없는 앱(eureka-server)은 이 자리가 아예 없다
+  //   로그 형식(logging.pattern)을 바꾸면 아래 정규식도 같이 고친다
+  // api-gateway-2는 compose.scale.yml의 두 번째 게이트웨이 (서비스 이름이 따로 있음). 서비스를 늘리면 여기도 추가한다
+  stage.match {
+    selector = "{service=~\"api-gateway|api-gateway-2|account-service|subscription-service|allocation-service|eureka-server\"}"
+
+    // 예외 스택 트레이스(시각으로 시작하지 않는 줄)를 앞 줄에 붙여 로그 한 건으로 묶는다
+    stage.multiline {
+      firstline     = "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+      max_wait_time = "3s"
+    }
+
+    // [traceId-spanId] 자리는 선택 항목이다. 없어도 레벨은 뽑는다
+    stage.regex {
+      expression = "^\\S+\\s+(?P<level>[A-Z]+)\\s+\\d+\\s+---\\s+\\[[^\\]]*\\]\\s+\\[[^\\]]*\\](?:\\s+\\[\\s*(?:(?P<trace_id>[0-9a-f]{32})-[0-9a-f]{16})?\\s*\\])?"
+    }
+
+    // 레벨은 값 종류가 적어 라벨로 둔다 ({level="ERROR"}로 거른다)
+    stage.labels {
+      values = {
+        level = "",
+      }
+    }
+
+    // traceId는 값 종류가 많아 라벨 대신 구조화 메타데이터로 둔다 (| trace_id="..."로 거른다)
+    stage.structured_metadata {
+      values = {
+        trace_id = "",
+      }
+    }
+  }
+
+  forward_to = [loki.write.loki.receiver]
+}
+
+loki.write "loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

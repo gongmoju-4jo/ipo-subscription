@@ -122,6 +122,48 @@ class OutboxPublisherTest {
     }
 
     @Test
+    @DisplayName("행에 저장된 추적 문맥 안에서 보내고, 문맥이 없는 행은 null로 넘긴다")
+    void publishPending_sendsWithinStoredTraceContext() {
+        // given
+        Outbox traced = pendingOutbox("margin.reserve-requested", "key-1", "{}");
+        traced.recordTraceParent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+        Outbox untraced = pendingOutbox("margin.reserved", "key-2", "{}");
+        givenPending(List.of(traced, untraced));
+        givenSendSucceeds();
+        List<String> contexts = new ArrayList<>();
+        List<Boolean> sentInside = new ArrayList<>();
+        OutboxTraceContext recording = new OutboxTraceContext() {
+            @Override
+            public String currentTraceParent() {
+                return null;
+            }
+
+            @Override
+            public <T> T inStoredContext(String traceParent, String topic, java.util.function.Supplier<T> send) {
+                contexts.add(topic + "|" + traceParent);
+                T result = send.get();
+                // 전송 호출이 문맥 안(이 메서드 안)에서 일어났는지
+                sentInside.add(org.mockito.Mockito.mockingDetails(kafkaTemplate).getInvocations().size() == contexts.size());
+                return result;
+            }
+        };
+        OutboxPublisher tracingPublisher = new OutboxPublisher(outboxRepository, new OutboxMessageFactory(objectMapper), kafkaTemplate,
+                new TransactionTemplate(mock(PlatformTransactionManager.class)),
+                new OutboxPublisherProperties(BATCH_SIZE, ALERT_THRESHOLD, Duration.ofSeconds(1)), recording);
+
+        // when
+        tracingPublisher.publishPending();
+
+        // then
+        assertThat(contexts).containsExactly(
+                "margin.reserve-requested|00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+                "margin.reserved|null");
+        assertThat(sentInside).containsOnly(true);
+        assertThat(traced.getPublishedAt()).isNotNull();
+        assertThat(untraced.getPublishedAt()).isNotNull();
+    }
+
+    @Test
     @DisplayName("키가 다른 행들은 응답을 기다리지 않고 모두 보낸 뒤, 한 번의 UPDATE로 발행 완료를 표시한다")
     void publishPending_sendsAllKeysBeforeMarkingPublishedInOneUpdate() {
         // given

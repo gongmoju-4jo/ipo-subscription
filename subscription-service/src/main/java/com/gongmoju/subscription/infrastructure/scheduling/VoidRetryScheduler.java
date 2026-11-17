@@ -6,6 +6,7 @@ import com.gongmoju.subscription.domain.subscription.Subscription;
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import com.gongmoju.subscription.domain.subscription.VoidRetryBackoff;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -26,6 +27,7 @@ import java.util.UUID;
  * 요청 횟수가 알림 기준({@code saga.void-retry.alert-attempts}) 이상인데 응답이 없으면 상태를 변경하지 않고(자동 종료, 강제 마감 없음, 결정 14)
  * 알림 간격마다 ERROR 로그만 기록. 재요청은 계속함.
  * 각 청약을 개별 처리하며, 1 건의 실패가 나머지 처리를 중단하지 않음. 낙관적 락 충돌은 건너뛰고 다음 주기에 재판단함.
+ * 인스턴스가 여러 개면 ShedLock({@code @SchedulerLock})으로 한 번에 한 인스턴스만 실행
  */
 @Slf4j
 @Component
@@ -50,8 +52,11 @@ class VoidRetryScheduler {
 
     /**
      * 이전 실행 종료 후 실행 간격(interval) 지나면 재실행 (실행이 겹치지 않음)
+     * 락 시간은 응답 시간 초과 스케줄러와 같은 설정 값 사용(동일 실행 간격).
      */
     @Scheduled(fixedDelayString = "${saga.timeout.interval:PT5S}")
+    @SchedulerLock(name = "VoidRetryScheduler.retryStaleVoid",
+            lockAtMostFor = "${saga.timeout.lock-at-most-for:PT1M}", lockAtLeastFor = "${saga.timeout.lock-at-least-for:PT4S}")
     void retryStaleVoid() {
         retryStaleVoid(Instant.now());
     }

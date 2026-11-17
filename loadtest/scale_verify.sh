@@ -46,6 +46,8 @@ v1() {
   local d; d="$(phase_dir "$1")"
   record_env "$d"
   local secs="${V1_SECONDS:-60}"
+  # 확장은 DB마다 한 번 만들어야 한다 (compose.perf.yml은 라이브러리만 올림. slow-queries.sql과 같은 방식)
+  q "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;" > /dev/null
   q "SELECT pg_stat_statements_reset();" > /dev/null
   echo "V1: ${secs}초 동안 부하 없이 대기 (스케줄러 쿼리만 집계)"
   sleep "$secs"

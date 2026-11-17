@@ -1,0 +1,183 @@
+package com.gongmoju.gateway.login;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gongmoju.gateway.login.LoginAttemptRedisRepository.Reservation;
+import com.gongmoju.gateway.queue.ApiResponse;
+import com.gongmoju.gateway.support.JsonBodyReader;
+import com.gongmoju.gateway.support.JsonBodyReader.JsonBody;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import org.springframework.cloud.gateway.filter.GlobalFilter;
+import org.springframework.core.Ordered;
+import org.springframework.core.io.buffer.DataBufferLimitException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.http.server.reactive.ServerHttpResponse;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * 로그인(POST /api/v1/auth/login) 시도 횟수 제한. 같은 로그인 ID로 일정 기간 안에 정해진 횟수만큼 실패하면 그 ID의 로그인을 막는다 (429).
+ *
+ * <ul>
+ *   <li>서비스로 보내기 전에 실패 횟수를 미리 올리고(동시에 보낸 요청이 모두 확인을 통과하지 못하게), 응답을 보고 확정한다:
+ *       401은 실패로 남기고, 2xx는 횟수를 지우고, 그 밖(400, 5xx, 서비스 호출 오류)은 되돌린다</li>
+ *   <li>차단 중이면 서비스로 보내지 않고 429 TOO_MANY_REQUESTS + Retry-After(남은 초). 남은 횟수는 알려주지 않는다</li>
+ *   <li>로그인 ID는 서비스와 같은 방식으로 본문에서 읽는다 ({@link JsonBodyReader}). 같은 키가 두 번 이상이면 400.
+ *       게이트웨이가 센 ID와 서비스가 로그인한 ID가 어긋나 제한을 피하지 못하게 한다.
+ *       loginId가 문자열이 아니거나 본문을 읽을 수 없으면 세지 않고 보낸다 (서비스가 400을 준다)</li>
+ *   <li>Redis 실패, {@code redisTimeout} 초과 → 횟수 확인 없이 보내고 WARN 로그. 그 뒤 {@code redisSkip} 동안은 Redis를 부르지 않는다.
+ *       돈과 직결된 청약 신청의 입장 허가 확인(Redis 장애 시 503)과 달리, 로그인 제한은 부가 보호라 Redis 장애가 로그인 장애로 번지지 않게 한다</li>
+ *   <li>경로는 퍼센트 디코딩 후 비교하고 끝 슬래시도 대상이다. 메서드는 대소문자를 가리지 않는다</li>
+ * </ul>
+ */
+@Slf4j
+@Component
+public class LoginAttemptFilter implements GlobalFilter, Ordered {
+
+    // 문자열로 비교하면 토큰을 가진 사용자가 /api/v1/auth/%6Cogin으로 보내 제한 없이 시도할 수 있다 (서비스는 디코딩해 로그인으로 처리)
+    private static final List<PathPattern> LOGIN_PATHS = List.of(
+            PathPatternParser.defaultInstance.parse("/api/v1/auth/login"),
+            PathPatternParser.defaultInstance.parse("/api/v1/auth/login/"));
+
+    private final LoginAttemptRedisRepository repository;
+    private final LoginAttemptProperties properties;
+    private final JsonBodyReader bodyReader;
+    private final ObjectMapper objectMapper;
+    // Redis 실패 뒤 이 시각(System.nanoTime)까지는 Redis를 부르지 않는다
+    private final AtomicLong skipUntilNanos = new AtomicLong(System.nanoTime());
+
+    public LoginAttemptFilter(LoginAttemptRedisRepository repository, LoginAttemptProperties properties,
+                              JsonBodyReader bodyReader, ObjectMapper objectMapper) {
+        this.repository = repository;
+        this.properties = properties;
+        this.bodyReader = bodyReader;
+        this.objectMapper = objectMapper;
+    }
+
+    @Override
+    public int getOrder() {
+        // 로드밸런서(10150), 라우팅(Integer.MAX_VALUE)보다 먼저
+        return 0;
+    }
+
+    @Override
+    public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        ServerHttpRequest request = exchange.getRequest();
+        if (!HttpMethod.POST.name().equalsIgnoreCase(request.getMethod().name()) || !isLoginPath(request)) {
+            return chain.filter(exchange);
+        }
+        return bodyReader.readBody(request)
+                .flatMap(body -> check(exchange, chain, body))
+                .onErrorResume(DataBufferLimitException.class, e ->
+                        write(exchange, HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "요청 본문이 너무 큽니다."));
+    }
+
+    private Mono<Void> check(ServerWebExchange exchange, GatewayFilterChain chain, byte[] body) {
+        ServerWebExchange replayable = exchange.mutate().request(JsonBodyReader.replay(exchange.getRequest(), body)).build();
+        JsonBody parsed = bodyReader.parse(exchange.getRequest(), body);
+        if (parsed.duplicateKey()) {
+            return write(exchange, HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "요청 본문에 같은 키가 두 번 이상 있습니다.");
+        }
+        String loginId = parsed.text("loginId");
+        if (loginId == null || redisSkipped()) {
+            return chain.filter(replayable);
+        }
+        return redisCall(repository.reserve(loginId), "예약")
+                .map(Optional::of)
+                .defaultIfEmpty(Optional.empty())
+                .flatMap(reservation -> {
+                    if (reservation.isEmpty()) {
+                        // Redis 실패: 세지 않고 보낸다
+                        return chain.filter(replayable);
+                    }
+                    return reservation.get().allowed()
+                            ? forward(replayable, chain, loginId)
+                            : tooManyRequests(exchange, reservation.get());
+                });
+    }
+
+    // 서비스로 보내고 응답 상태로 예약을 확정한다. 확정은 응답을 다 보낸 뒤라 결과에 영향을 주지 않는다
+    private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain, String loginId) {
+        return chain.filter(exchange)
+                .then(Mono.defer(() -> settle(loginId, exchange.getResponse().getStatusCode())))
+                .onErrorResume(e -> settle(loginId, null).then(Mono.error(e)));
+    }
+
+    private Mono<Void> settle(String loginId, HttpStatusCode status) {
+        Mono<Void> action;
+        String name;
+        if (status != null && status.value() == HttpStatus.UNAUTHORIZED.value()) {
+            action = repository.recordFailure(loginId);
+            name = "실패 기록";
+        } else if (status != null && status.is2xxSuccessful()) {
+            action = repository.clear(loginId);
+            name = "성공 정리";
+        } else {
+            action = repository.release(loginId);
+            name = "되돌리기";
+        }
+        return redisCall(action.thenReturn(Boolean.TRUE), name).then();
+    }
+
+    // Redis 호출에 시간 초과를 두고, 실패하면 비우고(통과) 건너뛰기 시간을 건다.
+    // Redis가 연결은 받고 답하지 않으면 Lettuce가 연결을 맺는 단계에서 구독한 스레드를 Redis 명령 시간 초과(2초)까지 붙잡는다.
+    // 요청 처리 스레드(Netty)가 붙잡히면 시간 초과가 끼어들지 못하고 같은 스레드의 다른 요청도 멈추므로, 별도 스레드에서 구독한다
+    private <T> Mono<T> redisCall(Mono<T> call, String name) {
+        return call.subscribeOn(Schedulers.boundedElastic())
+                .timeout(properties.redisTimeout())
+                .onErrorResume(e -> {
+                    skipUntilNanos.set(System.nanoTime() + properties.redisSkip().toNanos());
+                    log.warn("로그인 시도 제한 {} 실패 (Redis). {} 동안 횟수 확인 없이 로그인을 통과시킵니다: {}",
+                            name, properties.redisSkip(), e.toString());
+                    return Mono.empty();
+                });
+    }
+
+    private boolean redisSkipped() {
+        return System.nanoTime() - skipUntilNanos.get() < 0;
+    }
+
+    private static boolean isLoginPath(ServerHttpRequest request) {
+        return LOGIN_PATHS.stream().anyMatch(pattern -> pattern.matches(request.getPath().pathWithinApplication()));
+    }
+
+    private Mono<Void> tooManyRequests(ServerWebExchange exchange, Reservation reservation) {
+        exchange.getResponse().getHeaders().set(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds(reservation.retryAfter())));
+        return write(exchange, HttpStatus.TOO_MANY_REQUESTS, "TOO_MANY_REQUESTS",
+                "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.");
+    }
+
+    // 1초 미만이 남아도 0이 아니라 1초로 알린다 (0이면 바로 다시 시도해 다시 막힌다)
+    static long retryAfterSeconds(Duration remaining) {
+        long millis = Math.max(0, remaining.toMillis());
+        return Math.max(1, (millis + 999) / 1000);
+    }
+
+    private Mono<Void> write(ServerWebExchange exchange, HttpStatus status, String code, String message) {
+        ServerHttpResponse response = exchange.getResponse();
+        response.setStatusCode(status);
+        response.getHeaders().setContentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8));
+        try {
+            byte[] bytes = objectMapper.writeValueAsBytes(ApiResponse.failure(code, message, null));
+            return response.writeWith(Mono.just(response.bufferFactory().wrap(bytes)));
+        } catch (JsonProcessingException e) {
+            return Mono.error(e);
+        }
+    }
+}

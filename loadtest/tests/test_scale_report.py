@@ -149,9 +149,20 @@ class ReviewFixTest(unittest.TestCase):
         self.assertIn("판정 불가", rows["정합성"])
 
     def test_V2를_측정하지_않으면_중복_실행은_판정_불가다(self):
-        a1 = {k: (12 if k != "원장 대사" else 1, []) for k in sr.EXPECT}
+        a1 = {k: (12 if k != "원장 대사" else 6, []) for k in sr.EXPECT}
         rows = dict((k, v) for k, v, _ in sr.final_verdicts(a1, None, [], [self.run_(1)], [], [], {}, {}, 1.2))
         self.assertIn("판정 불가 (V2 측정 안 함)", rows["중복 실행 (적용 후)"])
+
+
+class LedgerExpectTest(unittest.TestCase):
+
+    def test_원장_대사는_회차당_1번인_6회를_통과로_판정한다(self):
+        self.assertEqual(sr.EXPECT["원장 대사"], (12, 5, 7))
+
+    def test_원장_대사가_1회면_락_최소_유지_효과와_구분이_안_돼_불합격이다(self):
+        a1 = {k: (12 if k != "원장 대사" else 1, []) for k in sr.EXPECT}
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(a1, None, [], [ReviewFixTest().run_(1)], [], [], {}, {}, 1.2))
+        self.assertEqual(rows["중복 실행 (적용 후)"], "❌ 불합격")
 
 
 class V3Test(unittest.TestCase):

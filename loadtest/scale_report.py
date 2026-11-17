@@ -23,11 +23,13 @@ RULES = [
     ("Outbox 발행기 (배정)", "allocation_app", lambda s: is_outbox_poll(s)),
 ]
 # 기대값: (적용 전, 적용 후 하한, 적용 후 상한). None은 판정하지 않음 (참고값)
+# 원장 대사는 측정용 설정(cron 10초, LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR=PT5S) 기준: 10초 회차마다 한 인스턴스만 실행해 1분 6회.
+# lockAtLeastFor를 운영값(5분)으로 두면 인스턴스 1개여도 1분 0-1회라 중복 실행 제거와 구분할 수 없음 (#167 리뷰)
 EXPECT = {
     "마감": (24, 10, 14),
     "시간 초과": (24, 10, 14),
     "반환 재요청": (24, 10, 14),
-    "원장 대사": (12, 0, 2),
+    "원장 대사": (12, 5, 7),
 }
 # 기대값은 60초 측정 기준. 다른 측정 시간은 판정하지 않는다
 V1_SECONDS = 60
@@ -434,7 +436,8 @@ def main():
     w(f"- **PC**: {benv.get('cpu', '?')}, 코어 {benv.get('host_cpus', '?')}개, 메모리 {int(benv.get('host_mem_bytes', 0) or 0) / 2**30:.0f}GB")
     w(f"- **Docker**: {benv.get('docker', '?')}")
     w("- **구성**: `docker-compose.yml` + `compose.perf.yml` + `compose.scale.yml` (계좌, 청약, 배정 2개씩, 게이트웨이 2대), DB, Kafka, k6 같은 PC")
-    w(f"- **측정용 설정**: `LEDGER_RECONCILIATION_CRON={benv.get('ledger_cron', '?')}` (원래 매일 04:00)")
+    w(f"- **측정용 설정**: `LEDGER_RECONCILIATION_CRON={benv.get('ledger_cron', '?')}` (원래 매일 04:00), "
+      f"`LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR={aenv.get('ledger_lock_at_least_for') or '기록 없음'}` (원래 PT5M, 적용 후 측정에서 PT5S)")
     for label, env in (("1개", senv), ("2개 다시", renv)):
         if env:
             w(f"- **{label}**: 커밋 `{env.get('commit', '?')[:7]}`, {env.get('date', '?')}")
@@ -464,7 +467,8 @@ def main():
         else:
             w(f"| {name} | {bs} | {as_} | 판정 제외 (lockAtLeastFor 0초, V3로 판정) | 참고 |")
     w("\n- **계산**: 그룹에 속한 쿼리의 `calls` 최댓값 (스케줄러 1회 실행 = 대표 쿼리 1회)")
-    w(f"- **기대 근거**: {V1_SECONDS}초 ÷ 주기 5초 = 12회 x 인스턴스 2개 = 24회 → 락 적용 후 `lockAtLeastFor` 4초라 12회\n")
+    w(f"- **기대 근거**: {V1_SECONDS}초 ÷ 주기 5초 = 12회 x 인스턴스 2개 = 24회 → 락 적용 후 `lockAtLeastFor` 4초라 12회")
+    w(f"- **원장 대사 기대 근거**: cron 10초라 {V1_SECONDS}초에 6회 x 인스턴스 2개 = 12회 → 락 적용 후 회차마다 한 인스턴스만 실행해 6회 (측정용 `lockAtLeastFor` 5초. 운영값 5분이면 인스턴스 수와 무관하게 0-1회라 판정 불가)\n")
     w("<details>\n<summary>V1 매칭 쿼리 (스케줄러별 calls, 쿼리 처음 120자)</summary>\n")
     for label, res in (("적용 전", b1), ("적용 후", a1)):
         w(f"**{label}**\n")
@@ -536,7 +540,7 @@ def main():
     w("- **B의 비교 범위**: S0 1,000건의 응답 시간 비교. 지속 부하 처리량, 고가용성은 측정하지 않음. 1개와 2개는 자원 예산(CPU 상한 4.5 vs 9.0, DB 풀 50 vs 100)도 다름")
     w("- **CPU**: 인스턴스별 최댓값이라 2개의 총 CPU 사용량이 아님")
     w("- **외부 요청**: 게이트웨이 8080 1대만 수신. 2번째 게이트웨이는 스케줄러, 입장 처리 중복 상황만 재현")
-    w("- **원장 대사 주기**: 실제 매일 04:00을 측정용 10초로 변경\n")
+    w("- **원장 대사 주기**: 실제 매일 04:00, 락 최소 유지 5분을 측정용 10초, 5초로 변경. 실행 간격과 무관하게 회차당 1번만 실행되는지 확인하려는 설정\n")
     w("<details>\n<summary>원본 파일 (before, after, single, rescale)</summary>\n")
     for d in (bdir, adir, sdir, rdir):
         if os.path.isdir(d):

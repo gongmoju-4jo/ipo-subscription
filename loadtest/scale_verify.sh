@@ -56,6 +56,7 @@ record_env() {
     echo "host_mem_bytes=$(sysctl -n hw.memsize 2>/dev/null || free -b | awk '/Mem/ {print $2}')"
     echo "docker=$(docker info --format 'cpus={{.NCPU}} mem_bytes={{.MemTotal}}')"
     echo "ledger_cron=$(grep -E '^LEDGER_RECONCILIATION_CRON=' .env 2>/dev/null | cut -d= -f2- || true)"
+    echo "ledger_lock_at_least_for=$(grep -E '^LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR=' .env 2>/dev/null | cut -d= -f2- || true)"
     echo "== 컨테이너"
     $COMPOSE ps --format '{{.Name}} {{.Status}}' 2>/dev/null || $COMPOSE ps
   } > "$d/env.txt"

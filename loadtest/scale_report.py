@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""scale_verify.sh 결과로 수평 확장 검증 요약.md를 만든다 (표준 라이브러리만, Python 3.8 이상). 저장소 루트에서 실행한다.
+"""scale_verify.sh 결과로 수평 확장 검증 요약.md를 생성한다 (표준 라이브러리만, Python 3.8 이상). 저장소 루트에서 실행한다.
 
 사용: python3 loadtest/scale_report.py [--root loadtest/results/scale-verify]
 판정 기준은 docs 검증 계획 0절과 같다. 숫자는 모두 원본 파일에서 계산하고, 계산식을 요약.md에 같이 적는다.
@@ -9,7 +9,7 @@ import os
 import re
 from datetime import datetime
 
-# V1 쿼리 → 스케줄러. 상수가 그대로 저장되거나($1로 바뀌거나) 둘 다 매칭되도록 구조로 구분한다 (11/17 실측: 네이티브 쿼리의 'PENDING'은 그대로 저장됨).
+# V1 쿼리 → 스케줄러. 상수가 원문으로 저장되거나($1로 변환되거나) 둘 다 매칭되도록 구조로 구분한다 (11/17 실측: 네이티브 쿼리의 'PENDING'은 원문으로 저장됨).
 # 한 번 실행할 때 대표 쿼리를 1번 실행하므로, 같은 그룹에 쿼리가 여러 개면 가장 큰 calls를 실행 횟수로 사용한다
 RULES = [
     ("마감", "subscription_app", lambda s: re.search(r"subscription_end_at\s*<=", s)),
@@ -29,7 +29,7 @@ EXPECT = {
 }
 # 기대값은 60초 측정 기준. 다른 측정 시간은 판정하지 않는다
 V1_SECONDS = 60
-# S0 요청 수. 청약 행이 이 수와 다르면 부하가 끝까지 실행되지 않은 회차로 판정한다
+# S0 요청 수. 청약 행이 이 수와 다르면 요청이 전부 실행되지 않은 회차로 판정한다
 S0_REQUESTS = 1000
 
 
@@ -86,8 +86,8 @@ def v2(after_dir):
         untils.add(ts(p[4]))
     result = {}
     for key, acq in locks.items():
-        # 실행 중에는 lock_until = 획득 + lockAtMostFor, 해제 후에는 획득 + lockAtLeastFor (또는 해제 시각)라 실행 중 길이가 가장 길다.
-        # 가장 긴 길이만 조회된 획득은 해제를 관측하지 못한 것으로 보고 종료 시각을 모름으로 둔다 (모든 획득의 길이가 같으면 모두 해제 값으로 봄)
+        # 실행 중에는 lock_until = 획득 + lockAtMostFor, 해제 후에는 획득 + lockAtLeastFor(또는 해제 시각)라 실행 중 값의 유지 시간이 최댓값이다.
+        # 최댓값만 조회된 획득은 해제를 관측하지 못한 것으로 판정하고 종료 시각을 None으로 설정한다 (모든 획득의 유지 시간이 동일하면 모두 해제 값으로 판정)
         durations = {at: [u - at for u in untils] for at, (_, untils) in acq.items()}
         longest = max(max(d) for d in durations.values())
         shortest = min(min(d) for d in durations.values())
@@ -236,12 +236,12 @@ def main():
     w("</details>\n")
 
     w("## 2. V2 동시 실행 (적용 후)\n")
-    w("| 스키마 | 락 이름 | 획득 횟수 | 획득 인스턴스 수 | 해제 미관측 | 겹침 | 판정 |")
+    w("| 스키마 | 락 이름 | 획득 횟수 | 획득 인스턴스 수 | 해제 미관측 | 중복 획득 | 판정 |")
     w("|---|---|---|---|---|---|---|")
     for (sch, name), (n, hosts, ov, unknown) in sorted((l2 or {}).items()):
         w(f"| {sch} | `{name}` | {n} | {hosts} | {unknown} | {ov} | {verdict(ov == 0)} |")
-    w("\n- **겹침 계산**: 같은 락에서 다음 획득 시각(`locked_at`) < 이전 해제 시각(`lock_until`)인 경우. 해제를 관측한 획득만 계산")
-    w("- **해제 미관측**: 실행 중 값(가장 긴 `lock_until`)만 조회된 획득. 종료 시각을 몰라 겹침 계산에서 제외 (측정 구간 마지막 획득 포함)")
+    w("\n- **중복 획득 계산**: 같은 락에서 다음 획득 시각(`locked_at`) < 이전 해제 시각(`lock_until`)인 경우. 해제를 관측한 획득만 계산")
+    w("- **해제 미관측**: 실행 중 값(조회된 `lock_until` 중 최댓값)만 조회된 획득. 종료 시각을 몰라 중복 획득 계산에서 제외 (측정 구간 마지막 획득 포함)")
     w("- **Outbox 발행기**: 락 유지가 수 ms라 1초 조회로 대부분 누락됨. V3 중복 발행 건수로 판정\n")
 
     w("## 3. V3 중복 발행, 정합성 (S0 1,000건)\n")

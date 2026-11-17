@@ -46,7 +46,7 @@ v1() {
   local d; d="$(phase_dir "$1")"
   record_env "$d"
   local secs="${V1_SECONDS:-60}"
-  # 확장은 DB마다 한 번 만들어야 한다 (compose.perf.yml은 라이브러리만 올림. slow-queries.sql과 같은 방식)
+  # 확장은 DB마다 한 번 생성해야 한다 (compose.perf.yml은 라이브러리만 올림. slow-queries.sql과 같은 방식)
   q "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;" > /dev/null
   q "SELECT pg_stat_statements_reset();" > /dev/null
   echo "V1: ${secs}초 동안 부하 없이 대기 (스케줄러 쿼리만 집계)"
@@ -98,7 +98,7 @@ v3() {
   # 1. 이전 회차의 미발행 행이 남아 있으면 이번 회차 집계에 포함되므로 0건까지 대기
   local w=0
   until [ "$(unpublished)" = "0" ]; do
-    w=$((w + 1)); [ "$w" -le 60 ] || die "미발행 Outbox가 60초 넘게 남아 있음 (incident-response.md SQL 6 확인)"
+    w=$((w + 1)); [ "$w" -le 60 ] || die "미발행 Outbox가 60초 동안 0건이 되지 않음 (incident-response.md SQL 6 확인)"
     sleep 1
   done
 

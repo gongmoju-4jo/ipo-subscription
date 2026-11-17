@@ -213,7 +213,7 @@ class PerfSectionTest(unittest.TestCase):
         p = {"residual_ok": residual_ok, "success": 1.0, "rate": 300.0, "p95": p95, "confirm_p95": 3.0,
              "pending": {"subscription-service": 0.0}, "active": {}, "cpu": {"api-gateway": 50.0}} if perf else None
         return {"n": n, "incomplete": False, "invalid": [], "topics": [], "dup": 0, "short": 0,
-                "integ": {"v17_dup_margin": integ}, "violations": integ, "dup_log": 0, "meta": {}, "status": "", "perf": p}
+                "integ": {"v17_dup_margin": integ}, "violations": integ, "dup_log": 0, "meta": {"commit": "a"}, "status": "", "perf": p}
 
     def render(self, phases):
         lines = []
@@ -225,9 +225,20 @@ class PerfSectionTest(unittest.TestCase):
         self.assertIn("정합성 실패 (성능 판정 안 함)", out)
         self.assertIn("| 2개 (1차) | 1 |", out)
 
-    def test_단계별_커밋이_다르면_비교_무효를_표시한다(self):
-        out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1)]), ("1개", "", {"commit": "b"}, [self.run_(1)])))
-        self.assertIn("비교 무효", out)
+    def test_단계_env_커밋은_사용하지_않고_회차_커밋으로_판정한다(self):
+        # 단계 env.txt 커밋이 서로 달라도(오래된 기록) 회차 커밋이 같으면 비교 유효
+        out = self.render((("2개 (1차)", "", {"commit": "old"}, [self.run_(1)]), ("1개", "", {"commit": "a"}, [self.run_(1)])))
+        self.assertNotIn("비교 무효", out)
+
+    def test_회차_커밋이_없는_이전_결과가_포함되면_비교_무효다(self):
+        old = self.run_(1)
+        old["meta"] = {}
+        out = self.render((("2개 (1차)", "", {"commit": "a"}, [old]), ("1개", "", {"commit": "a"}, [self.run_(1)])))
+        self.assertIn("회차 커밋이 없는 회차가 있음", out)
+        summary = sr.perf_section(lambda _: None, (("2개 (1차)", "", {"commit": "a"}, [old]), ("1개", "", {"commit": "a"}, [self.run_(1)]),
+                                                   ("2개 (2차)", "", {"commit": "a"}, [self.run_(1)])))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary, 1.2))
+        self.assertEqual(rows["성능 (같은 커밋, 2개 vs 1개)"], "⚠️ 비교 무효")
 
     def test_잔여_처리_포함_가능_회차는_성능에서_제외한다(self):
         out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1), self.run_(2, residual_ok=False), self.run_(3, residual_ok=None)]),))

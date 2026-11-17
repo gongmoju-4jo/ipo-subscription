@@ -262,11 +262,14 @@ def perf_section(w, phases):
     if not any(runs for *_, runs in phases):
         w("- 측정 안 함\n")
         return {}
-    # 같은 커밋 판정은 회차별 커밋(meta.txt)으로 한다. 회차 커밋이 없으면(이전 스크립트) 단계 env.txt 커밋을 사용
-    commits = {r["meta"].get("commit") or env.get("commit") for _, _, env, runs in phases for r in runs if not r["incomplete"]}
+    # 같은 커밋 판정은 회차별 커밋(meta.txt)으로만 한다. 단계 env.txt는 처음 한 번만 기록돼 오래된 값일 수 있어 대체하지 않고,
+    # 회차 커밋이 없는 회차(이전 스크립트 결과)가 포함되면 비교 무효로 표시한다
+    commits = {r["meta"].get("commit") or None for _, _, _, runs in phases for r in runs if not r["incomplete"]}
     commit_ok = len(commits) == 1 and None not in commits
-    if not commit_ok:
-        w(f"- ⚠️ **비교 무효**: 회차별 커밋이 다름 {sorted((c or '?')[:7] for c in commits)}. 같은 커밋에서 인스턴스 수만 달라야 비교 가능\n")
+    if None in commits:
+        w("- ⚠️ **비교 무효**: 회차 커밋이 없는 회차가 있음 (이전 스크립트 결과). 회차별 커밋이 기록된 결과로만 비교 가능\n")
+    elif not commit_ok:
+        w(f"- ⚠️ **비교 무효**: 회차별 커밋이 다름 {sorted(c[:7] for c in commits)}. 같은 커밋에서 인스턴스 수만 달라야 비교 가능\n")
     w("| 단계 | 회차 | 성공률 | S0 완료 속도 (건/초) | p95 (ms) | 접수 → 확정 p95 (초) | Hikari 대기 최대 (청약 / 계좌) | 인스턴스별 CPU 최대값 중 최댓값 (게이트웨이 / 청약 / 계좌, %) | 정합성 | 판정 |")
     w("|---|---|---|---|---|---|---|---|---|---|")
     medians = []

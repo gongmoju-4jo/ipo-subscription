@@ -7,6 +7,7 @@ import com.gongmoju.account.domain.reconciliation.LedgerMismatch;
 import com.gongmoju.account.domain.reconciliation.LedgerReconciliationCheck;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -19,8 +20,8 @@ import java.util.stream.Collectors;
 // 불일치 0건이면 INFO 1줄, 불일치가 있으면 검사별 ERROR (건수, 불일치 발생 대상 ID) + 상세 WARN으로 기록한다
 // ERROR 로그는 Grafana ErrorLogDetected가 Slack 알림으로 발송한다 (#136)
 // 로그는 모두 "[원장 대사]"로 시작해서 Slack 알림 후 로그 검색 1번으로 조회 가능하다
-// 단일 인스턴스를 전제로 한다. 인스턴스가 여러 개면 인스턴스 수만큼 실행된다 (조회만 해서 데이터 영향은 없고, 알림이 중복 발송된다)
-// 수평 확장 시 분산 락을 reconcile()에 추가한다
+// 인스턴스가 여러 개면 ShedLock(@SchedulerLock)으로 한 번에 한 인스턴스만 실행한다 (#167). 락이 없으면 인스턴스 수만큼 실행되어
+// 데이터 영향은 없지만(조회만 함) 불일치 ERROR와 Slack 알림이 인스턴스 수만큼 중복 발송된다
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -29,7 +30,14 @@ class LedgerReconciliationScheduler {
 
     private final LedgerReconciliationService reconciliationService;
 
+    // 락: cron이라 모든 인스턴스가 같은 시각에 실행을 시도하고, 락을 먼저 획득한 인스턴스만 실행하고 나머지는 건너뛴다 (기다리지 않음).
+    // lockAtLeastFor는 인스턴스끼리 시계 차이가 있어도 A가 실행을 종료한 후 B가 같은 회차를 다시 실행하지 않게 한다 (PROJECT_SETUP 5장).
+    // lockAtMostFor는 실행 중 인스턴스가 종료됐을 때 락이 해제되기까지의 시간이다. 실행 시간 최댓값(10만 계좌 실측 1.6초)과 lockAtLeastFor를 초과해야 한다
+    // (lockAtLeastFor 이하면 ShedLock이 락 설정을 생성할 때 예외를 발생시켜 대사가 실행되지 않음). cron을 변경 가능해서 둘 다 설정값으로 분리한다
     @Scheduled(cron = "${ledger.reconciliation.cron}", zone = "Asia/Seoul")
+    @SchedulerLock(name = "LedgerReconciliationScheduler.reconcile",
+            lockAtMostFor = "${ledger.reconciliation.lock-at-most-for:PT30M}",
+            lockAtLeastFor = "${ledger.reconciliation.lock-at-least-for:PT5M}")
     void reconcile() {
         long startNanos = System.nanoTime();
         LedgerReconciliationResult result;

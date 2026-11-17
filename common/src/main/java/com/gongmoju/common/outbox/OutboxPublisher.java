@@ -1,6 +1,7 @@
 package com.gongmoju.common.outbox;
 
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -16,6 +17,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 /**
  * 미발행 {@link Outbox} 행을 Kafka로 보낸다.
@@ -31,7 +33,9 @@ import java.util.concurrent.TimeUnit;
  *   <li>Kafka 호출은 DB 트랜잭션 밖에서 하고, 결과 반영(발행 완료, 실패 횟수)만 짧은 트랜잭션으로 한다.</li>
  *   <li>행에 저장된 추적 문맥이 있으면 그 문맥 안에서 보낸다 ({@link OutboxTraceContext}). 발행 순서, 실패 처리는 문맥과 관계없다.</li>
  * </ul>
- * 단일 인스턴스를 전제로 한다. 인스턴스가 여러 개면 같은 행을 중복 조회할 수 있다.
+ * 인스턴스가 여러 개면 스케줄러 락(ShedLock)으로 한 번에 한 인스턴스만 발행한다 (같은 행을 인스턴스마다 보내지 않게, #177).
+ * 락은 {@code lockAtMostFor}가 지나면 풀리므로, 한 번의 실행은 {@code maxRunDuration}에서 끊고 남은 행은 다음 실행에 맡긴다.
+ * 락 저장소가 없는 환경(ShedLock 의존성, DB가 없는 서비스나 테스트)에서는 락 없이 지금처럼 실행된다.
  */
 @Slf4j
 class OutboxPublisher {
@@ -46,6 +50,8 @@ class OutboxPublisher {
     private final TransactionTemplate transactionTemplate;
     private final OutboxPublisherProperties properties;
     private final OutboxTraceContext traceContext;
+    // 실행 시간 상한을 재는 시계 (나노초). 테스트에서 시간을 흘려보내려고 받는다
+    private final LongSupplier nanoTime;
 
     OutboxPublisher(OutboxJpaRepository outboxRepository,
                     OutboxMessageFactory messageFactory,
@@ -61,38 +67,63 @@ class OutboxPublisher {
                     TransactionTemplate transactionTemplate,
                     OutboxPublisherProperties properties,
                     OutboxTraceContext traceContext) {
+        this(outboxRepository, messageFactory, kafkaTemplate, transactionTemplate, properties, traceContext, System::nanoTime);
+    }
+
+    OutboxPublisher(OutboxJpaRepository outboxRepository,
+                    OutboxMessageFactory messageFactory,
+                    KafkaTemplate<String, String> kafkaTemplate,
+                    TransactionTemplate transactionTemplate,
+                    OutboxPublisherProperties properties,
+                    OutboxTraceContext traceContext,
+                    LongSupplier nanoTime) {
         this.outboxRepository = outboxRepository;
         this.messageFactory = messageFactory;
         this.kafkaTemplate = kafkaTemplate;
         this.transactionTemplate = transactionTemplate;
         this.properties = properties;
         this.traceContext = traceContext;
+        this.nanoTime = nanoTime;
     }
 
     /**
-     * 미발행 행이 없어질 때까지 반복해서 발행한다.
-     * 이전 실행이 끝난 뒤 interval만큼 쉬고 다시 실행하므로 실행이 겹치지 않는다.
+     * 미발행 행이 없어지거나 실행 시간 상한({@code maxRunDuration})에 닿을 때까지 반복해서 발행한다.
+     * 이전 실행이 끝난 뒤 interval만큼 쉬고 다시 실행하므로 같은 인스턴스 안에서는 실행이 겹치지 않는다.
+     * 인스턴스끼리는 스케줄러 락으로 겹치지 않는다. 락 이름은 바꾸지 않는다 (바꾸면 옛 이름과 새 이름이 서로를 막지 못함)
      */
     @Scheduled(fixedDelayString = "${outbox.publisher.interval:PT1S}")
+    @SchedulerLock(name = "OutboxPublisher.publishPending", lockAtMostFor = "${outbox.publisher.lock-at-most-for:PT1M}")
     void publishPending() {
+        long runDeadline = nanoTime.getAsLong() + properties.maxRunDuration().toNanos();
         // 이번 실행에서 실패한 키. 이후 반복에서는 조회하지 않는다 (실패한 행을 반복마다 다시 두드리지 않고, 같은 키의 순서를 지킨다)
         // 반복마다 이 키들이 늘거나 행이 발행 완료되어서, 실행은 반드시 끝난다
         Set<String> blockedKeys = new HashSet<>();
         // 종료 중 인터럽트가 걸렸으면 시도하지 않는다 (시도하지 않은 행의 실패 횟수가 오르지 않게)
         while (!Thread.currentThread().isInterrupted()) {
-            if (publishBatch(blockedKeys)) {
+            if (publishBatch(blockedKeys, runDeadline)) {
+                return;
+            }
+            // 상한에 닿으면 락을 놓고 끝낸다. 락이 lockAtMostFor로 풀린 뒤 다른 인스턴스와 동시에 발행하지 않게 한다
+            // 남은 행은 interval 뒤 다음 실행(락을 잡은 인스턴스)이 이어서 보낸다
+            if (isPast(runDeadline)) {
+                log.info("Outbox 1회 실행 시간 상한({}) 도달, 남은 행은 다음 실행에서 발행", properties.maxRunDuration());
                 return;
             }
         }
+    }
+
+    private boolean isPast(long runDeadline) {
+        return nanoTime.getAsLong() - runDeadline >= 0;
     }
 
     /**
      * 한 번의 반복을 한다.
      *
      * @param blockedKeys 이번 실행에서 실패한 키. 다음 조회에서 뺀다
-     * @return 이번 실행을 끝내야 하면 true (보낼 행이 없음, 인터럽트, 전송 호출 연속 실패, Kafka 무응답, 완료 표시 실패)
+     * @param runDeadline 실행 시간 상한 시각 ({@link #nanoTime} 기준)
+     * @return 이번 실행을 끝내야 하면 true (보낼 행이 없음, 인터럽트, 전송 호출 연속 실패, 실행 시간 상한, Kafka 무응답, 완료 표시 실패)
      */
-    private boolean publishBatch(Set<String> blockedKeys) {
+    private boolean publishBatch(Set<String> blockedKeys, long runDeadline) {
         Pageable page = PageRequest.ofSize(properties.batchSize());
         // 실패한 키는 조회에서 뺀다. 조회한 뒤에 빼면 실패한 행이 batchSize만큼 앞을 차지할 때 뒤의 정상 행이 조회되지 않는다
         List<Outbox> pending = blockedKeys.isEmpty()
@@ -104,7 +135,7 @@ class OutboxPublisher {
         }
 
         List<InFlight> inFlight = new ArrayList<>();
-        boolean stop = sendAll(targets, inFlight, blockedKeys);
+        boolean stop = sendAll(targets, inFlight, blockedKeys, runDeadline);
 
         // 전체에 sendTimeout 하나를 적용한다 (행마다 누적해서 기다리지 않는다)
         long deadline = System.nanoTime() + properties.sendTimeout().toNanos();
@@ -166,14 +197,24 @@ class OutboxPublisher {
      * 응답을 기다리지 않고 행들을 연달아 보낸다.
      * 전송한 행은 {@code inFlight}에 담고, 실패한 행은 실패로 기록하고 그 키를 {@code blockedKeys}에 넣는다.
      *
-     * @return 이번 실행의 남은 전송을 멈춰야 하면 true (인터럽트, 전송 호출 연속 실패)
+     * 실행 시간 상한을 넘으면 남은 행은 보내지 않는다 (실패로 세지 않고 다음 실행에서 보낸다).
+     * 전송 호출은 한 번에 max.block.ms까지 막힐 수 있어서, 반복 사이에서만 확인하면 한 반복이 상한을 크게 넘길 수 있다.
+     * 첫 행은 상한과 관계없이 보낸다 (조회가 오래 걸려도 실행마다 조금씩은 발행되게).
+     *
+     * @return 이번 실행의 남은 전송을 멈춰야 하면 true (인터럽트, 전송 호출 연속 실패, 실행 시간 상한)
      */
-    private boolean sendAll(List<Outbox> targets, List<InFlight> inFlight, Set<String> blockedKeys) {
+    private boolean sendAll(List<Outbox> targets, List<InFlight> inFlight, Set<String> blockedKeys, long runDeadline) {
         int consecutiveSendFailures = 0;
+        boolean first = true;
         for (Outbox outbox : targets) {
             if (Thread.currentThread().isInterrupted()) {
                 return true;
             }
+            if (!first && isPast(runDeadline)) {
+                log.info("Outbox 1회 실행 시간 상한({}) 도달, 보내지 않은 행은 다음 실행에서 발행", properties.maxRunDuration());
+                return true;
+            }
+            first = false;
             String message;
             try {
                 message = messageFactory.create(outbox);

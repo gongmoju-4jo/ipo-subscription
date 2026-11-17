@@ -28,6 +28,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -677,6 +679,98 @@ class OutboxPublisherTest {
         assertThat(outbox.getRetryCount()).isEqualTo(ALERT_THRESHOLD + 1);
         assertThat(output.getAll()).contains("Outbox 발행 연속 실패");
         verify(kafkaTemplate, times(2)).send(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("반복 사이에 실행 시간 상한에 닿으면 다음 반복 없이 끝내고, 남은 행은 실패로 세지 않고 다음 실행에서 발행한다")
+    void publishPending_stopsBetweenBatchesWhenMaxRunDurationReached() {
+        // given: 같은 키 3행이라 반복마다 1행씩 나간다. 전송마다 20초가 흐르고 상한은 30초
+        AtomicLong clock = new AtomicLong();
+        OutboxPublisher capped = newPublisherWithClock(Duration.ofSeconds(30), clock::get);
+        Outbox first = pendingOutbox("allocation.result", "key-1", "{}");
+        Outbox second = pendingOutbox("allocation.result", "key-1", "{}");
+        Outbox third = pendingOutbox("allocation.result", "key-1", "{}");
+        givenPending(List.of(first, second, third));
+        when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            clock.addAndGet(Duration.ofSeconds(20).toNanos());
+            return CompletableFuture.completedFuture(null);
+        });
+
+        // when: 첫 반복 뒤 20초(상한 전) → 다음 반복, 둘째 반복 뒤 40초(상한 넘음) → 끝
+        capped.publishPending();
+
+        // then: 2행만 발행, 셋째 행은 보내지 않았고 실패로도 세지 않음
+        verify(kafkaTemplate, times(2)).send(anyString(), anyString(), anyString());
+        assertThat(first.getPublishedAt()).isNotNull();
+        assertThat(second.getPublishedAt()).isNotNull();
+        assertThat(third.getPublishedAt()).isNull();
+        assertThat(third.getRetryCount()).isZero();
+
+        // when: 다음 실행
+        capped.publishPending();
+
+        // then: 남은 행을 이어서 발행
+        assertThat(third.getPublishedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("한 반복 안에서 실행 시간 상한을 넘으면 남은 행은 보내지 않고, 이미 보낸 행은 응답을 받아 발행 완료로 표시한다")
+    void publishPending_stopsSendingWithinBatchWhenMaxRunDurationReached() {
+        // given: 키가 다른 3행 (한 반복에 모두 보낼 대상). 첫 전송 호출이 상한보다 오래 막힌다 (예: max.block.ms)
+        AtomicLong clock = new AtomicLong();
+        OutboxPublisher capped = newPublisherWithClock(Duration.ofSeconds(30), clock::get);
+        Outbox sent = pendingOutbox("allocation.result", "key-1", "{}");
+        Outbox notSent1 = pendingOutbox("allocation.result", "key-2", "{}");
+        Outbox notSent2 = pendingOutbox("allocation.result", "key-3", "{}");
+        givenPending(List.of(sent, notSent1, notSent2));
+        when(kafkaTemplate.send(anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            clock.addAndGet(Duration.ofSeconds(31).toNanos());
+            return CompletableFuture.completedFuture(null);
+        });
+
+        // when
+        capped.publishPending();
+
+        // then: 첫 행만 보내고 발행 완료, 나머지는 보내지 않았고 실패로 세지 않음 (다음 실행에서 보냄)
+        verify(kafkaTemplate, times(1)).send(anyString(), anyString(), anyString());
+        assertThat(sent.getPublishedAt()).isNotNull();
+        assertThat(List.of(notSent1, notSent2)).allSatisfy(outbox -> {
+            assertThat(outbox.getPublishedAt()).isNull();
+            assertThat(outbox.getRetryCount()).isZero();
+        });
+        verify(outboxRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("실행을 시작할 때 이미 상한이 지난 것처럼 시간이 흘러도 반복의 첫 행은 보낸다 (실행마다 조금씩은 발행되게)")
+    void publishPending_sendsFirstRowEvenWhenDeadlineAlreadyPassed() {
+        // given: 시작 시각을 읽은 뒤로는 늘 1시간이 지난 시계 (조회가 아주 오래 걸린 경우)
+        AtomicLong reads = new AtomicLong();
+        OutboxPublisher capped = newPublisherWithClock(Duration.ofSeconds(30),
+                () -> reads.getAndIncrement() == 0 ? 0L : Duration.ofHours(1).toNanos());
+        Outbox first = pendingOutbox("allocation.result", "key-1", "{}");
+        Outbox second = pendingOutbox("allocation.result", "key-2", "{}");
+        givenPending(List.of(first, second));
+        givenSendSucceeds();
+
+        // when
+        capped.publishPending();
+
+        // then
+        assertThat(first.getPublishedAt()).isNotNull();
+        assertThat(second.getPublishedAt()).isNull();
+        verify(kafkaTemplate, never()).send(anyString(), eq("key-2"), anyString());
+    }
+
+    private OutboxPublisher newPublisherWithClock(Duration maxRunDuration, LongSupplier nanoTime) {
+        return new OutboxPublisher(
+                outboxRepository,
+                new OutboxMessageFactory(objectMapper),
+                kafkaTemplate,
+                new TransactionTemplate(mock(PlatformTransactionManager.class)),
+                new OutboxPublisherProperties(BATCH_SIZE, ALERT_THRESHOLD, Duration.ofSeconds(1), maxRunDuration, Duration.ofMinutes(1)),
+                OutboxTraceContext.NONE,
+                nanoTime);
     }
 
     // DB처럼 동작하게 한다: 미발행 행만 돌려주고, 완료 표시하면 publishedAt이 채워진다

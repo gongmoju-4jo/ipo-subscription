@@ -29,6 +29,7 @@ class V2Test(unittest.TestCase):
     def v2(self, rows):
         with tempfile.TemporaryDirectory() as d:
             write(d, "v2-shedlock.txt", "".join(rows))
+            write(d, "v2-seconds.txt", "120\n")
             return sr.v2(d)[("subscription", rows[0].split("|")[1])]
 
     def test_실행_중_값만_조회된_두_획득은_해제_미관측이고_중복_획득이_아니다(self):
@@ -69,12 +70,88 @@ class V2VerdictTest(unittest.TestCase):
     def test_모든_획득이_해제_미관측이면_판정_불가다(self):
         with tempfile.TemporaryDirectory() as d:
             write(d, "v2-shedlock.txt", lock_row("Unknown.run", "h1", "00", "01:00:04") + lock_row("Unknown.run", "h2", "02", "01:00:06"))
+            write(d, "v2-seconds.txt", "120\n")
             n, _, dup, unknown = sr.v2(d)[("subscription", "Unknown.run")]
         self.assertIn("판정 불가", sr.v2_verdict(n, dup, unknown))
 
     def test_판정_가능한_획득이_있으면_중복_판정을_유지한다(self):
         self.assertEqual(sr.v2_verdict(3, 0, 1), "✅ 통과")
         self.assertEqual(sr.v2_verdict(3, 1, 1), "❌ 불합격")
+
+
+class ReviewFixTest(unittest.TestCase):
+
+    def test_V2_완료_표시가_없으면_측정_안_함이다(self):
+        with tempfile.TemporaryDirectory() as d:
+            write(d, "v2-shedlock.txt", lock_row(CLOSE, "h1", "00", "01:00:04"))
+            self.assertIsNone(sr.v2(d))
+
+    def test_회차_보고서_실패는_성능만_제외하고_회차는_유효하다(self):
+        with tempfile.TemporaryDirectory() as d:
+            V3Test().run_dir(d, 1, meta="k6_exit=0\nreport_exit=1\ncomplete=1\n")
+            r = sr.v3(d)[0]
+        self.assertEqual(r["invalid"], [])
+        self.assertIsNone(r["perf"])
+
+    def test_summary_지표가_null이면_성능은_None이다(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = os.path.join(root, "loadtest", "results", "run-x")
+            os.makedirs(run)
+            write(run, "summary.json", '{"metrics": {"http_req_failed": {"value": null}, "http_reqs": {"rate": 1}, "http_req_duration": {"p(95)": 1}}}')
+            write(run, "prometheus.json", "{}")
+            phase = os.path.join(root, "phase")
+            os.makedirs(phase)
+            write(phase, "v3-r1-meta.txt", "k6_exit=0\n")
+            cwd = os.getcwd()
+            try:
+                os.chdir(root)
+                self.assertIsNone(sr.perf("run-x", phase, 1))
+            finally:
+                os.chdir(cwd)
+
+    def test_이전_처리_종료_시각이_비면_잔여_처리_확인_안_함이다(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = os.path.join(root, "loadtest", "results", "run-y")
+            os.makedirs(run)
+            write(run, "summary.json", '{"metrics": {"http_req_failed": {"value": 0}, "http_reqs": {"rate": 1}, "http_req_duration": {"p(95)": 1}}}')
+            write(run, "prometheus.json", "{}")
+            write(run, "report.md", "| 서버 지표 구간 | 2026-11-17 15:47:31 ~ 2026-11-17 15:47:54 |\n")
+            phase = os.path.join(root, "phase")
+            os.makedirs(phase)
+            write(phase, "v3-r1-meta.txt", "start_lag=0\nprev_activity_end=\n")
+            cwd = os.getcwd()
+            try:
+                os.chdir(root)
+                self.assertIsNone(sr.perf("run-y", phase, 1)["residual_ok"])
+            finally:
+                os.chdir(cwd)
+
+    def run_(self, n, dup=0, commit="a", invalid=None):
+        return {"n": n, "incomplete": False, "invalid": invalid or [], "topics": [], "dup": dup, "short": 0,
+                "integ": {"v17_dup_margin": 0}, "violations": 0, "dup_log": 0, "meta": {"commit": commit}, "status": "",
+                "perf": {"residual_ok": True, "success": 1.0, "rate": 300.0, "p95": 300.0, "confirm_p95": 3.0,
+                         "pending": {}, "active": {}, "cpu": {}}}
+
+    def test_적용_후_커밋_단계의_중복_발행_회차는_성능_판정에서_제외한다(self):
+        lines = []
+        sr.perf_section(lines.append, (("1개", "", {}, [self.run_(1, dup=3)]),))
+        self.assertIn("정합성 실패 (성능 판정 안 함)", "\n".join(lines))
+
+    def test_회차별_커밋이_다르면_최종_성능은_비교_무효다(self):
+        summary = sr.perf_section(lambda _: None, (("2개 (1차)", "", {}, [self.run_(1, commit="a")]),
+                                                   ("1개", "", {}, [self.run_(1, commit="b")]),
+                                                   ("2개 (2차)", "", {}, [self.run_(1, commit="a")])))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary, 1.2))
+        self.assertEqual(rows["성능 (같은 커밋, 2개 vs 1개)"], "⚠️ 비교 무효")
+
+    def test_유효_회차가_없는_단계가_있으면_정합성은_판정_불가다(self):
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [self.run_(1)], [self.run_(1, invalid=["k6 종료 코드 1"])], [], [], {}, {}, 1.2))
+        self.assertIn("판정 불가", rows["정합성"])
+
+    def test_V2를_측정하지_않으면_중복_실행은_판정_불가다(self):
+        a1 = {k: (12 if k != "원장 대사" else 1, []) for k in sr.EXPECT}
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(a1, None, [], [self.run_(1)], [], [], {}, {}, 1.2))
+        self.assertIn("판정 불가 (V2 측정 안 함)", rows["중복 실행 (적용 후)"])
 
 
 class V3Test(unittest.TestCase):

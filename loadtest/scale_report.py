@@ -85,7 +85,8 @@ def v1(phase_dir):
 
 def v2(after_dir):
     raw = read(os.path.join(after_dir, "v2-shedlock.txt"))
-    if raw is None:
+    # v2-seconds.txt는 수집이 완료된 후에만 기록되는 완료 표시
+    if raw is None or not os.path.exists(os.path.join(after_dir, "v2-seconds.txt")):
         return None
     # 락 이름 → 획득 시각(locked_at) → (획득 인스턴스, 조회된 lock_until 목록)
     locks = {}
@@ -172,8 +173,6 @@ def v3(phase_dir):
             invalid.append(f"정합성 수집 종료 코드 {meta.get('verify_sh_exit')}")
         if total != S0_REQUESTS:
             invalid.append(f"청약 행 {total}건 (기대 {S0_REQUESTS})")
-        if meta.get("report_exit", "0") != "0":
-            invalid.append(f"회차 보고서 종료 코드 {meta.get('report_exit')}")
         runs.append({"n": n, "incomplete": False, "invalid": invalid, "topics": topics,
                      "perf": perf(meta.get("run", ""), phase_dir, n),
                      # 토픽끼리 상쇄되지 않게 양수(중복 발행)와 음수(미발행 또는 측정 불일치)를 따로 합산
@@ -203,27 +202,37 @@ def prom_by_job(prom, key):
 def perf(run_name, phase_dir, n):
     # 회차의 성능 값. 원본이 없으면 None (판정하지 않음)
     d = os.path.join(K6_RESULTS, run_name)
+    meta = kv(os.path.join(phase_dir, f"v3-r{n}-meta.txt"))
+    # 회차 보고서(report.py)가 실패한 회차는 성능 값만 제외한다 (V3 중복 발행, 정합성은 유지)
+    if meta.get("report_exit", "0") != "0":
+        return None
     try:
         with open(os.path.join(d, "summary.json"), encoding="utf-8") as f:
             m = json.load(f)["metrics"]
+        success = 1 - float(m["http_req_failed"]["value"])
+        rate = float(m["http_reqs"]["rate"])
+        p95 = float(m["http_req_duration"]["p(95)"])
         with open(os.path.join(d, "prometheus.json"), encoding="utf-8") as f:
             prom = json.load(f)
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, TypeError):
         return None
     confirm = (read(os.path.join(phase_dir, f"v3-r{n}-confirm-p95.txt"), "") or "").strip()
     # 잔여 처리 확인: 회차 시작 시 Consumer 랙 0이고, 이전 회차의 마지막 처리 시각이 성능 집계 구간 시작보다 이전이어야 함
-    meta = kv(os.path.join(phase_dir, f"v3-r{n}-meta.txt"))
     residual_ok = None
     m_win = re.search(r"서버 지표 구간 \| (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", read(os.path.join(d, "report.md"), "") or "")
-    if "start_lag" in meta and "prev_activity_end" in meta and m_win:
-        win_start_utc = datetime.strptime(m_win.group(1), "%Y-%m-%d %H:%M:%S") - timedelta(hours=9)
-        prev_end = ts(meta["prev_activity_end"].rstrip("Z").replace("T", " "))
-        residual_ok = meta["start_lag"] == "0" and prev_end < win_start_utc
+    # 빈 값(이전 처리 없음 또는 조회 실패, 구분 불가)과 변환 실패는 확인 안 함으로 처리한다
+    if "start_lag" in meta and meta.get("prev_activity_end") and m_win:
+        try:
+            win_start_utc = datetime.strptime(m_win.group(1), "%Y-%m-%d %H:%M:%S") - timedelta(hours=9)
+            prev_end = ts(meta["prev_activity_end"].rstrip("Z").replace("T", " "))
+            residual_ok = meta["start_lag"] == "0" and prev_end < win_start_utc
+        except ValueError:
+            residual_ok = None
     return {
         "residual_ok": residual_ok,
-        "success": 1 - float(m["http_req_failed"]["value"]),
-        "rate": float(m["http_reqs"]["rate"]),
-        "p95": float(m["http_req_duration"]["p(95)"]),
+        "success": success,
+        "rate": rate,
+        "p95": p95,
         "confirm_p95": float(confirm) if confirm else None,
         "pending": prom_by_job(prom, "hikari_pending_max"),
         "active": prom_by_job(prom, "hikari_active_max"),
@@ -250,12 +259,14 @@ def perf_section(w, phases):
     w("\n# B. 동일 커밋 인스턴스 수 비교 (성능)\n")
     w("> 같은 커밋에서 인스턴스 수만 변경한 비교. A의 적용 전후 비교와 함께 해석하지 않음\n")
     w("## 4. 성능 비교 (같은 커밋, 인스턴스 2개 → 1개 → 2개, S0 각 3회)\n")
-    commits = {env.get("commit") for _, _, env, runs in phases if runs}
     if not any(runs for *_, runs in phases):
         w("- 측정 안 함\n")
         return {}
-    if len(commits) != 1:
-        w(f"- ⚠️ **비교 무효**: 단계별 커밋이 다름 {sorted(c[:7] for c in commits if c)}. 같은 커밋에서 인스턴스 수만 달라야 비교 가능\n")
+    # 같은 커밋 판정은 회차별 커밋(meta.txt)으로 한다. 회차 커밋이 없으면(이전 스크립트) 단계 env.txt 커밋을 사용
+    commits = {r["meta"].get("commit") or env.get("commit") for _, _, env, runs in phases for r in runs if not r["incomplete"]}
+    commit_ok = len(commits) == 1 and None not in commits
+    if not commit_ok:
+        w(f"- ⚠️ **비교 무효**: 회차별 커밋이 다름 {sorted((c or '?')[:7] for c in commits)}. 같은 커밋에서 인스턴스 수만 달라야 비교 가능\n")
     w("| 단계 | 회차 | 성공률 | S0 완료 속도 (건/초) | p95 (ms) | 접수 → 확정 p95 (초) | Hikari 대기 최대 (청약 / 계좌) | 인스턴스별 CPU 최대값 중 최댓값 (게이트웨이 / 청약 / 계좌, %) | 정합성 | 판정 |")
     w("|---|---|---|---|---|---|---|---|---|---|")
     medians = []
@@ -266,7 +277,8 @@ def perf_section(w, phases):
                 w(f"| {label} | r{r['n']} | - | - | - | - | - | - | - | ⚠️ 미완료 |")
                 continue
             p = r["perf"]
-            integ_ok = all(v == 0 for v in r["integ"].values()) and r["short"] == 0
+            # 적용 후 커밋 단계(2개, 1개, 2개 다시)는 모두 락이 적용된 상태라 중복 발행도 0이어야 정상
+            integ_ok = all(v == 0 for v in r["integ"].values()) and r["short"] == 0 and r["dup"] == 0
             if r["invalid"] or p is None:
                 note = "⚠️ 무효: " + ", ".join(r["invalid"] or ["성능 원본 없음"])
             elif not integ_ok:
@@ -298,7 +310,7 @@ def perf_section(w, phases):
     w("\n- **조건**: 같은 커밋, 같은 S0(가상 사용자 100개 x 10회, 회원 1,000명이 1건씩, 회차마다 새 공모주), 구성 전환 후 회차 0 워밍업 제외")
     w("- **S0 완료 속도**: S0는 가상 사용자 100개가 1초에 걸쳐 시작하는 고정 1,000건이라 서버 처리 용량이 아님. 지속 부하 처리량, 고가용성 근거로 사용하지 않음")
     w("- **CPU**: 서비스별로 인스턴스 중 최댓값 (`max by (job)`, report.py). 2개 합계가 아니라 총 자원 효율 비교에는 사용할 수 없음")
-    w("- **판정**: 정합성 실패 회차는 성능 값을 판정하지 않음. 무효, 미완료, 잔여 처리 포함 가능 회차는 중앙값에서 제외")
+    w("- **판정**: 정합성 실패(중복 발행 포함) 회차는 성능 값을 판정하지 않음. 무효, 미완료, 잔여 처리 포함 가능, 회차 보고서 실패 회차는 중앙값에서 제외")
     w("- **잔여 처리 확인**: 회차 시작 시 Consumer 랙 0, 이전 회차 마지막 처리 시각(청약 갱신, Outbox 발행, 처리 기록) < 성능 집계 구간 시작 (`meta.txt`의 `start_lag`, `prev_activity_end`, `report.md` 구간)")
     w("- **순서 효과**: 2개 → 1개 → 2개 순서. 2개 1차와 2차의 차이가 1개와의 차이보다 크면 순서 효과(DB 행 증가, JVM 상태)가 비교보다 큼")
     w("- **자원 예산 (교란 요인)**: 1개와 2개는 인스턴스 수만 다른 것이 아님\n")
@@ -308,7 +320,7 @@ def perf_section(w, phases):
     w("| DB 커넥션 풀 합 (청약 30, 계좌 10, 배정 10) | 50 | 100 (사용 가능 97 초과) | 서비스 `application.yml`, LOADTEST 3-5 |")
     w("| PC 전체 CPU (Colima) | 동일 | 동일 | `env.txt` |")
     w("\n- 2개는 상한 합 9.0이 Colima CPU 6개를 초과해, 상한이 아니라 PC CPU를 나눠 사용함\n")
-    return {label: {"n": n, "p95": p95, "success": succ} for label, n, rate, p95, conf, succ in medians}
+    return {label: {"n": n, "p95": p95, "success": succ, "commit_ok": commit_ok} for label, n, rate, p95, conf, succ in medians}
 
 
 def final_verdicts(a1, l2, b3, a3, s3, r3, v4, perf_sum, tol):
@@ -316,9 +328,15 @@ def final_verdicts(a1, l2, b3, a3, s3, r3, v4, perf_sum, tol):
     # 1. 정합성: 측정한 모든 단계의 유효 회차
     runs = [r for rs in (b3, a3, s3, r3) for r in rs if not r["incomplete"] and not r["invalid"]]
     measured = ", ".join(name for name, rs in (("적용 전", b3), ("적용 후", a3), ("1개", s3), ("2개 다시", r3)) if rs)
+    per_phase = [(name, sum(1 for r in rs if not r["incomplete"] and not r["invalid"])) for name, rs in
+                 (("적용 전", b3), ("적용 후", a3), ("1개", s3), ("2개 다시", r3)) if rs]
+    undecided = [name for name, n in per_phase if n == 0]
     if runs:
         bad = [r for r in runs if not (all(v == 0 for v in r["integ"].values()) and r["short"] == 0)]
-        rows.append(("정합성", verdict(not bad), f"유효 회차 {len(runs)}회 중 위반 {len(bad)}회 (측정한 단계: {measured})"))
+        # 측정한 단계 중 유효 회차가 0개인 단계가 있으면 그 단계는 검증하지 못한 것이라 통과로 표시하지 않음 (위반이 있으면 불합격 유지)
+        state = f"⚠️ 판정 불가 (유효 회차 없는 단계: {', '.join(undecided)})" if undecided and not bad else verdict(not bad)
+        counts = ", ".join(f"{name} {n}회" for name, n in per_phase)
+        rows.append(("정합성", state, f"유효 회차 {len(runs)}회 중 위반 {len(bad)}회 (단계별 유효 회차: {counts})"))
     else:
         rows.append(("정합성", "측정 안 함", ""))
     # 2. 중복 실행 (적용 후): V1 실행 횟수, V2 중복 획득, V3 중복 발행
@@ -330,8 +348,16 @@ def final_verdicts(a1, l2, b3, a3, s3, r3, v4, perf_sum, tol):
         v2_ok = bool(v2_rows) and all(ov == 0 for _, _, ov, _ in v2_rows) and any(n != unk for n, _, _, unk in v2_rows)
         va = [r for r in a3 if not r["incomplete"] and not r["invalid"]]
         v3_ok = bool(va) and all(r["dup"] == 0 for r in va)
-        rows.append(("중복 실행 (적용 후)", verdict(v1_ok and v2_ok and v3_ok),
-                     f"V1 {'통과' if v1_ok else '불합격'}, V2 {'통과' if v2_ok else '불합격 또는 판정 불가'}, V3 중복 발행 {sum(r['dup'] for r in va)}건"))
+        v2_state = ("측정 안 함" if not v2_rows else "판정 불가" if all(n == unk for n, _, _, unk in v2_rows)
+                    else "통과" if v2_ok else "불합격")
+        if not (v1_ok and v3_ok) or v2_state == "불합격":
+            state = verdict(False)
+        elif v2_state in ("측정 안 함", "판정 불가"):
+            state = f"⚠️ 판정 불가 (V2 {v2_state})"
+        else:
+            state = verdict(True)
+        rows.append(("중복 실행 (적용 후)", state,
+                     f"V1 {'통과' if v1_ok else '불합격'}, V2 {v2_state}, V3 중복 발행 {sum(r['dup'] for r in va)}건"))
     # 3. 전역 입장 제한: V4 직접 기록 (after/v4.txt)
     if "after_admitted" in v4:
         limit = int(v4.get("limit", "25980"))
@@ -341,7 +367,9 @@ def final_verdicts(a1, l2, b3, a3, s3, r3, v4, perf_sum, tol):
         rows.append(("전역 입장 제한", "측정 안 함", "`after/v4.txt`에 직접 기록 (V4)"))
     # 4. 성능: 같은 커밋 1개 대비 2개 p95 중앙값
     need = ("2개 (1차)", "1개", "2개 (2차)")
-    if all(k in perf_sum for k in need):
+    if all(k in perf_sum for k in need) and not all(perf_sum[k]["commit_ok"] for k in need):
+        rows.append(("성능 (같은 커밋, 2개 vs 1개)", "⚠️ 비교 무효", "회차별 커밋이 다름 (4절)"))
+    elif all(k in perf_sum for k in need):
         base = perf_sum["1개"]["p95"]
         ok = all(perf_sum[k]["p95"] <= base * tol and perf_sum[k]["success"] == 1.0 for k in need)
         a, b = perf_sum["2개 (1차)"]["p95"], perf_sum["2개 (2차)"]["p95"]

@@ -86,6 +86,8 @@ v2() {
   local secs="${V2_SECONDS:-120}" i sch
   # 배정은 #177 전에는 shedlock 표가 없을 수 있어, 표가 있는 스키마만 조회한다. 그 외 조회 오류는 회차를 중단한다
   local schemas="" raw="$d/v2-shedlock.raw"
+  # 재측정이면 이전 완료 결과를 먼저 삭제한다. 조회 실패로 중단돼도 이전 결과가 새 측정처럼 집계되지 않는다 (v2-seconds.txt가 완료 표시)
+  rm -f "$d/v2-shedlock.txt" "$d/v2-seconds.txt"
   for sch in subscription account allocation; do
     if [ "$(q "SELECT to_regclass('$sch.shedlock') IS NOT NULL;")" = "t" ]; then schemas="$schemas $sch"; fi
   done
@@ -151,6 +153,8 @@ v3() {
   local m="$p-meta.tmp"
   rm -f "$p-meta.txt"
   echo "started=1" > "$m"
+  # 단계 env.txt는 처음 한 번만 기록되므로, 성능 비교의 같은 커밋 판정에는 회차별 커밋을 사용한다
+  echo "commit=$(git rev-parse HEAD)" >> "$m"
 
   # 1. 이전 회차의 미발행 행이 남아 있으면 이번 회차 집계에 포함되므로 0건까지 대기
   local w=0

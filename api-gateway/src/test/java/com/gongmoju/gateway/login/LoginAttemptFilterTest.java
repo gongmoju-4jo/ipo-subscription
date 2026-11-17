@@ -21,6 +21,7 @@ import reactor.core.publisher.Mono;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
@@ -107,6 +108,8 @@ class LoginAttemptFilterTest extends RedisTestSupport {
             login(LOGIN_ID, "bad").expectStatus().isBadRequest();
             login(LOGIN_ID, "boom").expectStatus().is5xxServerError();
         }
+        // 되돌려 0이 된 키는 남지 않는다
+        assertThat(TEMPLATE.keys("login-fail:*").collectList().block()).isEmpty();
 
         login(LOGIN_ID, "wrong").expectStatus().isUnauthorized();
     }
@@ -219,15 +222,15 @@ class LoginAttemptFilterTest extends RedisTestSupport {
         assertThat(waitForValue(key, "1")).isTrue();
         assertThatThrownBy(result::join).hasCauseInstanceOf(TimeoutException.class);
 
-        // 끊긴 뒤 되돌려지고, 서비스가 늦게 401을 줘도 실패로 남지 않는다
-        assertThat(waitForValue(key, "0")).isTrue();
+        // 끊긴 뒤 되돌려지고(0이면 키를 지움), 서비스가 늦게 401을 줘도 실패로 남지 않는다
+        assertThat(waitForValue(key, null)).isTrue();
         Thread.sleep(2000);
-        assertThat(TEMPLATE.opsForValue().get(key).block()).isEqualTo("0");
+        assertThat(TEMPLATE.hasKey(key).block()).isFalse();
     }
 
     private static boolean waitForValue(String key, String expected) throws InterruptedException {
         for (int i = 0; i < 50; i++) {
-            if (expected.equals(TEMPLATE.opsForValue().get(key).block())) {
+            if (Objects.equals(expected, TEMPLATE.opsForValue().get(key).block())) {
                 return true;
             }
             Thread.sleep(20);

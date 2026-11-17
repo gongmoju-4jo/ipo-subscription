@@ -112,6 +112,19 @@ class LoginAttemptRedisRepositoryTest extends RedisTestSupport {
         assertThat(ttl()).isLessThanOrEqualTo(Duration.ofMinutes(10)).isGreaterThan(Duration.ofMinutes(9));
     }
 
+    // 0인 키를 남기면 비밀번호 없는 요청(서비스가 바로 400)마다 키가 15분씩 남아 Redis 메모리를 채울 수 있다
+    @Test
+    void 되돌려_0이_되면_키를_지운다() {
+        reserve();
+
+        repository.release(LOGIN_ID).block();
+
+        assertThat(TEMPLATE.hasKey(LoginAttemptRedisRepository.key(LOGIN_ID)).block()).isFalse();
+        fail(4);
+        assertThat(reserve().allowed()).isTrue();
+        assertThat(ttl()).isGreaterThan(Duration.ofMinutes(14));
+    }
+
     @Test
     void 다섯_번째_시도가_실패로_세지_않으면_차단되지_않는다() {
         fail(4);
@@ -123,10 +136,10 @@ class LoginAttemptRedisRepositoryTest extends RedisTestSupport {
     }
 
     @Test
-    void 키가_없을_때_되돌려도_음수가_되지_않는다() {
+    void 키가_없을_때_되돌려도_음수가_되지_않고_키도_만들지_않는다() {
         repository.release(LOGIN_ID).block();
 
-        assertThat(TEMPLATE.opsForValue().get(LoginAttemptRedisRepository.key(LOGIN_ID)).block()).isNull();
+        assertThat(TEMPLATE.hasKey(LoginAttemptRedisRepository.key(LOGIN_ID)).block()).isFalse();
     }
 
     @Test

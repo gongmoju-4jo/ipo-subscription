@@ -140,6 +140,8 @@ class OutboxPublisher {
         // 전체에 sendTimeout 하나를 적용한다 (행마다 누적해서 기다리지 않는다)
         long deadline = System.nanoTime() + properties.sendTimeout().toNanos();
         List<Outbox> confirmed = new ArrayList<>();
+        // 응답이 실패한 행. 실패 기록은 완료 표시 뒤에 한다 (아래)
+        List<Failed> failed = new ArrayList<>();
         boolean timedOut = false;
         for (InFlight sent : inFlight) {
             Outbox outbox = sent.outbox();
@@ -154,11 +156,15 @@ class OutboxPublisher {
                 break;
             } catch (Exception e) {
                 timedOut |= isTimeout(e);
-                recordFailure(outbox, e);
+                failed.add(new Failed(outbox, e));
                 blockedKeys.add(outbox.getMessageKey());
             }
         }
+        // 발행에 성공한 행을 먼저 완료로 표시한다. 실패 기록은 행마다 트랜잭션이라 실패가 많거나 DB가 느리면 오래 걸리고,
+        // 그 시간은 실행 시간 상한, send-timeout으로 제한되지 않는다. 그동안 락이 lockAtMostFor로 풀려도
+        // 다른 인스턴스가 다시 보낼 수 있는 행이 이미 보낸 행이 아니라 어차피 다시 보낼 실패 행뿐이게 한다
         boolean marked = markPublished(confirmed, blockedKeys);
+        failed.forEach(f -> recordFailure(f.outbox(), f.cause()));
         // 하나도 확인하지 못하고 시간이 초과되면 Kafka가 응답하지 않는 것이다. 다음 구간을 계속 보내면 반복마다 sendTimeout만큼 기다린다
         // 완료 표시에 실패하면 DB가 문제다. 계속 보내면 발행만 되고 표시가 안 되어 중복이 쌓인다
         return stop || !marked || (confirmed.isEmpty() && timedOut);
@@ -297,5 +303,11 @@ class OutboxPublisher {
      * 전송을 마친 행과 그 응답
      */
     private record InFlight(Outbox outbox, CompletableFuture<SendResult<String, String>> future) {
+    }
+
+    /**
+     * 응답이 실패한 행과 그 원인
+     */
+    private record Failed(Outbox outbox, Exception cause) {
     }
 }

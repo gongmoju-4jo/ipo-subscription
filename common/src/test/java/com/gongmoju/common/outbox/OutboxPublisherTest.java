@@ -762,6 +762,28 @@ class OutboxPublisherTest {
         verify(kafkaTemplate, never()).send(anyString(), eq("key-2"), anyString());
     }
 
+    @Test
+    @DisplayName("응답이 실패한 행의 실패 기록은 성공한 행의 완료 표시 뒤에 한다 (실패 기록이 오래 걸려 락이 풀려도 이미 보낸 행이 다시 발행되지 않게)")
+    void publishPending_marksConfirmedRowsBeforeRecordingFailures() {
+        // given: 성공 1행, 응답 실패 1행
+        Outbox succeeded = pendingOutbox("allocation.result", "key-1", "{}");
+        Outbox failing = pendingOutbox("allocation.result", "key-2", "{}");
+        givenPending(List.of(succeeded, failing));
+        givenFound(failing);
+        when(kafkaTemplate.send(anyString(), eq("key-1"), anyString())).thenReturn(CompletableFuture.completedFuture(null));
+        when(kafkaTemplate.send(anyString(), eq("key-2"), anyString())).thenReturn(failedFuture());
+
+        // when
+        publisher.publishPending();
+
+        // then: 완료 표시(UPDATE) → 실패 기록(행 조회 후 횟수 증가) 순서
+        InOrder order = inOrder(outboxRepository);
+        order.verify(outboxRepository).markPublished(any(), anyCollection());
+        order.verify(outboxRepository).findById(failing.getId());
+        assertThat(succeeded.getPublishedAt()).isNotNull();
+        assertThat(failing.getRetryCount()).isEqualTo(1);
+    }
+
     private OutboxPublisher newPublisherWithClock(Duration maxRunDuration, LongSupplier nanoTime) {
         return new OutboxPublisher(
                 outboxRepository,

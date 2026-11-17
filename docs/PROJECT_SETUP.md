@@ -77,7 +77,7 @@ ipo-subscription/
 | account / subscription / allocation | 8081 / 8082 / 8083 |
 | PostgreSQL | 5432 |
 | Kafka / Kafka-UI | 29092 / 8989 |
-| Redis | 6379 (게이트웨이 접속 대기열, 청약 서비스 경쟁률 사본) |
+| Redis | 6379 (게이트웨이 접속 대기열, 로그인 시도 제한, 청약 서비스 경쟁률 사본) |
 | Prometheus / Grafana | 9090 / 3000 |
 | Zipkin | 9411 (Loki, Alloy는 열지 않음. Grafana에서 조회) |
 | gateway 관리 포트 | 18090 (헬스체크, 지표 수집 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
@@ -105,6 +105,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 📌 **Gateway(8080)를 거치는 요청은 토큰이 필요**하다. 공개 경로만 예외: `POST /api/v1/users`, `POST /api/v1/auth/login`, Swagger(`GET /swagger-ui/**`, `/v3/api-docs/**`, `/*-service/v3/api-docs`). 공개 경로는 메서드와 경로가 정확히 맞아야 하고(끝 슬래시가 붙으면 공개가 아님), 토큰을 읽지 않는다
 - 📌 JWT 검증: HS256 서명, 만료, `iss`=**`account-service`**(문자열 비교), `sub`, `role`. `exp`가 없는 토큰은 거절. 실패하면 401 (만료는 `TOKEN_EXPIRED`, 그 외는 `UNAUTHORIZED`)
 - 📌 역할: **USER, ADMIN** (common `UserRole`과 같은 값). `/api/v1/admin/**`은 ADMIN만, 일반 회원은 403 `FORBIDDEN`
+- 로그인(`POST /api/v1/auth/login`)은 로그인 ID별로 첫 실패부터 15분 안에 5번 실패하면 그때부터 15분 동안 429 ([로그인 시도 제한](#로그인-시도-제한))
 - 클라이언트가 보낸 `X-User-Id`, `X-User-Role`, `X-Request-Received-At`를 모두 제거한 뒤 Gateway가 다시 설정한다 (서비스, Audit이 이 헤더를 신뢰)
 - 클라이언트가 보낸 추적 헤더(`traceparent`, `tracestate`, `baggage`, `b3`, `X-B3-*`)도 지운다. 외부 요청은 항상 새 trace로 시작하고, 서비스로 보낼 때 Gateway가 자기 `traceparent`를 붙인다 (외부가 traceId를 정하거나 샘플링을 켜지 못하게. [분산 추적](#분산-추적-zipkin))
   - `X-User-Id` = 토큰의 `sub`, `X-User-Role` = 토큰의 `role` (토큰이 없는 공개 경로에는 붙지 않음)
@@ -129,6 +130,32 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 관리자 승격, 해제, 비밀번호 변경은 없다
 - `.env`의 두 값을 바꾼 뒤에는 IntelliJ는 계좌 서비스 재시작, Docker는 `docker-compose up -d account-service` (`restart`로는 환경변수가 바뀌지 않는다)
 - `ADMIN_PASSWORD`에 `$`를 쓰지 않는다. Spring이 값 안의 `${...}`를 다른 설정으로 바꾸려 해서, 기동이 실패하고 오류 로그에 값이 그대로 찍힌다
+
+### 로그인 시도 제한
+
+같은 로그인 ID로 첫 실패부터 15분 안에 5번 실패하면, 그때부터 15분 동안 그 ID의 로그인을 게이트웨이가 막는다. 코드는 `api-gateway/.../login/`, 설정은 `login-attempt.*`
+
+- 차단 중이면 서비스로 보내지 않고 429 `TOO_MANY_REQUESTS` "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요." + `Retry-After`(남은 초). 맞는 비밀번호여도 막는다
+  - 평소 실패는 지금처럼 401 `INVALID_CREDENTIALS` 하나다. 남은 횟수는 알려주지 않는다
+  - 차단 중 시도는 차단 시간을 늘리지 않는다. 5번째 실패가 첫 실패 14분 뒤여도 그때부터 15분 막힌다
+  - 15분 안에 5번이 차지 않으면 횟수가 사라지고 다음 실패부터 다시 센다 (첫 실패 기준 고정 구간). 그래서 구간이 끝나기 직전 4번, 직후 5번처럼 짧은 사이에 9번까지 서비스로 갈 수 있다 (9번째에 막힘). 막히지 않고 시도할 수 있는 수는 길게 보면 15분에 4번으로, 실패 시각을 하나씩 기록하는 방식(이동 구간)과 같다
+- 로그인 ID별로만 센다 (IP별 X). 없는 ID도 같은 방식으로 세어 응답으로 가입 여부가 드러나지 않는다
+  - 남의 ID로 일부러 15분 차단을 걸 수 있다 (영구 잠금이 아니라 피해는 15분). 여러 ID를 돌아가며 시도하는 공격은 막지 않는다
+- 서비스 응답으로 센다: 401이면 실패, 2xx면 횟수를 지움, 그 밖(400, 5xx, 서비스 호출 실패, 서비스 응답 전에 클라이언트가 끊음)은 세지 않는다
+  - 서비스로 보내기 전에 횟수를 먼저 올려서, 동시에 여러 번 보내도 서비스까지 가는 시도는 5번이다. 그사이 같은 ID로 로그인에 성공하면 횟수가 지워져, 이미 서비스로 간 시도의 결과는 세지 않고 그 뒤 시도부터 새로 센다 (성공하려면 비밀번호를 알아야 해서 우회 수단은 아니다)
+- 로그인 ID는 청약 신청의 입장 허가 확인과 같은 방식으로 본문에서 읽는다 (`JsonBodyReader`). 같은 키가 두 번 이상 있는 본문, 16KB를 넘는 본문, `loginId`, `password`가 문자열이 아닌 본문(숫자, 불리언, 배열, 객체)은 400 `VALIDATION_ERROR`로 막는다 (서비스는 `1234`를 `"1234"`로 바꿔 받아서, 세지 않고 보내면 제한을 피한다).
+  - 72바이트를 넘는 비밀번호는 세지 않고 서비스로 보내지도 않고, 서비스와 같은 401 `INVALID_CREDENTIALS`를 바로 준다. 서비스가 BCrypt 비교 없이 바로 틀렸다고 보는 비밀번호라(BCrypt는 72바이트까지만 씀), 세면 비용 없는 401마다 키가 15분씩 남는다. 서비스의 이 규칙(`AuthService.BCRYPT_MAX_BYTES`)을 바꾸면 게이트웨이도 같이 바꾼다 경로는 퍼센트 디코딩 후 비교하고 끝 슬래시도 대상이다
+- Redis 키: 로그인 ID마다 `login-fail:{로그인 ID의 SHA-256}` = 실패 횟수 (만료 15분). 로그인 ID 원문은 Redis에 두지 않는다. 되돌려 0이 되면 키를 지운다 (비밀번호 없는 요청처럼 서비스가 바로 400을 주는 요청으로 키를 쌓아 Redis 메모리를 채우지 못하게. 메모리 상한에 닿으면 같은 Redis를 쓰는 대기열도 멈춘다)
+- 📌 Redis 장애: 청약 신청(503)과 달리 **횟수 확인 없이 로그인을 통과시킨다** (Redis 장애가 로그인 장애로 번지지 않게). 그동안은 제한이 없다
+  - Redis가 200ms(`login-attempt.redis-timeout`) 안에 답하지 않아도 통과시키고, 그 뒤 5초(`redis-skip`) 동안은 Redis를 부르지 않는다. 게이트웨이 WARN 로그 `로그인 시도 제한 ... 실패 (Redis)`가 남는다
+  - 시간 초과로 포기한 예약 명령이 Redis가 살아난 뒤 늦게 실행되면 그 횟수는 되돌리지 못한다 (실행됐는지 알 수 없어서). 같은 ID로 이런 예약이 5개 쌓이면 Redis가 돌아온 뒤 그 ID가 최대 15분 막힐 수 있다. Redis가 멈춘 동안 같은 ID로 여러 번 시도해야 생긴다 (첫 시간 초과 뒤 5초 동안은 Redis를 부르지 않는다)
+  - Redis 장애 자체는 `QueueAdmissionDown` 알림으로 알 수 있다 ([Slack 장애 알림](#slack-장애-알림))
+- 예외 계정은 없다 (시연, 스모크, 관리자 계정 포함). 스모크와 부하 테스트는 맞는 비밀번호로만 로그인해 영향이 없다
+- 잠긴 계정을 바로 풀려면 그 ID의 키를 지운다 (기다리면 15분 뒤 풀린다). 로컬은 아래 그대로, 배포 서버는 Session Manager에서 `docker exec` 대신 `docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml exec redis`
+  ```bash
+  LOGIN_ID='잠긴 로그인 ID'
+  docker exec ipo-redis redis-cli DEL "login-fail:$(printf '%s' "${LOGIN_ID}" | sha256sum | cut -d' ' -f1)"   # 1이면 풀림, 0이면 키가 없음
+  ```
 
 ### 접속 대기열
 

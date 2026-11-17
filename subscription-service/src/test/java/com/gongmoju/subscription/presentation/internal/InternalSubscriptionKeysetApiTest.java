@@ -18,6 +18,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,7 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * 공모주별 확정 청약 목록 내부 API의 키셋 방식 (API 명세 4.1, #138)을 실제 PostgreSQL(Testcontainers)로 검증함. Docker 필요.
- * 키셋 조회는 PostgreSQL 네이티브 쿼리(부분 인덱스)라 H2로 검증하지 않는다. page 방식은 InternalSubscriptionListApiTest.
+ * 키셋 조회는 PostgreSQL 네이티브 쿼리(부분 인덱스)라 H2로 검증하지 않는다. page 방식은 배정 서비스가 키셋으로 바뀌어 없앴다.
  * 배정 서비스는 사용자 헤더 없이 호출하므로 요청에 X-User-Id를 넣지 않는다.
  */
 @Testcontainers
@@ -87,21 +88,76 @@ class InternalSubscriptionKeysetApiTest {
     }
 
     @Test
-    @DisplayName("마지막 ID로 이어서 끝까지 읽으면 page 방식과 같은 목록을 중복, 누락 없이 받고 전체 건수는 첫 요청에만 있다")
-    void readToEnd_matchesPageModeWithoutDuplicatesOrGaps() throws Exception {
+    @DisplayName("마지막 ID로 이어서 끝까지 읽으면 subscriptionId 오름차순으로 중복, 누락 없이 받고 전체 건수는 첫 요청에만 있다")
+    void readToEnd_inOrderWithoutDuplicatesOrGaps() throws Exception {
         insertAll(FIVE_IDS);
 
         List<String> keyset = readAllByKeyset(2, 3);
-        List<String> paged = new ArrayList<>();
-        for (int page = 0; page < 3; page++) {
-            String body = mockMvc.perform(keyset(IPO_ID).param("page", String.valueOf(page)).param("size", "2"))
-                    .andExpect(status().isOk())
-                    .andReturn().getResponse().getContentAsString();
-            paged.addAll(JsonPath.read(body, "$.data.items[*].subscriptionId"));
-        }
 
         assertThat(keyset).containsExactlyElementsOf(FIVE_IDS.stream().sorted().toList());
-        assertThat(keyset).containsExactlyElementsOf(paged);
+    }
+
+    @Test
+    @DisplayName("항목은 명세의 6개 필드를 KST 시각으로 담는다")
+    void item_hasSixFieldsInKst() throws Exception {
+        UUID subscriptionId = insertSubscription(UUID.fromString("50000000-0000-3000-8000-000000000001"), IPO_ID, USER_ID, "CONFIRMED");
+
+        String body = mockMvc.perform(keyset(IPO_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].subscriptionId").value(subscriptionId.toString()))
+                .andExpect(jsonPath("$.data.items[0].userId").value(USER_ID.toString()))
+                .andExpect(jsonPath("$.data.items[0].accountId").value(ACCOUNT_ID.toString()))
+                .andExpect(jsonPath("$.data.items[0].requestedQuantity").value(100))
+                .andExpect(jsonPath("$.data.items[0].marginAmount").value(1500000))
+                .andExpect(jsonPath("$.data.items[0].receivedAt").value("2026-11-03T10:00:00+09:00"))
+                .andReturn().getResponse().getContentAsString();
+
+        Map<String, Object> item = JsonPath.read(body, "$.data.items[0]");
+        assertThat(item).containsOnlyKeys("subscriptionId", "userId", "accountId", "requestedQuantity", "marginAmount", "receivedAt");
+    }
+
+    @Test
+    @DisplayName("page, sort 파라미터는 무시하고 앞에서부터 subscriptionId 오름차순으로 응답한다")
+    void pageAndSort_areIgnored() throws Exception {
+        insertAll(FIVE_IDS);
+
+        mockMvc.perform(keyset(IPO_ID).param("page", "1").param("size", "2").param("sort", "subscriptionId,desc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].subscriptionId").value("00000000-0000-3000-8000-000000000002"))
+                .andExpect(jsonPath("$.data.items[1].subscriptionId").value("10000000-0000-3000-8000-000000000001"))
+                .andExpect(jsonPath("$.data.hasNext").value(true))
+                .andExpect(jsonPath("$.data.totalElements").value(5))
+                .andExpect(jsonPath("$.data.page").doesNotExist());
+
+        // 다음 요청에 page를 함께 보내도 afterSubscriptionId 다음부터 읽는다 (page와 함께 보내도 400이 아님)
+        mockMvc.perform(keyset(IPO_ID).param("page", "0").param("size", "2")
+                        .param("afterSubscriptionId", "10000000-0000-3000-8000-000000000001"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].subscriptionId").value("7fffffff-0000-3000-8000-000000000001"));
+    }
+
+    @Test
+    @DisplayName("빈 afterSubscriptionId는 보내지 않은 것과 같아 첫 요청으로 응답한다 (page를 함께 보내도 같음)")
+    void emptyAfter_isFirstRequest() throws Exception {
+        insertAll(FIVE_IDS);
+
+        for (MockHttpServletRequestBuilder request : List.of(
+                keyset(IPO_ID).param("afterSubscriptionId", "").param("size", "2"),
+                keyset(IPO_ID).param("afterSubscriptionId", "").param("page", "1").param("size", "2"))) {
+            mockMvc.perform(request)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.items[0].subscriptionId").value("00000000-0000-3000-8000-000000000002"))
+                    .andExpect(jsonPath("$.data.totalElements").value(5))
+                    .andExpect(jsonPath("$.data.hasNext").value(true));
+        }
+    }
+
+    @Test
+    @DisplayName("size는 최대 1000까지 허용한다")
+    void size1000_isAllowed() throws Exception {
+        mockMvc.perform(keyset(IPO_ID).param("size", "1000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.size").value(1000));
     }
 
     @Test
@@ -146,15 +202,6 @@ class InternalSubscriptionKeysetApiTest {
     }
 
     @Test
-    @DisplayName("page와 afterSubscriptionId를 함께 보내면 400이다")
-    void pageWithAfter_isBadRequest() throws Exception {
-        mockMvc.perform(keyset(IPO_ID).param("page", "0").param("afterSubscriptionId", FIVE_IDS.get(0)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
-                .andExpect(jsonPath("$.error.details[0].field").value("afterSubscriptionId"));
-    }
-
-    @Test
     @DisplayName("afterSubscriptionId가 UUID가 아니거나 size가 범위를 벗어나면 400이다")
     void invalidParams_areBadRequest() throws Exception {
         List<String[]> invalid = List.of(
@@ -167,18 +214,38 @@ class InternalSubscriptionKeysetApiTest {
                     .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
                     .andExpect(jsonPath("$.error.details[0].field").value(param[0]));
         }
+        mockMvc.perform(keyset(IPO_ID).param("size", "1001"))
+                .andExpect(jsonPath("$.error.message").value("페이지 요청 값이 올바르지 않습니다."))
+                .andExpect(jsonPath("$.error.details[0].reason").value("페이지 크기는 1 이상 1000 이하여야 합니다."));
     }
 
     @Test
-    @DisplayName("status가 CONFIRMED가 아니면 400이다")
-    void statusNotConfirmed_isBadRequest() throws Exception {
-        mockMvc.perform(get("/internal/ipos/" + IPO_ID + "/subscriptions").param("status", "ALLOCATED"))
+    @DisplayName("status가 없거나 CONFIRMED가 아니면 400이다")
+    void statusMissingOrNotConfirmed_isBadRequest() throws Exception {
+        mockMvc.perform(get("/internal/ipos/" + IPO_ID + "/subscriptions"))
                 .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
                 .andExpect(jsonPath("$.error.details[0].field").value("status"));
+
+        for (String status : List.of("PENDING", "ALLOCATED", "confirmed", "UNKNOWN")) {
+            mockMvc.perform(get("/internal/ipos/" + IPO_ID + "/subscriptions").param("status", status))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+                    .andExpect(jsonPath("$.error.details[0].field").value("status"));
+        }
     }
 
     @Test
-    @DisplayName("공모주가 없으면 404, CLOSED가 아니면 409다")
+    @DisplayName("ipoId가 UUID가 아니면 400이다")
+    void ipoIdNotUuid_isBadRequest() throws Exception {
+        mockMvc.perform(get("/internal/ipos/not-a-uuid/subscriptions").param("status", "CONFIRMED"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.error.details[0].field").value("ipoId"));
+    }
+
+    @Test
+    @DisplayName("공모주가 없으면 404, CLOSED가 아니면(OPEN, ALLOCATED) 409다")
     void ipoMissingOrNotClosed() throws Exception {
         mockMvc.perform(keyset(UUID.fromString("8b2d0000-0000-4000-8000-000000000099")))
                 .andExpect(status().isNotFound())
@@ -186,10 +253,17 @@ class InternalSubscriptionKeysetApiTest {
                 .andExpect(jsonPath("$.error.details[0].field").value("ipoId"));
 
         UUID open = insertIpo(UUID.fromString("8b2d0000-0000-4000-8000-000000000003"), "OPEN");
+        UUID allocated = insertIpo(UUID.fromString("8b2d0000-0000-4000-8000-000000000004"), "ALLOCATED");
+        for (UUID ipoId : List.of(open, allocated)) {
+            mockMvc.perform(keyset(ipoId))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.error.code").value("INVALID_STATUS_TRANSITION"))
+                    .andExpect(jsonPath("$.error.details[0].field").value("ipoId"))
+                    .andExpect(jsonPath("$.error.details[0].reason").value("마감된 공모주가 아닙니다."));
+        }
         mockMvc.perform(keyset(open).param("afterSubscriptionId", FIVE_IDS.get(0)))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("INVALID_STATUS_TRANSITION"))
-                .andExpect(jsonPath("$.error.details[0].field").value("ipoId"));
+                .andExpect(jsonPath("$.error.code").value("INVALID_STATUS_TRANSITION"));
     }
 
     // 첫 요청부터 hasNext가 false일 때까지 이어서 읽는다. 요청 횟수와 totalElements가 첫 요청에만 있는지도 확인한다
@@ -229,11 +303,15 @@ class InternalSubscriptionKeysetApiTest {
 
     // 값은 API 명세 4.1 예시와 같다 (100주, 증거금 1,500,000원, 접수 2026-11-03T10:00:00+09:00)
     private UUID insertSubscription(UUID subscriptionId, UUID ipoId, String status) {
+        return insertSubscription(subscriptionId, ipoId, UUID.randomUUID(), status);
+    }
+
+    private UUID insertSubscription(UUID subscriptionId, UUID ipoId, UUID userId, String status) {
         jdbcTemplate.update(
                 "INSERT INTO subscription (subscription_id, request_id, ipo_id, user_id, account_id,"
                         + " requested_quantity, margin_amount, status, attempts, received_at, version, created_at, created_by)"
                         + " VALUES (?, ?, ?, ?, ?, 100, 1500000, ?, 0, ?, 0, ?, 'SYSTEM:test')",
-                subscriptionId, UUID.randomUUID(), ipoId, UUID.randomUUID(), ACCOUNT_ID, status,
+                subscriptionId, UUID.randomUUID(), ipoId, userId, ACCOUNT_ID, status,
                 OffsetDateTime.parse("2026-11-03T10:00:00.123+09:00"), OffsetDateTime.parse("2026-11-03T10:00:01+09:00"));
         return subscriptionId;
     }

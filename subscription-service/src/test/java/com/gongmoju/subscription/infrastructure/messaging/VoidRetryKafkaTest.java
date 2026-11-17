@@ -55,6 +55,7 @@ import static org.awaitility.Awaitility.await;
         "outbox.publisher.enabled=true",
         "saga.timeout.enabled=true",
         "saga.timeout.interval=PT1S",
+        "saga.timeout.lock-at-least-for=PT0S",
         "saga.void-retry.initial-interval=PT20S",
         "saga.void-retry.max-interval=PT60S"
 })

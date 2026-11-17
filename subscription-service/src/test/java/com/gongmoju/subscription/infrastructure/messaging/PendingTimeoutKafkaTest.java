@@ -45,6 +45,7 @@ import static org.awaitility.Awaitility.await;
  * 반환 요청이 발행되고 반환 응답을 받으면 취소되는 흐름을 확인함.
  * 시험이 짧게 끝나도록 최대 횟수는 2, 응답 시간은 20초로 줄임. 응답 시간을 너무 짧게 하면 보상이 시작된 뒤 같은 컨텍스트의 반환 재요청 스케줄러가 반환 요청을 한 번 더 기록해 테스트가 흔들림(처리 흐름은 몇 초 안에 끝남). 처리 대상은 마지막 요청 시각을 1분 전으로 만들어 바로 걸리게 함.
  * 메시지 키를 테스트마다 다른 계좌 ID로 구분해서 같은 토픽을 공유해도 서로 영향이 없음.
+ * 실행 간격을 1초로 줄였으므로 스케줄러 락의 최소 시간(기본 4초)도 0으로 둠. 그대로 두면 락 때문에 4초에 한 번만 실행됨.
  */
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -54,6 +55,7 @@ import static org.awaitility.Awaitility.await;
         "outbox.publisher.enabled=true",
         "saga.timeout.enabled=true",
         "saga.timeout.interval=PT1S",
+        "saga.timeout.lock-at-least-for=PT0S",
         "saga.timeout.response-timeout=PT20S",
         "saga.timeout.max-attempts=2"
 })

@@ -4,6 +4,7 @@ import com.gongmoju.subscription.application.subscription.ReserveTimeoutResult;
 import com.gongmoju.subscription.application.subscription.SubscriptionReserveTimeoutService;
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -20,6 +21,7 @@ import java.util.UUID;
  * 마지막 요청 시각에서 응답 시간(30초)이 지난 PENDING 청약은 인출 요청을 재요청하고, 최대 횟수에 도달하면 COMPENSATING(TIMEOUT)으로 보상함
  * 미발행 {@code margin.reserve-requested} Outbox 항목이 있는 청약은 조회에서 제외함
  * 각 청약을 개별 처리하며, 1 건의 실패가 나머지 처리를 중단하지 않음. 낙관적 락 충돌은 건너뛰고 다음 주기에 재판단함.
+ * 인스턴스가 여러 개면 ShedLock({@code @SchedulerLock})으로 한 번에 한 인스턴스만 실행
  */
 @Slf4j
 @Component
@@ -40,8 +42,13 @@ class PendingTimeoutScheduler {
 
     /**
      * 이전 실행 종료 후 실행 간격(interval) 지나면 재실행 (실행이 겹치지 않음)
+     * lockAtMostFor는 실행 중 인스턴스가 죽었을 때 풀리기까지의 시간(가장 긴 실행보다 넉넉히), lockAtLeastFor는 interval보다 조금 짧게 둠.
+     * lockAtLeastFor가 없으면 한 인스턴스가 끝나자마자 다른 인스턴스가 실행해 인스턴스 수만큼 실행. interval이 설정값이라 둘 다 설정 값으로 둠
+     * lockAtMostFor는 lockAtLeastFor와 같거나 길어야 함 (짧으면 ShedLock이 락 설정을 만들 때 예외를 던져 실행되지 않음).
      */
     @Scheduled(fixedDelayString = "${saga.timeout.interval:PT5S}")
+    @SchedulerLock(name = "PendingTimeoutScheduler.handleTimedOutPending",
+            lockAtMostFor = "${saga.timeout.lock-at-most-for:PT1M}", lockAtLeastFor = "${saga.timeout.lock-at-least-for:PT4S}")
     void handleTimedOutPending() {
         handleTimedOutPending(Instant.now());
     }

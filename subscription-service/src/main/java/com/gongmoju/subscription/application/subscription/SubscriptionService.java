@@ -11,9 +11,7 @@ import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import com.gongmoju.subscription.domain.subscription.SubscriptionStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -87,29 +85,10 @@ public class SubscriptionService {
     }
 
     /**
-     * 배정 서비스가 가져갈 공모주의 확정 청약 목록을 조회한다 (내부 API, API 명세 4.1).
-     * 마감(CLOSED) 이후에만 조회할 수 있어서 페이지를 나눠 받는 동안 목록이 바뀌지 않는다.
-     * 정렬은 청약 ID 오름차순 고정이다. 페이지 사이 중복, 누락을 막고, 배정 추첨의 입력 순서가 된다.
-     *
-     * @param ipoId 공모주 ID
-     * @param page  페이지 번호 (검증된 값)
-     * @param size  페이지 크기 (검증된 값)
-     * @return 확정 청약 페이지. 없으면 빈 페이지
-     * @throws BusinessException 공모주가 없으면 RESOURCE_NOT_FOUND(404), CLOSED가 아니면 INVALID_STATUS_TRANSITION(409)
-     */
-    @Transactional(readOnly = true)
-    public Page<ConfirmedSubscriptionResult> listConfirmed(UUID ipoId, int page, int size) {
-        validateClosedIpo(ipoId);
-
-        return subscriptionRepository.findByIpoIdAndStatus(ipoId, SubscriptionStatus.CONFIRMED,
-                        PageRequest.of(page, size, Sort.by("id")))
-                .map(ConfirmedSubscriptionResult::from);
-    }
-
-    /**
      * 배정 서비스가 가져갈 공모주의 확정 청약 목록을 키셋 방식으로 조회한다 (내부 API, API 명세 4.1, #138).
      * 직전 응답의 마지막 청약 ID 다음부터 읽어서, 뒤쪽 목록도 앞 행을 건너뛰며 세지 않는다.
-     * 마감(CLOSED) 이후에만 조회할 수 있어서 나눠 받는 동안 목록이 바뀌지 않는다. 정렬은 청약 ID 오름차순 고정이다.
+     * 마감(CLOSED) 이후에만 조회할 수 있어서 나눠 받는 동안 목록이 바뀌지 않는다.
+     * 정렬은 청약 ID 오름차순 고정이다. 나눠 받는 사이 중복, 누락을 막고, 배정 추첨의 입력 순서가 된다.
      *
      * @param ipoId               공모주 ID
      * @param afterSubscriptionId 직전 응답의 마지막 청약 ID. 첫 요청은 null

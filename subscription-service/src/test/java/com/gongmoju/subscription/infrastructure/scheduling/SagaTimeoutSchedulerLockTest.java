@@ -1,8 +1,10 @@
 package com.gongmoju.subscription.infrastructure.scheduling;
 
+import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.aop.framework.Advised;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,6 +12,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -20,6 +23,10 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * 실제 스프링 빈인 응답 시간 초과 스케줄러, 반환 재요청 스케줄러에 스케줄러 락(ShedLock)이 걸리는지 확인함 (#184). Docker 필요.
@@ -28,7 +35,10 @@ import static org.awaitility.Awaitility.await;
  * 스케줄러를 켜야 빈이 만들어지고, 켜면 기동하자마자 한 번 실행되며 shedlock 표를 씀. 그래서 schema.sql이 shedlock 표를 만드는 PostgreSQL로 띄움.
  * 처리 대상 청약이 없어 첫 실행에서 아무것도 바꾸지 않고, 주기를 길게 두어 테스트 중에 다시 돌지 않게 함.
  * 스케줄링이 켜지면 Outbox 발행기의 {@code @Scheduled}도 도므로(테스트 설정에서 꺼 둔 것은 발행기의 스케줄링 설정뿐) 발행 주기도 길게 둠.
- * 메서드를 직접 여러 번 부르지 않음 (lockAtLeastFor 때문에 두 번째 호출부터 건너뛸 수 있음, PROJECT_SETUP 5장).
+ * <p>
+ * 락이 걸려 있는지(프록시, 이름, 설정, shedlock 표)와 함께, 락이 두 번째 실행을 실제로 막는지도 확인함.
+ * 락을 쥔 동안 같은 메서드를 다시 부르면 건너뛰므로(lockAtLeastFor, PROJECT_SETUP 5장), 막는 동작을 보는 테스트는 락이 풀린 것을 확인한 뒤
+ * 연달아 부르고 저장소 조회 횟수를 센다. 그 외 테스트는 메서드를 직접 여러 번 부르지 않음.
  */
 @Testcontainers
 @SpringBootTest(properties = {
@@ -49,6 +59,10 @@ class SagaTimeoutSchedulerLockTest {
     @ServiceConnection
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16")
             .withUrlParam("currentSchema", "subscription");
+
+    // 스케줄러가 실제로 실행됐는지를 저장소 조회 횟수로 셈 (두 스케줄러 모두 실행마다 대상 조회를 함)
+    @MockitoSpyBean
+    private SubscriptionRepository subscriptionRepository;
 
     @Autowired
     private PendingTimeoutScheduler pendingTimeoutScheduler;
@@ -110,6 +124,77 @@ class SagaTimeoutSchedulerLockTest {
 
         // then
         assertThat(atMost).isGreaterThanOrEqualTo(atLeast);
+    }
+
+    @Test
+    @DisplayName("응답 시간 초과 스케줄러는 락이 풀린 뒤 연달아 두 번 부르면 한 번만 실행하고, 락이 다시 풀리면 또 실행한다")
+    void pendingTimeoutScheduler_skipsSecondRunWhileLockHeld() {
+        // given: 기동 때의 첫 실행이 끝나 락이 풀리고, 이전 조회 기록을 비움
+        awaitLockReleased(PENDING_TIMEOUT_LOCK);
+        Mockito.clearInvocations(subscriptionRepository);
+
+        // when: 락을 쥔 동안 같은 메서드를 다시 부름 (다른 인스턴스의 같은 시각 실행을 흉내 냄)
+        pendingTimeoutScheduler.handleTimedOutPending();
+        pendingTimeoutScheduler.handleTimedOutPending();
+
+        // then: 두 번째는 건너뛰어 대상 조회는 한 번
+        verify(subscriptionRepository, times(1)).findStalePendingIds(any(), anyInt());
+
+        // when: 락이 다시 풀린 뒤 부름
+        awaitLockReleased(PENDING_TIMEOUT_LOCK);
+        pendingTimeoutScheduler.handleTimedOutPending();
+
+        // then: 다시 실행되어 대상 조회는 두 번 (락이 영영 막지 않음)
+        verify(subscriptionRepository, times(2)).findStalePendingIds(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("반환 재요청 스케줄러는 락이 풀린 뒤 연달아 두 번 부르면 한 번만 실행하고, 락이 다시 풀리면 또 실행한다")
+    void voidRetryScheduler_skipsSecondRunWhileLockHeld() {
+        // given: 기동 때의 첫 실행이 끝나 락이 풀리고, 이전 조회 기록을 비움
+        awaitLockReleased(VOID_RETRY_LOCK);
+        Mockito.clearInvocations(subscriptionRepository);
+
+        // when: 락을 쥔 동안 같은 메서드를 다시 부름
+        voidRetryScheduler.retryStaleVoid();
+        voidRetryScheduler.retryStaleVoid();
+
+        // then: 두 번째는 건너뛰어 대상 조회는 한 번
+        verify(subscriptionRepository, times(1)).findStaleVoidIds(any(), any(), anyInt());
+
+        // when: 락이 다시 풀린 뒤 부름
+        awaitLockReleased(VOID_RETRY_LOCK);
+        voidRetryScheduler.retryStaleVoid();
+
+        // then: 다시 실행되어 대상 조회는 두 번
+        verify(subscriptionRepository, times(2)).findStaleVoidIds(any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("두 스케줄러의 락은 서로 독립이라 한쪽이 락을 쥐고 있어도 다른 쪽은 실행된다")
+    void schedulers_doNotBlockEachOther() {
+        // given: 두 락이 모두 풀린 상태
+        awaitLockReleased(PENDING_TIMEOUT_LOCK);
+        awaitLockReleased(VOID_RETRY_LOCK);
+        Mockito.clearInvocations(subscriptionRepository);
+
+        // when: 응답 시간 초과 락을 쥔 상태에서 반환 재요청을 실행
+        pendingTimeoutScheduler.handleTimedOutPending();
+        voidRetryScheduler.retryStaleVoid();
+
+        // then: 서로 다른 락 이름이라 둘 다 실행됨
+        verify(subscriptionRepository, times(1)).findStalePendingIds(any(), anyInt());
+        verify(subscriptionRepository, times(1)).findStaleVoidIds(any(), any(), anyInt());
+    }
+
+    // 락이 풀릴 때까지 기다림. 락 행은 기동 때의 첫 실행(별도 스레드)이 만들므로 행이 생기기 전의 조회 실패는 무시하고 다시 시도함.
+    // 락 만료 시각(lock_until)은 시간대 없는 UTC라 DB 시각도 같은 기준으로 비교함 (schema.sql의 shedlock 표 설명 참고)
+    private void awaitLockReleased(String lockName) {
+        await().atMost(Duration.ofSeconds(20)).ignoreExceptions().untilAsserted(() -> {
+            Boolean released = jdbcTemplate.queryForObject(
+                    "SELECT lock_until <= timezone('utc', now()) FROM shedlock WHERE name = ?", Boolean.class, lockName);
+            assertThat(released).isTrue();
+        });
     }
 
     private void assertProxiedByShedLock(Object scheduler) {

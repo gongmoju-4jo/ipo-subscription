@@ -30,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -37,7 +38,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <ul>
  *   <li>서비스로 보내기 전에 실패 횟수를 미리 올리고(동시에 보낸 요청이 모두 확인을 통과하지 못하게), 응답을 보고 확정한다:
- *       401은 실패로 남기고, 2xx는 횟수를 지우고, 그 밖(400, 5xx, 서비스 호출 오류)은 되돌린다</li>
+ *       401은 실패로 남기고, 2xx는 횟수를 지우고, 그 밖(400, 5xx, 서비스 호출 오류, 서비스 응답 전에 클라이언트가 끊음)은 되돌린다</li>
  *   <li>차단 중이면 서비스로 보내지 않고 429 TOO_MANY_REQUESTS + Retry-After(남은 초). 남은 횟수는 알려주지 않는다</li>
  *   <li>로그인 ID는 서비스와 같은 방식으로 본문에서 읽는다 ({@link JsonBodyReader}). 같은 키가 두 번 이상이면 400.
  *       loginId가 문자열이 아니어도(숫자, 불리언, 배열, 객체) 400. 게이트웨이가 센 ID와 서비스가 로그인한 ID가 어긋나 제한을 피하지 못하게 한다.
@@ -116,11 +117,25 @@ public class LoginAttemptFilter implements GlobalFilter, Ordered {
                 });
     }
 
-    // 서비스로 보내고 응답 상태로 예약을 확정한다. 확정은 응답을 다 보낸 뒤라 결과에 영향을 주지 않는다
+    // 서비스로 보내고 응답 상태로 예약을 확정한다. 확정은 응답을 다 보낸 뒤라 결과에 영향을 주지 않는다.
+    // 클라이언트가 응답 전에 끊으면(취소) 완료, 오류 신호가 오지 않아 따로 확정한다. 확정은 한 번만 한다
     private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain, String loginId) {
+        AtomicBoolean settled = new AtomicBoolean();
         return chain.filter(exchange)
-                .then(Mono.defer(() -> settle(loginId, exchange.getResponse().getStatusCode())))
-                .onErrorResume(e -> settle(loginId, null).then(Mono.error(e)));
+                .then(Mono.defer(() -> settled.compareAndSet(false, true)
+                        ? settle(loginId, exchange.getResponse().getStatusCode())
+                        : Mono.<Void>empty()))
+                .onErrorResume(e -> settled.compareAndSet(false, true)
+                        ? settle(loginId, null).then(Mono.error(e))
+                        : Mono.error(e))
+                .doOnCancel(() -> {
+                    if (settled.compareAndSet(false, true)) {
+                        // 응답을 보내기 시작했으면 그 상태로(401이면 실패), 아니면 서비스 응답 전이라 되돌린다.
+                        // 401을 받자마자 끊어 횟수를 되돌리지 못하게 응답 상태가 정해졌는지로 나눈다
+                        ServerHttpResponse response = exchange.getResponse();
+                        settle(loginId, response.isCommitted() ? response.getStatusCode() : null).subscribe();
+                    }
+                });
     }
 
     private Mono<Void> settle(String loginId, HttpStatusCode status) {

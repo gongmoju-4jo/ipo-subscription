@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * (application.yml의 실제 라우트는 그대로. 필터는 GlobalFilter라 테스트 라우트에도 똑같이 걸린다).
  *
  * <p>본문의 password로 응답을 정한다: right → 200, wrong → 401 INVALID_CREDENTIALS (동시 시도가 겹치게 100ms 늦게),
- * bad → 400, boom → 500, 그 밖(읽을 수 없는 본문 포함) → 400
+ * slow → 2초 뒤 401 (응답 전에 클라이언트가 끊는 경우), bad → 400, boom → 500, 그 밖(읽을 수 없는 본문 포함) → 400
  */
 @TestConfiguration
 public class FakeAccountServiceConfig {
@@ -48,6 +48,11 @@ public class FakeAccountServiceConfig {
                                     status = 401;
                                     json = "{\"success\":false,\"error\":{\"code\":\"INVALID_CREDENTIALS\"}}";
                                     delay = Duration.ofMillis(100);
+                                }
+                                case "slow" -> {
+                                    status = 401;
+                                    json = "{\"success\":false,\"error\":{\"code\":\"INVALID_CREDENTIALS\"}}";
+                                    delay = Duration.ofSeconds(2);
                                 }
                                 case "boom" -> {
                                     status = 500;

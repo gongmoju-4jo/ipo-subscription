@@ -16,14 +16,18 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
 
 import static com.gongmoju.gateway.login.FakeAccountServiceConfig.BACKEND_HITS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 // 로그인 시도 제한. 가짜 계좌 서비스를 띄우고 실제 Redis(redis:7)로 확인한다
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -195,6 +199,40 @@ class LoginAttemptFilterTest extends RedisTestSupport {
         assertThat(BACKEND_HITS.get() - hitsBefore).isEqualTo(5);
         assertThat(statuses).filteredOn(status -> status == 401).hasSize(5);
         assertThat(statuses).filteredOn(status -> status == 429).hasSize(15);
+    }
+
+    // 끊긴 요청은 완료, 오류 신호 없이 취소만 온다. 되돌리지 않으면 401이 아니어도 실패로 남는다
+    @Test
+    void 서비스_응답_전에_클라이언트가_끊으면_예약을_되돌린다() throws Exception {
+        String key = LoginAttemptRedisRepository.key(LOGIN_ID);
+        WebClient client = WebClient.create("http://localhost:" + port);
+
+        // 가짜 서비스는 slow에 2초 뒤 401을 준다. 그 전에 끊는다
+        Mono<Integer> request = client.post().uri("/api/v1/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body(LOGIN_ID, "slow"))
+                .exchangeToMono(response -> response.releaseBody().thenReturn(response.statusCode().value()))
+                .timeout(Duration.ofMillis(800));
+        CompletableFuture<Integer> result = request.toFuture();
+
+        // 서비스로 가는 동안은 예약이 잡혀 있다
+        assertThat(waitForValue(key, "1")).isTrue();
+        assertThatThrownBy(result::join).hasCauseInstanceOf(TimeoutException.class);
+
+        // 끊긴 뒤 되돌려지고, 서비스가 늦게 401을 줘도 실패로 남지 않는다
+        assertThat(waitForValue(key, "0")).isTrue();
+        Thread.sleep(2000);
+        assertThat(TEMPLATE.opsForValue().get(key).block()).isEqualTo("0");
+    }
+
+    private static boolean waitForValue(String key, String expected) throws InterruptedException {
+        for (int i = 0; i < 50; i++) {
+            if (expected.equals(TEMPLATE.opsForValue().get(key).block())) {
+                return true;
+            }
+            Thread.sleep(20);
+        }
+        return false;
     }
 
     @Test

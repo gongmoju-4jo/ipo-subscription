@@ -106,7 +106,8 @@ v3() {
   local ipo t0
   ipo="$(bash loadtest/seed/new_ipo.sh | tail -1)"
   [[ "$ipo" =~ ^[0-9a-f-]{36}$ ]] || die "공모주 ID를 받지 못함: $ipo"
-  t0="$(q "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"');")"
+  # 마이크로초까지 기록한다. 초 단위로 잘리면 시작 직전 1초 안에 생성된 Outbox 행도 집계되어 토픽 차이가 음수로 계산될 수 있다
+  t0="$(q "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"');")"
   # 진행 중 기록은 임시 파일에 두고, 모든 파일을 저장한 후에만 meta.txt로 공개한다 (중간 실패 회차가 집계에 포함되지 않게)
   local m="$p-meta.tmp"
   rm -f "$p-meta.txt"

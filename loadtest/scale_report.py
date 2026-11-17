@@ -288,7 +288,8 @@ def main():
             if r["meta"].get("drain_timeout"):
                 w(f"- **{label} r{r['n']} 처리 완료 대기 시간 초과**: 원인 미확인")
             if r["meta"].get("k6_exit", "0") != "0":
-                w(f"- **{label} r{r['n']} k6 종료 코드 {r['meta']['k6_exit']}**: 99면 응답 시간 임계값 위반 (이 검증의 판정 대상 아님)")
+                w(f"- **{label} r{r['n']} k6 종료 코드 {r['meta']['k6_exit']}**: 99면 k6 임계값(thresholds) 위반, 위반 항목은 "
+                  f"`loadtest/results/{r['meta'].get('run', '?')}/summary.json`의 `thresholds` (이 검증의 판정 대상 아님)")
 
     w("\n## 4. V4 입장, V5 강제 종료 (직접 기록)\n")
     w("- **V4**: 적용 전 1분 _명, 적용 후 1분 _명 (측정자 _, 방법 PR #181)")

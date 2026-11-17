@@ -9,11 +9,11 @@ import os
 import re
 import statistics
 
-# V1 쿼리 → 스케줄러. pg_stat_statements는 상수를 $1처럼 바꿔 저장하므로 상수 대신 구조로 구분한다.
+# V1 쿼리 → 스케줄러. 상수가 그대로 저장되거나($1로 바뀌거나) 둘 다 매칭되도록 구조로 구분한다 (11/17 실측: 네이티브 쿼리의 'PENDING'은 그대로 저장됨).
 # 한 번 실행할 때 대표 쿼리를 1번 실행하므로, 같은 그룹에 쿼리가 여러 개면 가장 큰 calls를 실행 횟수로 본다
 RULES = [
     ("마감", "subscription_app", lambda s: re.search(r"subscription_end_at\s*<=", s)),
-    ("시간 초과", "subscription_app", lambda s: re.search(r"not exists", s) and re.search(r"\bs\.status\s*=\s*\$", s)),
+    ("시간 초과", "subscription_app", lambda s: re.search(r"not exists", s) and re.search(r"\bs\.status\s*=\s*(\$|')", s)),
     ("반환 재요청", "subscription_app", lambda s: re.search(r"not exists", s) and re.search(r"\bs\.status\s+in\s*\(", s)),
     ("원장 대사", "account_app", lambda s: re.search(r"ledger_entry", s) and not re.search(r"\boutbox\b", s)),
     ("Outbox 발행기 (계좌)", "account_app", lambda s: is_outbox_poll(s)),
@@ -165,15 +165,17 @@ def main():
     w("|---|---|---|---|---|")
     for name, _, _ in RULES:
         bc, ac = calls(b1, name), calls(a1, name)
+        bs = "측정 안 함" if bc is None else bc
+        as_ = "측정 안 함" if ac is None else ac
         if name in EXPECT:
             e = EXPECT[name]
             ok = ac is not None and e[1] <= ac <= e[2]
             note = verdict(ok)
             if not ok and ac is not None and ac >= 20 and name in ("시간 초과", "반환 재요청"):
                 note = "락 미적용 (정합성은 낙관적 락으로 보장)"
-            w(f"| {name} | {bc} | {ac} | {e[0]} → {e[1]}-{e[2]} | {note} |")
+            w(f"| {name} | {bs} | {as_} | {e[0]} → {e[1]}-{e[2]} | {note} |")
         else:
-            w(f"| {name} | {bc} | {ac} | 판정 제외 (lockAtLeastFor 0초, V3로 판정) | 참고 |")
+            w(f"| {name} | {bs} | {as_} | 판정 제외 (lockAtLeastFor 0초, V3로 판정) | 참고 |")
     w("\n- **계산**: 그룹에 속한 쿼리의 `calls` 최댓값 (스케줄러 1회 실행 = 대표 쿼리 1회)")
     w("- **기대 근거**: 주기 5초 x 60초 = 12회 x 인스턴스 2개 = 24회 → 락 적용 후 `lockAtLeastFor` 4초라 12회\n")
     w("<details>\n<summary>V1 매칭 쿼리 (스케줄러별 calls, 쿼리 앞 120자)</summary>\n")

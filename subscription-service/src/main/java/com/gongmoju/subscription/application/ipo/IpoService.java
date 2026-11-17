@@ -12,8 +12,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -25,6 +27,7 @@ public class IpoService {
     private static final Set<String> LIST_SORTABLE_FIELDS = Set.of("createdAt");
 
     private final IpoRepository ipoRepository;
+    private final CompetitionRateReader competitionRateReader;
 
     /**
      * 관리자가 공모주를 등록한다 (API 명세 3.6, F-18). 등록 규칙은 도메인({@link Ipo#register})이 확인한다.
@@ -45,15 +48,18 @@ public class IpoService {
     /**
      * 공모주 목록을 조회한다. 청약 시작 전, 진행 중, 마감된 종목을 모두 돌려준다.
      * 정렬을 지정하지 않으면 등록 시각 최신순이고, 같은 시각이면 ID 순이다 (시드는 등록 시각이 모두 같다).
+     * 경쟁률은 한 페이지의 공모주를 한 번에 붙인다 ({@link CompetitionRateReader}: 사본에서 읽고, 없는 공모주만 DB로 한 번에 합산).
+     * 트랜잭션을 걸지 않는다: 공모주 조회와 DB 합산이 각자 저장소 호출 동안만 커넥션을 쓰고, 다른 요청의 합산을 기다리는 동안에는 커넥션을 쥐지 않게
+     * (OSIV가 꺼져 있고 공모주에 지연 로딩 연관이 없어 트랜잭션 밖에서 값을 읽어도 됨).
      *
      * @param pageable 페이지 정보
      * @return 공모주 페이지. 없으면 빈 페이지
      * @throws BusinessException 정렬할 수 없는 필드면 VALIDATION_ERROR(400)
      */
-    @Transactional(readOnly = true)
     public Page<IpoResult> list(Pageable pageable) {
-        return ipoRepository.findAll(PageableUtils.toStablePageable(pageable, LIST_SORTABLE_FIELDS))
-                .map(IpoResult::from);
+        Page<Ipo> ipos = ipoRepository.findAll(PageableUtils.toStablePageable(pageable, LIST_SORTABLE_FIELDS));
+        Map<UUID, BigDecimal> rates = competitionRateReader.rates(ipos.getContent());
+        return ipos.map(ipo -> IpoResult.of(ipo, rates.get(ipo.getId())));
     }
 
     /**
@@ -69,16 +75,15 @@ public class IpoService {
     }
 
     /**
-     * 공모주 한 건을 조회한다.
+     * 공모주 한 건을 경쟁률과 함께 조회한다. 목록과 같은 이유로 트랜잭션을 걸지 않는다.
      *
      * @param ipoId 공모주 ID
      * @return 공모주
      * @throws BusinessException 없으면 RESOURCE_NOT_FOUND(404)
      */
-    @Transactional(readOnly = true)
     public IpoResult get(UUID ipoId) {
-        return ipoRepository.findById(ipoId)
-                .map(IpoResult::from)
+        Ipo ipo = ipoRepository.findById(ipoId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.RESOURCE_NOT_FOUND, "공모주를 찾을 수 없습니다.", "ipoId"));
+        return IpoResult.of(ipo, competitionRateReader.rates(List.of(ipo)).get(ipo.getId()));
     }
 }

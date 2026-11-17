@@ -19,6 +19,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -195,6 +196,21 @@ public class Ipo extends BaseEntity {
      */
     public boolean hasFullMarginRate() {
         return marginRate.compareTo(BigDecimal.ONE) == 0;
+    }
+
+    /**
+     * 경쟁률(F-15)을 계산함. 신청 수량 / 일반청약 물량, 소수 둘째 자리에서 반올림(HALF_UP).
+     * 어떤 청약의 수량을 셀지는 호출하는 쪽이 정함 (조회 응답은 {@code SubscriptionStatus.ALLOCATION_TARGETS}).
+     *
+     * @param requestedQuantity 셀 청약의 신청 수량 합 (0 이상)
+     * @return 경쟁률 (예: 15.27이면 15.27:1). 신청 수량이 0이면 0.00
+     * @throws IllegalArgumentException 신청 수량 합이 음수
+     */
+    public BigDecimal competitionRate(long requestedQuantity) {
+        if (requestedQuantity < 0) {
+            throw new IllegalArgumentException("신청 수량 합은 0 이상이어야 합니다: " + requestedQuantity);
+        }
+        return BigDecimal.valueOf(requestedQuantity).divide(BigDecimal.valueOf(retailQuantity), 2, RoundingMode.HALF_UP);
     }
 
     /**

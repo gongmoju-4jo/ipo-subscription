@@ -6,10 +6,10 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * 대기열 테스트용 Redis 컨테이너 (redis:7, docker-compose와 같은 이미지). 테스트 클래스들이 컨테이너 하나를 같이 쓴다.
+ * 게이트웨이 Redis 테스트용 컨테이너 (redis:7, docker-compose와 같은 이미지). 대기열, 로그인 시도 제한 테스트 클래스들이 컨테이너 하나를 같이 쓴다.
  * Spring 컨텍스트 없이 템플릿만 만들어 스크립트를 직접 확인한다.
  */
-abstract class RedisTestSupport {
+public abstract class RedisTestSupport {
 
     @SuppressWarnings("resource")
     private static final GenericContainer<?> REDIS =

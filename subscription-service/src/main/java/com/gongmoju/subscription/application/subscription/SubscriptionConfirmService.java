@@ -1,6 +1,7 @@
 package com.gongmoju.subscription.application.subscription;
 
 import com.gongmoju.common.event.ProcessedEventRepository;
+import com.gongmoju.subscription.domain.ipo.CompetitionRateCounter;
 import com.gongmoju.subscription.domain.subscription.MarginReserved;
 import com.gongmoju.subscription.domain.subscription.Subscription;
 import com.gongmoju.subscription.domain.subscription.SubscriptionRepository;
@@ -9,6 +10,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -21,6 +26,7 @@ public class SubscriptionConfirmService {
 
     private final ProcessedEventRepository processedEventRepository;
     private final SubscriptionRepository subscriptionRepository;
+    private final CompetitionRateCounter competitionRateCounter;
 
     /**
      * 증거금 확보 성공 응답을 처리함 (이벤트 명세 {@code margin.reserved} 절). 처리 기록, 청약 상태 전환을 한 트랜잭션으로 처리함.
@@ -28,7 +34,7 @@ public class SubscriptionConfirmService {
      * <p>
      * 받은 때의 청약 상태에 따라 처리가 다름.
      * <ul>
-     *   <li>{@code PENDING}: {@code CONFIRMED}로 전환함</li>
+     *   <li>{@code PENDING}: {@code CONFIRMED}로 전환함. 커밋된 뒤 경쟁률 사본(Redis)에 신청 수량을 더함 (F-15)</li>
      *   <li>{@code CONFIRMED} 이후: 중복 응답이므로 로그만 남기고 정상 종료함</li>
      *   <li>{@code COMPENSATING}, {@code CANCELLED}, {@code REJECTED}: 정상적으로는 오지 않는 응답이므로 에러 로그를 남기고 상태는 바꾸지 않음</li>
      * </ul>
@@ -67,7 +73,19 @@ public class SubscriptionConfirmService {
                     subscription.getId(), event.marginId(), subscription.getMarginAmount(), event.amount());
         }
         subscription.confirm(event.marginId(), event.reservedAt());
+        addToCompetitionRateAfterCommit(subscription.getIpo().getId(), subscription.getRequestedQuantity());
         log.info("청약을 확정함. subscriptionId={}, marginId={}", subscription.getId(), event.marginId());
         return ConfirmResult.CONFIRMED;
+    }
+
+    // 확정이 커밋된 뒤에만 더한다 (롤백되면 더하지 않음. confirm()의 트랜잭션 안에서만 불림). 같은 청약은 PENDING에서 한 번만 확정되므로 한 번만 더해진다.
+    // 경쟁률에서 빠지는 전이(투자자 취소: CONFIRMED → CANCEL_REQUESTED)는 아직 구현 전이다. 구현하면 그 커밋 뒤에 빼는 호출을 넣어야 한다
+    private void addToCompetitionRateAfterCommit(UUID ipoId, long requestedQuantity) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                competitionRateCounter.addConfirmed(ipoId, requestedQuantity);
+            }
+        });
     }
 }

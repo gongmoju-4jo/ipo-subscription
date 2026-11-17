@@ -33,7 +33,7 @@ docker-compose up -d postgres kafka kafka-init kafka-ui redis
 
 필요: **JDK 21**, Docker + Compose v2 이상, IntelliJ
 
-> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, Redis(접속 대기열), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana), 분산 추적(Zipkin), 로그 수집(Loki, Alloy)이 있습니다.
+> ✏️ docker-compose에는 PostgreSQL, Kafka, Kafka-UI, Redis(접속 대기열, 경쟁률 사본), 서비스 컨테이너 5개, 모니터링(Prometheus, Grafana), 분산 추적(Zipkin), 로그 수집(Loki, Alloy)이 있습니다.
 
 ### 📌 Claude Code
 
@@ -77,7 +77,7 @@ ipo-subscription/
 | account / subscription / allocation | 8081 / 8082 / 8083 |
 | PostgreSQL | 5432 |
 | Kafka / Kafka-UI | 29092 / 8989 |
-| Redis | 6379 (접속 대기열. 게이트웨이만 사용) |
+| Redis | 6379 (게이트웨이 접속 대기열, 로그인 시도 제한, 청약 서비스 경쟁률 사본) |
 | Prometheus / Grafana | 9090 / 3000 |
 | Zipkin | 9411 (Loki, Alloy는 열지 않음. Grafana에서 조회) |
 | gateway 관리 포트 | 18090 (헬스체크, 지표 수집 전용. IntelliJ로 실행하면 내 PC에 열리고, Docker에서는 열지 않음) |
@@ -105,6 +105,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 📌 **Gateway(8080)를 거치는 요청은 토큰이 필요**하다. 공개 경로만 예외: `POST /api/v1/users`, `POST /api/v1/auth/login`, Swagger(`GET /swagger-ui/**`, `/v3/api-docs/**`, `/*-service/v3/api-docs`). 공개 경로는 메서드와 경로가 정확히 맞아야 하고(끝 슬래시가 붙으면 공개가 아님), 토큰을 읽지 않는다
 - 📌 JWT 검증: HS256 서명, 만료, `iss`=**`account-service`**(문자열 비교), `sub`, `role`. `exp`가 없는 토큰은 거절. 실패하면 401 (만료는 `TOKEN_EXPIRED`, 그 외는 `UNAUTHORIZED`)
 - 📌 역할: **USER, ADMIN** (common `UserRole`과 같은 값). `/api/v1/admin/**`은 ADMIN만, 일반 회원은 403 `FORBIDDEN`
+- 로그인(`POST /api/v1/auth/login`)은 로그인 ID별로 첫 실패부터 15분 안에 5번 실패하면 그때부터 15분 동안 429 ([로그인 시도 제한](#로그인-시도-제한))
 - 클라이언트가 보낸 `X-User-Id`, `X-User-Role`, `X-Request-Received-At`를 모두 제거한 뒤 Gateway가 다시 설정한다 (서비스, Audit이 이 헤더를 신뢰)
 - 클라이언트가 보낸 추적 헤더(`traceparent`, `tracestate`, `baggage`, `b3`, `X-B3-*`)도 지운다. 외부 요청은 항상 새 trace로 시작하고, 서비스로 보낼 때 Gateway가 자기 `traceparent`를 붙인다 (외부가 traceId를 정하거나 샘플링을 켜지 못하게. [분산 추적](#분산-추적-zipkin))
   - `X-User-Id` = 토큰의 `sub`, `X-User-Role` = 토큰의 `role` (토큰이 없는 공개 경로에는 붙지 않음)
@@ -129,6 +130,32 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 관리자 승격, 해제, 비밀번호 변경은 없다
 - `.env`의 두 값을 바꾼 뒤에는 IntelliJ는 계좌 서비스 재시작, Docker는 `docker-compose up -d account-service` (`restart`로는 환경변수가 바뀌지 않는다)
 - `ADMIN_PASSWORD`에 `$`를 쓰지 않는다. Spring이 값 안의 `${...}`를 다른 설정으로 바꾸려 해서, 기동이 실패하고 오류 로그에 값이 그대로 찍힌다
+
+### 로그인 시도 제한
+
+같은 로그인 ID로 첫 실패부터 15분 안에 5번 실패하면, 그때부터 15분 동안 그 ID의 로그인을 게이트웨이가 막는다. 코드는 `api-gateway/.../login/`, 설정은 `login-attempt.*`
+
+- 차단 중이면 서비스로 보내지 않고 429 `TOO_MANY_REQUESTS` "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요." + `Retry-After`(남은 초). 맞는 비밀번호여도 막는다
+  - 평소 실패는 지금처럼 401 `INVALID_CREDENTIALS` 하나다. 남은 횟수는 알려주지 않는다
+  - 차단 중 시도는 차단 시간을 늘리지 않는다. 5번째 실패가 첫 실패 14분 뒤여도 그때부터 15분 막힌다
+  - 15분 안에 5번이 차지 않으면 횟수가 사라지고 다음 실패부터 다시 센다 (첫 실패 기준 고정 구간). 그래서 구간이 끝나기 직전 4번, 직후 5번처럼 짧은 사이에 9번까지 서비스로 갈 수 있다 (9번째에 막힘). 막히지 않고 시도할 수 있는 수는 길게 보면 15분에 4번으로, 실패 시각을 하나씩 기록하는 방식(이동 구간)과 같다
+- 로그인 ID별로만 센다 (IP별 X). 없는 ID도 같은 방식으로 세어 응답으로 가입 여부가 드러나지 않는다
+  - 남의 ID로 일부러 15분 차단을 걸 수 있다 (영구 잠금이 아니라 피해는 15분). 여러 ID를 돌아가며 시도하는 공격은 막지 않는다
+- 서비스 응답으로 센다: 401이면 실패, 2xx면 횟수를 지움, 그 밖(400, 5xx, 서비스 호출 실패, 서비스 응답 전에 클라이언트가 끊음)은 세지 않는다
+  - 서비스로 보내기 전에 횟수를 먼저 올려서, 동시에 여러 번 보내도 서비스까지 가는 시도는 5번이다. 그사이 같은 ID로 로그인에 성공하면 횟수가 지워져, 이미 서비스로 간 시도의 결과는 세지 않고 그 뒤 시도부터 새로 센다 (성공하려면 비밀번호를 알아야 해서 우회 수단은 아니다)
+- 로그인 ID는 청약 신청의 입장 허가 확인과 같은 방식으로 본문에서 읽는다 (`JsonBodyReader`). 같은 키가 두 번 이상 있는 본문, 16KB를 넘는 본문, `loginId`, `password`가 문자열이 아닌 본문(숫자, 불리언, 배열, 객체)은 400 `VALIDATION_ERROR`로 막는다 (서비스는 `1234`를 `"1234"`로 바꿔 받아서, 세지 않고 보내면 제한을 피한다).
+  - 72바이트를 넘는 비밀번호는 세지 않고 서비스로 보내지도 않고, 서비스와 같은 401 `INVALID_CREDENTIALS`를 바로 준다. 서비스가 BCrypt 비교 없이 바로 틀렸다고 보는 비밀번호라(BCrypt는 72바이트까지만 씀), 세면 비용 없는 401마다 키가 15분씩 남는다. 서비스의 이 규칙(`AuthService.BCRYPT_MAX_BYTES`)을 바꾸면 게이트웨이도 같이 바꾼다 경로는 퍼센트 디코딩 후 비교하고 끝 슬래시도 대상이다
+- Redis 키: 로그인 ID마다 `login-fail:{로그인 ID의 SHA-256}` = 실패 횟수 (만료 15분). 로그인 ID 원문은 Redis에 두지 않는다. 되돌려 0이 되면 키를 지운다 (비밀번호 없는 요청처럼 서비스가 바로 400을 주는 요청으로 키를 쌓아 Redis 메모리를 채우지 못하게. 메모리 상한에 닿으면 같은 Redis를 쓰는 대기열도 멈춘다)
+- 📌 Redis 장애: 청약 신청(503)과 달리 **횟수 확인 없이 로그인을 통과시킨다** (Redis 장애가 로그인 장애로 번지지 않게). 그동안은 제한이 없다
+  - Redis가 200ms(`login-attempt.redis-timeout`) 안에 답하지 않아도 통과시키고, 그 뒤 5초(`redis-skip`) 동안은 Redis를 부르지 않는다. 게이트웨이 WARN 로그 `로그인 시도 제한 ... 실패 (Redis)`가 남는다
+  - 시간 초과로 포기한 예약 명령이 Redis가 살아난 뒤 늦게 실행되면 그 횟수는 되돌리지 못한다 (실행됐는지 알 수 없어서). 같은 ID로 이런 예약이 5개 쌓이면 Redis가 돌아온 뒤 그 ID가 최대 15분 막힐 수 있다. Redis가 멈춘 동안 같은 ID로 여러 번 시도해야 생긴다 (첫 시간 초과 뒤 5초 동안은 Redis를 부르지 않는다)
+  - Redis 장애 자체는 `QueueAdmissionDown` 알림으로 알 수 있다 ([Slack 장애 알림](#slack-장애-알림))
+- 예외 계정은 없다 (시연, 스모크, 관리자 계정 포함). 스모크와 부하 테스트는 맞는 비밀번호로만 로그인해 영향이 없다
+- 잠긴 계정을 바로 풀려면 그 ID의 키를 지운다 (기다리면 15분 뒤 풀린다). 로컬은 아래 그대로, 배포 서버는 Session Manager에서 `docker exec` 대신 `docker compose -f docker-compose.yml -f compose.perf.yml -f compose.prod.yml exec redis`
+  ```bash
+  LOGIN_ID='잠긴 로그인 ID'
+  docker exec ipo-redis redis-cli DEL "login-fail:$(printf '%s' "${LOGIN_ID}" | sha256sum | cut -d' ' -f1)"   # 1이면 풀림, 0이면 키가 없음
+  ```
 
 ### 접속 대기열
 
@@ -158,6 +185,24 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
   - 새로 등록된 공모주는 다음 갱신(최대 5초) 뒤부터 진입할 수 있다
 - Redis에 접속할 수 없으면 503 `SERVICE_UNAVAILABLE` (대기열 없이 통과시키지 않음)
 
+### 경쟁률 사본 (Redis)
+
+공모주 목록, 상세의 경쟁률(`competitionRate`, F-15)은 청약 서비스가 게이트웨이와 같은 Redis에 둔 사본에서 읽는다. 기준은 DB의 청약 행이고, 사본은 조회마다 DB에서 합산하지 않으려고 둔다 (조회마다 합산하면 확정 청약 10만 건 공모주에서 PostgreSQL이 막혀 청약 접수까지 멈춘다. S7, [부하 테스트 가이드](./LOADTEST.md))
+
+- 키: 공모주마다 `competition:requested:{ipoId}` = 배정 대상 청약(`CONFIRMED`, `ALLOCATED`, `REFUNDED`)의 신청 수량 합. 채우는 동안에는 `competition:loading:{ipoId}`(채우는 중 표시이자 그사이 확정의 합, 30초 뒤 자동 삭제)
+- 청약이 확정되면 커밋 뒤에 더한다. 사본이 있으면 사본에, 채우는 중이면 채우는 중 합계에 더하고, 둘 다 없으면 더하지 않는다 (다음 조회의 DB 합산에 들어 있음)
+- 사본이 없으면(처음, Redis 재시작, 만료) 조회가 채운다: 채우는 중 표시 → DB 합산 → DB 합산 + 채우는 중 합계로 넣기. 채우는 동안 확정된 청약이 빠지지 않게 하려는 순서다
+  - 같은 공모주는 서비스 안에서 한 요청만 합산하고 나머지는 그 결과를 기다린다 (10초를 넘으면 기다리지 않고 직접 합산). 인스턴스가 여럿이면 채우는 중 표시를 먼저 만든 쪽만 넣는다
+  - 채우기마다 토큰을 표시에 두어, 표시가 만료돼 다른 쪽이 다시 채우기 시작했거나 장애 복구로 지워진 뒤에는 늦게 끝난 채우기가 옛 값을 넣거나 남의 표시를 지우지 못한다
+  - 조회는 트랜잭션 없이 돌아 기다리는 요청이 DB 커넥션을 쥐지 않는다
+- 사본은 5분 뒤 만료되어 DB로 다시 계산된다 (`ipo.competition-rate.ttl`). DB 커밋과 Redis 갱신이 한 트랜잭션이 아니라서 남는 아주 드문 오차를 이 시간 안에 바로잡는다
+  - 커밋 직후 Redis에 더하기 전에 서비스가 죽으면 그 확정이 빠진다
+  - 채우는 중 표시를 만든 뒤 DB 합산이 시작되기 전(수 ms)에 커밋된 확정, 또는 커밋과 Redis 더하기 사이에 표시가 생긴 확정은 DB 합산과 채우는 중 합계에 함께 들어가 두 번 세질 수 있다 (그 몇 ms 안의 확정만이라 드물지만, 같은 공모주에 확정이 몰리면 여러 건일 수 있다)
+  - 경쟁률은 화면 표시용이라 배정 계산에는 쓰지 않는다 (배정은 DB의 확정 청약으로 따로 계산)
+- Redis 장애: 경쟁률을 DB로 계산하고 청약 접수, 확정은 그대로 동작한다. 실패하면 10초(`retry-after`) 동안 Redis를 부르지 않고, 그동안 더하지 못한 공모주는 Redis가 돌아오면 사본과 채우는 중 표시를 지워 DB로 다시 채운다 (낮은 값이 남지 않고, 진행 중이던 채우기도 옛 값을 넣지 못하게). Redis 상태는 청약 서비스 health에 넣지 않는다 (경쟁률 하나로 서비스 전체가 DOWN이 되지 않게)
+- 투자자 취소(`CANCEL_REQUESTED`)는 아직 구현 전이라 사본에서 빼는 코드가 없다. 구현하면 취소 커밋 뒤에 빼야 한다
+- Redis 없이 띄우는 테스트는 `ipo.competition-rate.redis-enabled=false` (조회마다 DB 합산)
+
 📌 청약 신청(`POST /api/v1/subscriptions`)은 그 공모주의 **입장 허가가 있어야** 서비스로 간다 (`AdmissionCheckFilter`)
 
 - 요청 본문의 `ipoId`로 허가를 확인한다. 다른 공모주의 허가로는 신청할 수 없다. 본문은 바꾸지 않고 서비스로 보낸다
@@ -180,7 +225,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 
 ### IntelliJ
 
-1. `docker-compose up -d postgres kafka kafka-init kafka-ui redis` (Kafka가 필요 없는 작업이면 `postgres`만. 게이트웨이를 띄우면 `redis`도 필요). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
+1. `docker-compose up -d postgres kafka kafka-init kafka-ui redis` (Kafka가 필요 없는 작업이면 `postgres`만. 게이트웨이를 띄우면 `redis`도 필요. 청약 서비스는 `redis`가 없어도 뜨고 경쟁률만 DB로 계산한다). `.env`가 없으면 [빠른 시작](#1--빠른-시작)의 `cp .env.example .env`부터
 2. `⌘8`/`Alt+8` Services 창 → Eureka 실행 → 나머지 실행
 3. http://localhost:8080/api/v1/unknown → 401 JSON(`UNAUTHORIZED`)이면 게이트웨이 정상 (토큰이 필요한 경로라서)
 
@@ -600,7 +645,7 @@ subscription-service/.../com/gongmoju/subscription/
 | `feign/` | 헤더 전달, 에러 디코더, 재시도, Feign 예외 처리 (Feign 있는 서비스만) |
 | `outbox/` | Outbox 엔티티, 저장소, 발행기, 설정(`outbox.publisher.*`), 자동 설정 (Kafka, JPA 있는 서비스만). 저장할 때의 추적 문맥(`trace_parent`)을 발행 때 이어 붙임 (Micrometer Tracing 있는 서비스만) |
 | `event/` | 처리한 이벤트 기록(중복 수신 방지): 엔티티, 포트(`ProcessedEventRepository`), 구현, 자동 설정 (JPA 있는 서비스만) |
-| `schedulerlock/` | 스케줄러 중복 실행 방지(ShedLock) 락 저장소, 자동 설정 (ShedLock 의존성과 DB가 있는 서비스만. 지금은 계좌, 청약). [아래](#스케줄러-중복-실행-방지-shedlock) |
+| `schedulerlock/` | 스케줄러 중복 실행 방지(ShedLock) 락 저장소, 자동 설정 (ShedLock 의존성과 DB가 있는 서비스만. 지금은 계좌, 청약, 배정). [아래](#스케줄러-중복-실행-방지-shedlock) |
 | `tracing/` | 분산 추적 수집 제외 규칙 (주기 작업, `/actuator/**` 등. Micrometer Tracing 있는 서비스만). [분산 추적](#분산-추적-zipkin) |
 | `config/` | 위 기능 + Swagger 공통 설정 자동 등록 (AutoConfiguration). `outbox/`, `event/`, `schedulerlock/`, `tracing/`의 자동 설정은 각 폴더에 있음 |
 
@@ -679,11 +724,11 @@ compileOnly 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'          // schedul
 
 인스턴스를 2개 이상 띄우면 `@Scheduled` 작업이 인스턴스마다 돈다. `@SchedulerLock`을 붙이면 같은 작업은 한 번에 한 인스턴스만 실행하고, 나머지는 그 차례를 건너뛴다 (기다리지 않음)
 
-- 락은 서비스 자기 스키마의 `shedlock` 표에 작업 이름마다 한 줄로 남는다. 표는 계좌, 청약 `schema.sql`이 만든다 (다른 서비스에 붙일 때는 ShedLock 의존성 두 줄과 같은 표를 추가)
+- 락은 서비스 자기 스키마의 `shedlock` 표에 작업 이름마다 한 줄로 남는다. 표는 계좌, 청약, 배정 `schema.sql`이 만든다 (다른 서비스에 붙일 때는 ShedLock 의존성 두 줄과 같은 표를 추가)
 - `shedlock` 표의 시각 컬럼은 팀 규칙과 달리 `TIMESTAMP`다. ShedLock이 DB 시각을 시간대 없는 UTC로 넣고 비교해서, `TIMESTAMPTZ`면 접속 시간대(IntelliJ로 띄운 KST 등)에 따라 락 시각이 9시간 어긋날 수 있다. 서비스에서 따로 만들지 말고 `schema.sql`의 정의를 그대로 쓴다
 - 락 만료는 DB 시각으로 판단한다 (인스턴스마다 시계가 조금 달라도 같은 기준)
 - `@SchedulerLock`을 붙이지 않은 스케줄러는 지금처럼 인스턴스마다 돈다. 이 설정이 들어와도 붙이기 전까지 동작은 바뀌지 않는다
-- 게이트웨이는 common, DB를 쓰지 않아 이 방식을 쓰지 않는다. 대기열 입장 스케줄러는 Redis 칸 키로 칸마다 한 대만 입장 처리한다 ([접속 대기열](#접속-대기열)). Outbox 발행기는 방식 결정 전이라 아직 붙이지 않는다 (#149)
+- 게이트웨이는 common, DB를 쓰지 않아 이 방식을 쓰지 않는다. 대기열 입장 스케줄러는 Redis 칸 키로 칸마다 한 대만 입장 처리한다 ([접속 대기열](#접속-대기열)). Outbox 발행기(common)에도 붙어 있다 ([아래](#outbox-발행기-락))
 
 붙이는 방법 (의존성, 설정은 이미 되어 있어 어노테이션만 추가)
 
@@ -700,16 +745,39 @@ void closeDueIpos() { ... }
   - 락은 "동시 실행"만 막는다. `lockAtLeastFor`가 0이면 A가 끝나자마자 B가 실행할 수 있어, 겹치지만 않을 뿐 인스턴스 수만큼 자주 돈다 (주기 5초, 인스턴스 2개면 5초에 최대 2번)
   - cron 작업도 꼭 둔다. 인스턴스끼리 시계가 몇 초 다르면 A가 04:00:00에 끝낸 뒤 B가 04:00:02에 같은 작업을 또 실행한다
 
-추천값 (실제 실행 시간을 보고 담당자가 정한다)
+추천값과 적용 현황 (값은 실제 실행 시간을 보고 담당자가 정한다. 적용 현황은 락을 붙이거나 뗄 때 같이 고친다)
 
-| 스케줄러 | 주기 | `lockAtMostFor` | `lockAtLeastFor` | 담당 |
-| --- | --- | --- | --- | --- |
-| `IpoCloseScheduler.closeDueIpos` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
-| `PendingTimeoutScheduler.handleTimedOutPending` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
-| `VoidRetryScheduler.retryStaleVoid` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
-| `LedgerReconciliationScheduler.reconcile` (계좌) | 매일 04:00 | `PT30M` | `PT5M` | 계좌 |
+| 스케줄러 | 주기 | `lockAtMostFor` | `lockAtLeastFor` | 담당 | 적용 |
+| --- | --- | --- | --- | --- | --- |
+| `IpoCloseScheduler.closeDueIpos` (청약) | 5초 | `PT1M` | `PT4S` | 청약 | ✅ #166 |
+| `PendingTimeoutScheduler.handleTimedOutPending` (청약) | 5초 | `PT1M` | `PT4S` | 청약 | 진행 중 |
+| `VoidRetryScheduler.retryStaleVoid` (청약) | 5초 | `PT1M` | `PT4S` | 청약 | 진행 중 |
+| `LedgerReconciliationScheduler.reconcile` (계좌) | 매일 04:00 | `PT30M` | `PT5M` | 계좌 | 진행 중 #167 |
+| `OutboxPublisher.publishPending` (common, 서비스 3개) | 끝나고 1초 | `PT1M` | 없음 | common ([아래](#outbox-발행기-락)) | ✅ #177 |
 
 - 주기를 설정값으로 바꿀 수 있는 스케줄러는 `lockAtLeastFor`도 주기에 맞춰야 한다. 어노테이션 값에 `"${키:기본값}"` 형식의 설정값을 쓸 수 있다
+
+#### Outbox 발행기 락
+
+인스턴스가 여러 개면 Outbox 발행기도 인스턴스마다 돌아 같은 미발행 행을 각자 Kafka로 보낸다 (Consumer가 처리 기록으로 걸러 잔고, 상태는 맞지만 메시지와 Consumer 처리가 인스턴스 수만큼 늘어난다). 그래서 발행기에 락을 걸어 한 번에 한 인스턴스만 발행한다 (#177)
+
+- 서비스 코드는 바꿀 것이 없다. common 발행기에 `@SchedulerLock`이 붙어 있어 ShedLock 의존성과 `shedlock` 표가 있는 서비스(계좌, 청약, 배정)는 자동으로 락이 걸린다
+- 한 번의 실행이 `lockAtMostFor`보다 길어지면 락이 풀려 다른 인스턴스가 같이 발행하므로, 실행 시간 상한(`max-run-duration`, 30초)에 닿으면 새 전송을 멈추고 락을 놓는다. 남은 행은 1초 뒤 다음 실행(락을 잡은 인스턴스)이 이어서 보낸다 (실패로 세지 않음)
+  - 대량 발행은 30초마다 1초 쉬어 최대 약 3% 늘어난다 (계산값)
+  - 상한에 닿을 때마다 INFO 로그 `Outbox 1회 실행 시간 상한(...) 도달`이 남는다
+  - 조회가 오래 걸려 상한이 지났어도 반복의 첫 행은 보낸다 (실행마다 조금씩은 발행되게). 다만 시작 뒤 `lock-at-most-for` - 5초 - `send-timeout`(청약 45초)이 지났으면 첫 행도 보내지 않는다. 그 뒤에 시작한 전송은 락이 풀린 뒤에 끝날 수 있어서다
+- `lockAtLeastFor`는 두지 않는다. 끝나면 바로 놓아 발행 지연이 늘지 않게 한다 (인스턴스가 2개면 빈 조회만 늘어난다)
+- 락을 잡은 인스턴스가 죽으면 `lockAtMostFor`(1분) 동안 발행이 멈췄다가 다른 인스턴스가 이어받는다
+- 인스턴스를 늘려도 발행 처리량은 1개일 때와 같다
+- 설정 (`outbox.publisher.*`, 기본값으로 동작해 서비스 `application.yml`에 넣지 않아도 된다)
+
+| 키 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `max-run-duration` | `30s` | 한 번의 실행이 새 전송을 시작하는 상한 |
+| `lock-at-most-for` | `PT1M` | 락이 저절로 풀리는 시간. 시간 형식은 `PT1M`처럼 ISO-8601로 적는다 |
+
+- `max-run-duration` + 5초(전송 호출 막힘, Producer `max.block.ms`) + `send-timeout`이 `lock-at-most-for`보다 짧아야 한다. 아니면 서비스가 기동하지 않는다 (청약: 30 + 5 + 10 = 45초 < 1분)
+- 확인: 인스턴스 2개에서 토픽별 Kafka 메시지 수(오프셋 합)가 Outbox 행 수와 같은지 본다. 락을 잡은 인스턴스는 `SELECT name, locked_by, lock_until FROM {서비스}.shedlock WHERE name = 'OutboxPublisher.publishPending'`
 
 확인 방법 (인스턴스 2개 환경, [부하 테스트 가이드](./LOADTEST.md) 3-5절)
 

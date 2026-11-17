@@ -94,6 +94,10 @@ v3() {
   local n="${2:-}"; [[ "$n" =~ ^[1-9]$ ]] || die "회차는 1-9: $n"
   local run="scale-$1-r$n" p="$d/v3-r$n"
   [ -f "$d/env.txt" ] || record_env "$d"
+  # 재실행이면 이전 완료 기록을 먼저 삭제하고 진행 중 표시를 생성한다. 이후 단계가 실패해도 이전 회차 결과가 집계되지 않고 미완료로 표시된다
+  local m="$p-meta.tmp"
+  rm -f "$p-meta.txt"
+  echo "started=1" > "$m"
 
   # 1. 이전 회차의 미발행 행이 남아 있으면 이번 회차 집계에 포함되므로 0건까지 대기
   local w=0
@@ -109,9 +113,7 @@ v3() {
   # 마이크로초까지 기록한다. 초 단위로 잘리면 시작 직전 1초 안에 생성된 Outbox 행도 집계되어 토픽 차이가 음수로 계산될 수 있다
   t0="$(q "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"');")"
   # 진행 중 기록은 임시 파일에 두고, 모든 파일을 저장한 후에만 meta.txt로 공개한다 (중간 실패 회차가 집계에 포함되지 않게)
-  local m="$p-meta.tmp"
-  rm -f "$p-meta.txt"
-  echo "ipo=$ipo" > "$m"; echo "t0=$t0" >> "$m"; echo "run=$run" >> "$m"
+  echo "ipo=$ipo" >> "$m"; echo "t0=$t0" >> "$m"; echo "run=$run" >> "$m"
 
   # 3. 오프셋, 부하 (종료 코드 99는 임계값 위반이라 측정은 계속한다)
   offsets > "$p-offsets-before.txt"

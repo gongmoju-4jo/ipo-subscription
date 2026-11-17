@@ -64,6 +64,19 @@ class V2Test(unittest.TestCase):
         self.assertEqual((n, dup, unknown), (2, 0, 2))
 
 
+class V2VerdictTest(unittest.TestCase):
+
+    def test_모든_획득이_해제_미관측이면_판정_불가다(self):
+        with tempfile.TemporaryDirectory() as d:
+            write(d, "v2-shedlock.txt", lock_row("Unknown.run", "h1", "00", "01:00:04") + lock_row("Unknown.run", "h2", "02", "01:00:06"))
+            n, _, dup, unknown = sr.v2(d)[("subscription", "Unknown.run")]
+        self.assertIn("판정 불가", sr.v2_verdict(n, dup, unknown))
+
+    def test_판정_가능한_획득이_있으면_중복_판정을_유지한다(self):
+        self.assertEqual(sr.v2_verdict(3, 0, 1), "✅ 통과")
+        self.assertEqual(sr.v2_verdict(3, 1, 1), "❌ 불합격")
+
+
 class V3Test(unittest.TestCase):
 
     def run_dir(self, root, n, meta="k6_exit=0\ncomplete=1\n", after="margin.reserve-requested 1000\nmargin.reserved 1000\n",

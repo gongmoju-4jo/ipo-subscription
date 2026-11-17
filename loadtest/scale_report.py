@@ -180,6 +180,13 @@ def verdict(ok):
     return "✅ 통과" if ok else "❌ 불합격"
 
 
+def v2_verdict(acquired, overlaps, unknown):
+    # 모든 획득이 해제 미관측이면 비교할 종료 시각이 없어서 중복 0건이 아니라 판정 불가로 표시한다
+    if acquired == unknown:
+        return "⚠️ 판정 불가 (모든 획득 해제 미관측)"
+    return verdict(overlaps == 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="loadtest/results/scale-verify")
@@ -246,7 +253,7 @@ def main():
     w("| 스키마 | 락 이름 | 획득 횟수 | 획득 인스턴스 수 | 해제 미관측 | 중복 획득 | 판정 |")
     w("|---|---|---|---|---|---|---|")
     for (sch, name), (n, hosts, ov, unknown) in sorted((l2 or {}).items()):
-        w(f"| {sch} | `{name}` | {n} | {hosts} | {unknown} | {ov} | {verdict(ov == 0)} |")
+        w(f"| {sch} | `{name}` | {n} | {hosts} | {unknown} | {ov} | {v2_verdict(n, ov, unknown)} |")
     w("\n- **중복 획득 계산**: 같은 락에서 다음 획득 시각(`locked_at`) < 이전 해제 시각(`lock_until`)인 경우. 해제를 관측한 획득만 계산")
     w("- **해제 미관측**: 실행 중 값(유지 시간 = `lockAtMostFor`)만 조회된 획득, 또는 `LOCK_AT_MOST_FOR`에 없는 락의 획득. 종료 시각을 알 수 없어 중복 획득 계산에서 제외 (측정 구간 마지막 획득 포함)")
     w("- **Outbox 발행기**: 락 유지가 수 ms라 1초 조회로 대부분 누락됨. V3 중복 발행 건수로 판정\n")

@@ -75,10 +75,13 @@ v2() {
   echo "V2 완료: $d/v2-shedlock.txt ($(wc -l < "$d/v2-shedlock.txt")행)"
 }
 
+# 토픽별 파티션 오프셋 합계. 조회 실패나 빈 결과를 0으로 기록하면 중복 발행이 틀리게 계산되므로 회차를 중단한다
 offsets() {
-  local t
+  local t out
   for t in $TOPICS; do
-    echo "$t $(docker exec ipo-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka:29092 --topic "$t" | awk -F: '{s+=$3} END {print s+0}')"
+    out="$(docker exec ipo-kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka:29092 --topic "$t")" || die "오프셋 조회 실패: $t"
+    echo "$out" | grep -qE "^$t:[0-9]+:[0-9]+$" || die "오프셋 결과 형식이 다름: $t ($out)"
+    echo "$t $(echo "$out" | awk -F: '{s+=$3} END {print s}')"
   done
 }
 
@@ -92,7 +95,7 @@ v3() {
   local run="scale-$1-r$n" p="$d/v3-r$n"
   [ -f "$d/env.txt" ] || record_env "$d"
 
-  # 1. 이전 회차의 미발행 행이 남아 있으면 이번 회차 집계에 섞이므로 0건까지 대기
+  # 1. 이전 회차의 미발행 행이 남아 있으면 이번 회차 집계에 포함되므로 0건까지 대기
   local w=0
   until [ "$(unpublished)" = "0" ]; do
     w=$((w + 1)); [ "$w" -le 60 ] || die "미발행 Outbox가 60초 넘게 남아 있음 (incident-response.md SQL 6 확인)"
@@ -104,13 +107,16 @@ v3() {
   ipo="$(bash loadtest/seed/new_ipo.sh | tail -1)"
   [[ "$ipo" =~ ^[0-9a-f-]{36}$ ]] || die "공모주 ID를 받지 못함: $ipo"
   t0="$(q "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"');")"
-  echo "ipo=$ipo" > "$p-meta.txt"; echo "t0=$t0" >> "$p-meta.txt"; echo "run=$run" >> "$p-meta.txt"
+  # 진행 중 기록은 임시 파일에 두고, 모든 파일을 저장한 후에만 meta.txt로 공개한다 (중간 실패 회차가 집계에 포함되지 않게)
+  local m="$p-meta.tmp"
+  rm -f "$p-meta.txt"
+  echo "ipo=$ipo" > "$m"; echo "t0=$t0" >> "$m"; echo "run=$run" >> "$m"
 
   # 3. 오프셋, 부하 (종료 코드 99는 임계값 위반이라 측정은 계속한다)
   offsets > "$p-offsets-before.txt"
   local code=0
   bash loadtest/run-k6.sh s0 --ipo "$ipo" --run-id "$run" || code=$?
-  echo "k6_exit=$code" >> "$p-meta.txt"
+  echo "k6_exit=$code" >> "$m"
 
   # 4. 처리 완료 대기: 처리 중 청약 0건, 미발행 Outbox 0건이 5초 간격으로 2번 연속
   local ok=0 waited=0 pend unpub
@@ -118,12 +124,12 @@ v3() {
     pend="$(q "SELECT count(*) FROM subscription.subscription WHERE ipo_id = '$ipo' AND status IN ('PENDING', 'COMPENSATING', 'CANCEL_REQUESTED');")"
     unpub="$(unpublished)"
     if [ "$pend" = "0" ] && [ "$unpub" = "0" ]; then ok=$((ok + 1)); else ok=0; fi
-    waited=$((waited + 5)); [ "$waited" -le "${DRAIN_TIMEOUT:-600}" ] || { echo "drain_timeout=1 pending=$pend unpublished=$unpub" >> "$p-meta.txt"; break; }
+    waited=$((waited + 5)); [ "$waited" -le "${DRAIN_TIMEOUT:-600}" ] || { echo "drain_timeout=1 pending=$pend unpublished=$unpub" >> "$m"; break; }
     sleep 5
   done
   # 다른 인스턴스가 같은 행을 늦게 보낸 중복까지 포함하려고 10초 더 대기
   sleep 10
-  echo "drain_seconds=$waited" >> "$p-meta.txt"
+  echo "drain_seconds=$waited" >> "$m"
 
   # 5. 오프셋, 같은 시간대 Outbox 행 수
   offsets > "$p-offsets-after.txt"
@@ -131,7 +137,7 @@ v3() {
      UNION ALL SELECT topic FROM subscription.outbox WHERE created_at >= '$t0') o GROUP BY topic ORDER BY topic;" > "$p-outbox.txt"
 
   # 6. 정합성: verify.sql 22종 원본 + 판정용 건수 (verify.sql과 같은 조건을 count로)
-  (cd loadtest && bash verify.sh --ipo "$ipo" --run-id "$run") > /dev/null 2>&1 || echo "verify_sh_exit=$?" >> "$p-meta.txt"
+  (cd loadtest && bash verify.sh --ipo "$ipo" --run-id "$run") > /dev/null 2>&1 || echo "verify_sh_exit=$?" >> "$m"
   q "SELECT 'v02_margin_balance', count(*) FROM (SELECT a.account_id FROM account.account a LEFT JOIN account.margin m ON m.account_id = a.account_id AND m.status = 'PENDING' GROUP BY a.account_id, a.margin_balance HAVING a.margin_balance <> COALESCE(SUM(m.amount), 0)) x
      UNION ALL SELECT 'v03_last_ledger', count(*) FROM (WITH last AS (SELECT DISTINCT ON (account_id) account_id, cash_balance_after, margin_balance_after FROM account.ledger_entry ORDER BY account_id, created_at DESC, ledger_entry_id DESC) SELECT a.account_id FROM account.account a JOIN last l USING (account_id) WHERE a.cash_balance <> l.cash_balance_after OR a.margin_balance <> l.margin_balance_after) x
      UNION ALL SELECT 'v04_confirmed_minus_pending_margin', (SELECT count(*) FROM subscription.subscription WHERE ipo_id = '$ipo' AND status = 'CONFIRMED') - (SELECT count(*) FROM account.margin WHERE ipo_id = '$ipo' AND status = 'PENDING')
@@ -147,6 +153,8 @@ v3() {
   # 7. 계좌 서비스 중복 수신 로그 (두 인스턴스 합계)
   { $COMPOSE logs --no-color --since "$t0" account-service 2>/dev/null | grep -c "중복 수신, 건너뜀" || true; } > "$p-dup-log.txt"
 
+  echo "complete=1" >> "$m"
+  mv "$m" "$p-meta.txt"
   echo "V3 $1 r$n 완료: $p-*.txt (k6 원본 loadtest/results/$run/)"
 }
 

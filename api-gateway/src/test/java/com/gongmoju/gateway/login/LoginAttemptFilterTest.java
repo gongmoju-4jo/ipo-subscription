@@ -125,12 +125,30 @@ class LoginAttemptFilterTest extends RedisTestSupport {
         assertThat(BACKEND_HITS.get()).isEqualTo(hitsBefore);
     }
 
+    // 서비스는 {"loginId":1234}를 "1234"로 바꿔 로그인한다. 세지 않고 보내면 숫자로 된 로그인 ID는 제한 없이 시도할 수 있다
     @Test
-    void 로그인_ID가_문자열이_아니면_세지_않고_서비스로_보낸다() {
-        for (int i = 0; i < 6; i++) {
-            post("/api/v1/auth/login", "{\"loginId\":123,\"password\":\"wrong\"}", null).expectStatus().isUnauthorized();
+    void 로그인_ID가_문자열이_아니면_400이고_서비스로_보내지_않는다() {
+        int hitsBefore = BACKEND_HITS.get();
+
+        for (String loginId : List.of("1234", "1.5", "true", "[\"" + LOGIN_ID + "\"]", "{\"id\":\"" + LOGIN_ID + "\"}")) {
+            post("/api/v1/auth/login", "{\"loginId\":" + loginId + ",\"password\":\"wrong\"}", null)
+                    .expectStatus().isBadRequest()
+                    .expectBody().jsonPath("$.error.code").isEqualTo("VALIDATION_ERROR")
+                    .jsonPath("$.error.message").isEqualTo("로그인 ID는 문자열이어야 합니다.");
         }
 
+        assertThat(BACKEND_HITS.get()).isEqualTo(hitsBefore);
+        assertThat(TEMPLATE.keys("login-fail:*").collectList().block()).isEmpty();
+    }
+
+    @Test
+    void 로그인_ID가_없거나_null이면_세지_않고_서비스로_보낸다() {
+        int hitsBefore = BACKEND_HITS.get();
+
+        post("/api/v1/auth/login", "{\"password\":\"wrong\"}", null).expectStatus().isUnauthorized();
+        post("/api/v1/auth/login", "{\"loginId\":null,\"password\":\"wrong\"}", null).expectStatus().isUnauthorized();
+
+        assertThat(BACKEND_HITS.get()).isEqualTo(hitsBefore + 2);
         assertThat(TEMPLATE.keys("login-fail:*").collectList().block()).isEmpty();
     }
 

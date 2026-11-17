@@ -1,6 +1,7 @@
 package com.gongmoju.gateway.login;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gongmoju.gateway.login.LoginAttemptRedisRepository.Reservation;
 import com.gongmoju.gateway.queue.ApiResponse;
@@ -39,8 +40,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *       401은 실패로 남기고, 2xx는 횟수를 지우고, 그 밖(400, 5xx, 서비스 호출 오류)은 되돌린다</li>
  *   <li>차단 중이면 서비스로 보내지 않고 429 TOO_MANY_REQUESTS + Retry-After(남은 초). 남은 횟수는 알려주지 않는다</li>
  *   <li>로그인 ID는 서비스와 같은 방식으로 본문에서 읽는다 ({@link JsonBodyReader}). 같은 키가 두 번 이상이면 400.
- *       게이트웨이가 센 ID와 서비스가 로그인한 ID가 어긋나 제한을 피하지 못하게 한다.
- *       loginId가 문자열이 아니거나 본문을 읽을 수 없으면 세지 않고 보낸다 (서비스가 400을 준다)</li>
+ *       loginId가 문자열이 아니어도(숫자, 불리언, 배열, 객체) 400. 게이트웨이가 센 ID와 서비스가 로그인한 ID가 어긋나 제한을 피하지 못하게 한다.
+ *       loginId가 없거나 null이거나 본문을 읽을 수 없으면 세지 않고 보낸다 (서비스가 400을 준다)</li>
  *   <li>Redis 실패, {@code redisTimeout} 초과 → 횟수 확인 없이 보내고 WARN 로그. 그 뒤 {@code redisSkip} 동안은 Redis를 부르지 않는다.
  *       돈과 직결된 청약 신청의 입장 허가 확인(Redis 장애 시 503)과 달리, 로그인 제한은 부가 보호라 Redis 장애가 로그인 장애로 번지지 않게 한다</li>
  *   <li>경로는 퍼센트 디코딩 후 비교하고 끝 슬래시도 대상이다. 메서드는 대소문자를 가리지 않는다</li>
@@ -93,6 +94,9 @@ public class LoginAttemptFilter implements GlobalFilter, Ordered {
         JsonBody parsed = bodyReader.parse(exchange.getRequest(), body);
         if (parsed.duplicateKey()) {
             return write(exchange, HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "요청 본문에 같은 키가 두 번 이상 있습니다.");
+        }
+        if (hasNonTextLoginId(parsed)) {
+            return write(exchange, HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "로그인 ID는 문자열이어야 합니다.");
         }
         String loginId = parsed.text("loginId");
         if (loginId == null || redisSkipped()) {
@@ -147,6 +151,16 @@ public class LoginAttemptFilter implements GlobalFilter, Ordered {
                             name, properties.redisSkip(), e.toString());
                     return Mono.empty();
                 });
+    }
+
+    // 서비스(Jackson 기본 설정)는 숫자, 불리언도 문자열로 바꿔 로그인한다 ({"loginId":1234} → "1234").
+    // 게이트웨이가 세지 않고 보내면 숫자로 된 로그인 ID는 제한 없이 시도할 수 있어서, 문자열이 아닌 값은 여기서 막는다
+    private static boolean hasNonTextLoginId(JsonBody parsed) {
+        if (parsed.root() == null) {
+            return false;
+        }
+        JsonNode value = parsed.root().get("loginId");
+        return value != null && !value.isNull() && !value.isTextual();
     }
 
     private boolean redisSkipped() {

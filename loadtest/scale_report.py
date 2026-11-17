@@ -7,7 +7,7 @@
 import argparse
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # V1 쿼리 → 스케줄러. 상수가 원문으로 저장되거나($1로 변환되거나) 둘 다 매칭되도록 구조로 구분한다 (11/17 실측: 네이티브 쿼리의 'PENDING'은 원문으로 저장됨).
 # 한 번 실행할 때 대표 쿼리를 1번 실행하므로, 같은 그룹에 쿼리가 여러 개면 가장 큰 calls를 실행 횟수로 사용한다
@@ -29,6 +29,16 @@ EXPECT = {
 }
 # 기대값은 60초 측정 기준. 다른 측정 시간은 판정하지 않는다
 V1_SECONDS = 60
+# 락별 lockAtMostFor (설정 기본값). ShedLock은 획득 시 lock_until = 획득 시각 + lockAtMostFor로 저장하고, 해제 시 그 이전 시각으로 변경한다.
+# 그래서 유지 시간(lock_until - locked_at)이 이 값과 동일하면 실행 중 값, 미만이면 해제 값으로 구분한다. 설정을 변경하면 이 값도 같이 변경한다
+# 출처: application.yml (마감 ipo.close, 원장 대사 ledger.reconciliation), D-33 (Outbox), PROJECT_SETUP 5장 추천값 (시간 초과, 반환 재요청)
+LOCK_AT_MOST_FOR = {
+    "IpoCloseScheduler.closeDueIpos": timedelta(minutes=1),
+    "PendingTimeoutScheduler.handleTimedOutPending": timedelta(minutes=1),
+    "VoidRetryScheduler.retryStaleVoid": timedelta(minutes=1),
+    "LedgerReconciliationScheduler.reconcile": timedelta(minutes=30),
+    "OutboxPublisher.publishPending": timedelta(minutes=1),
+}
 # S0 요청 수. 청약 행이 이 수와 다르면 요청이 전부 실행되지 않은 회차로 판정한다
 S0_REQUESTS = 1000
 
@@ -86,14 +96,11 @@ def v2(after_dir):
         untils.add(ts(p[4]))
     result = {}
     for key, acq in locks.items():
-        # 실행 중에는 lock_until = 획득 + lockAtMostFor, 해제 후에는 획득 + lockAtLeastFor(또는 해제 시각)라 실행 중 값의 유지 시간이 최댓값이다.
-        # 최댓값만 조회된 획득은 해제를 관측하지 못한 것으로 판정하고 종료 시각을 None으로 설정한다 (모든 획득의 유지 시간이 동일하면 모두 해제 값으로 판정)
-        durations = {at: [u - at for u in untils] for at, (_, untils) in acq.items()}
-        longest = max(max(d) for d in durations.values())
-        shortest = min(min(d) for d in durations.values())
+        at_most = LOCK_AT_MOST_FOR.get(key[1])
         ends = {}
         for at, (_, untils) in acq.items():
-            released = [u for u in untils if u - at < longest] if longest > shortest else list(untils)
+            # 설정값을 알 수 없는 락은 해제 값을 구분할 근거가 없어 모든 획득을 해제 미관측으로 처리한다
+            released = [u for u in untils if at_most is not None and u - at < at_most - timedelta(milliseconds=1)]
             ends[at] = min(released) if released else None
         rows = sorted(acq)
         overlaps = sum(1 for a, b in zip(rows, rows[1:]) if ends[a] is not None and b < ends[a])
@@ -241,7 +248,7 @@ def main():
     for (sch, name), (n, hosts, ov, unknown) in sorted((l2 or {}).items()):
         w(f"| {sch} | `{name}` | {n} | {hosts} | {unknown} | {ov} | {verdict(ov == 0)} |")
     w("\n- **중복 획득 계산**: 같은 락에서 다음 획득 시각(`locked_at`) < 이전 해제 시각(`lock_until`)인 경우. 해제를 관측한 획득만 계산")
-    w("- **해제 미관측**: 실행 중 값(조회된 `lock_until` 중 최댓값)만 조회된 획득. 종료 시각을 몰라 중복 획득 계산에서 제외 (측정 구간 마지막 획득 포함)")
+    w("- **해제 미관측**: 실행 중 값(유지 시간 = `lockAtMostFor`)만 조회된 획득, 또는 `LOCK_AT_MOST_FOR`에 없는 락의 획득. 종료 시각을 알 수 없어 중복 획득 계산에서 제외 (측정 구간 마지막 획득 포함)")
     w("- **Outbox 발행기**: 락 유지가 수 ms라 1초 조회로 대부분 누락됨. V3 중복 발행 건수로 판정\n")
 
     w("## 3. V3 중복 발행, 정합성 (S0 1,000건)\n")

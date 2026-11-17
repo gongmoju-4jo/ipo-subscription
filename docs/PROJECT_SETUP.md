@@ -718,15 +718,15 @@ void closeDueIpos() { ... }
   - 락은 "동시 실행"만 막는다. `lockAtLeastFor`가 0이면 A가 끝나자마자 B가 실행할 수 있어, 겹치지만 않을 뿐 인스턴스 수만큼 자주 돈다 (주기 5초, 인스턴스 2개면 5초에 최대 2번)
   - cron 작업도 꼭 둔다. 인스턴스끼리 시계가 몇 초 다르면 A가 04:00:00에 끝낸 뒤 B가 04:00:02에 같은 작업을 또 실행한다
 
-추천값 (실제 실행 시간을 보고 담당자가 정한다)
+추천값과 적용 현황 (값은 실제 실행 시간을 보고 담당자가 정한다. 적용 현황은 락을 붙이거나 뗄 때 같이 고친다)
 
-| 스케줄러 | 주기 | `lockAtMostFor` | `lockAtLeastFor` | 담당 |
-| --- | --- | --- | --- | --- |
-| `IpoCloseScheduler.closeDueIpos` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
-| `PendingTimeoutScheduler.handleTimedOutPending` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
-| `VoidRetryScheduler.retryStaleVoid` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
-| `LedgerReconciliationScheduler.reconcile` (계좌) | 매일 04:00 | `PT30M` | `PT5M` | 계좌 |
-| `OutboxPublisher.publishPending` (common, 서비스 3개) | 끝나고 1초 | `PT1M` | 없음 | common ([아래](#outbox-발행기-락)) |
+| 스케줄러 | 주기 | `lockAtMostFor` | `lockAtLeastFor` | 담당 | 적용 |
+| --- | --- | --- | --- | --- | --- |
+| `IpoCloseScheduler.closeDueIpos` (청약) | 5초 | `PT1M` | `PT4S` | 청약 | ✅ #166 |
+| `PendingTimeoutScheduler.handleTimedOutPending` (청약) | 5초 | `PT1M` | `PT4S` | 청약 | 진행 중 |
+| `VoidRetryScheduler.retryStaleVoid` (청약) | 5초 | `PT1M` | `PT4S` | 청약 | 진행 중 |
+| `LedgerReconciliationScheduler.reconcile` (계좌) | 매일 04:00 | `PT30M` | `PT5M` | 계좌 | 진행 중 #167 |
+| `OutboxPublisher.publishPending` (common, 서비스 3개) | 끝나고 1초 | `PT1M` | 없음 | common ([아래](#outbox-발행기-락)) | ✅ #177 |
 
 - 주기를 설정값으로 바꿀 수 있는 스케줄러는 `lockAtLeastFor`도 주기에 맞춰야 한다. 어노테이션 값에 `"${키:기본값}"` 형식의 설정값을 쓸 수 있다
 

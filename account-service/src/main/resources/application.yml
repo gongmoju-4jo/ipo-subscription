@@ -114,6 +114,12 @@ ledger:
     enabled: true
     # 실행 시각 (KST, 초 분 시 일 월 요일). 기본 새벽 4시 하루 1회. 측정, 시연 때는 .env의 LEDGER_RECONCILIATION_CRON으로 변경 (예: 매분 "0 * * * * *")
     cron: ${LEDGER_RECONCILIATION_CRON:0 0 4 * * *}
+    # 인스턴스가 여러 개일 때 한 번 실행한 후 락을 유지하는 최소 시간 (ShedLock). 인스턴스끼리 시계 차이가 있어도 같은 회차를 두 번 실행하지 않게 한다
+    # cron 간격(하루) 미만으로 설정한다. 이 시간 안의 다음 실행 시각은 건너뛰므로, 인스턴스 1개여도 cron 간격이 이 값보다 작으면 이 시간에 1번만 실행된다
+    # 측정, 시연에서 cron을 1분 이하로 변경하면 .env의 LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR로 cron 간격 미만으로 같이 감소시킨다 (예: cron 10초면 PT5S)
+    lock-at-least-for: ${LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR:PT5M}
+    # 실행 중 인스턴스가 종료됐을 때 락이 해제되기까지의 시간 (ShedLock). 실행 시간 최댓값(10만 계좌 실측 1.6초)과 lock-at-least-for를 초과하는 값 (lock-at-least-for 이하면 대사가 실행되지 않음)
+    lock-at-most-for: ${LEDGER_RECONCILIATION_LOCK_AT_MOST_FOR:PT30M}
 
 logging:
   level:

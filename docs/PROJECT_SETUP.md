@@ -618,7 +618,7 @@ subscription-service/.../com/gongmoju/subscription/
 | `feign/` | 헤더 전달, 에러 디코더, 재시도, Feign 예외 처리 (Feign 있는 서비스만) |
 | `outbox/` | Outbox 엔티티, 저장소, 발행기, 설정(`outbox.publisher.*`), 자동 설정 (Kafka, JPA 있는 서비스만). 저장할 때의 추적 문맥(`trace_parent`)을 발행 때 이어 붙임 (Micrometer Tracing 있는 서비스만) |
 | `event/` | 처리한 이벤트 기록(중복 수신 방지): 엔티티, 포트(`ProcessedEventRepository`), 구현, 자동 설정 (JPA 있는 서비스만) |
-| `schedulerlock/` | 스케줄러 중복 실행 방지(ShedLock) 락 저장소, 자동 설정 (ShedLock 의존성과 DB가 있는 서비스만. 지금은 계좌, 청약). [아래](#스케줄러-중복-실행-방지-shedlock) |
+| `schedulerlock/` | 스케줄러 중복 실행 방지(ShedLock) 락 저장소, 자동 설정 (ShedLock 의존성과 DB가 있는 서비스만. 지금은 계좌, 청약, 배정). [아래](#스케줄러-중복-실행-방지-shedlock) |
 | `tracing/` | 분산 추적 수집 제외 규칙 (주기 작업, `/actuator/**` 등. Micrometer Tracing 있는 서비스만). [분산 추적](#분산-추적-zipkin) |
 | `config/` | 위 기능 + Swagger 공통 설정 자동 등록 (AutoConfiguration). `outbox/`, `event/`, `schedulerlock/`, `tracing/`의 자동 설정은 각 폴더에 있음 |
 
@@ -697,11 +697,11 @@ compileOnly 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'          // schedul
 
 인스턴스를 2개 이상 띄우면 `@Scheduled` 작업이 인스턴스마다 돈다. `@SchedulerLock`을 붙이면 같은 작업은 한 번에 한 인스턴스만 실행하고, 나머지는 그 차례를 건너뛴다 (기다리지 않음)
 
-- 락은 서비스 자기 스키마의 `shedlock` 표에 작업 이름마다 한 줄로 남는다. 표는 계좌, 청약 `schema.sql`이 만든다 (다른 서비스에 붙일 때는 ShedLock 의존성 두 줄과 같은 표를 추가)
+- 락은 서비스 자기 스키마의 `shedlock` 표에 작업 이름마다 한 줄로 남는다. 표는 계좌, 청약, 배정 `schema.sql`이 만든다 (다른 서비스에 붙일 때는 ShedLock 의존성 두 줄과 같은 표를 추가)
 - `shedlock` 표의 시각 컬럼은 팀 규칙과 달리 `TIMESTAMP`다. ShedLock이 DB 시각을 시간대 없는 UTC로 넣고 비교해서, `TIMESTAMPTZ`면 접속 시간대(IntelliJ로 띄운 KST 등)에 따라 락 시각이 9시간 어긋날 수 있다. 서비스에서 따로 만들지 말고 `schema.sql`의 정의를 그대로 쓴다
 - 락 만료는 DB 시각으로 판단한다 (인스턴스마다 시계가 조금 달라도 같은 기준)
 - `@SchedulerLock`을 붙이지 않은 스케줄러는 지금처럼 인스턴스마다 돈다. 이 설정이 들어와도 붙이기 전까지 동작은 바뀌지 않는다
-- 게이트웨이는 common, DB를 쓰지 않아 이 방식을 쓰지 않는다. 대기열 입장 스케줄러는 Redis 칸 키로 칸마다 한 대만 입장 처리한다 ([접속 대기열](#접속-대기열)). Outbox 발행기는 방식 결정 전이라 아직 붙이지 않는다 (#149)
+- 게이트웨이는 common, DB를 쓰지 않아 이 방식을 쓰지 않는다. 대기열 입장 스케줄러는 Redis 칸 키로 칸마다 한 대만 입장 처리한다 ([접속 대기열](#접속-대기열)). Outbox 발행기(common)에도 붙어 있다 ([아래](#outbox-발행기-락))
 
 붙이는 방법 (의존성, 설정은 이미 되어 있어 어노테이션만 추가)
 
@@ -726,8 +726,30 @@ void closeDueIpos() { ... }
 | `PendingTimeoutScheduler.handleTimedOutPending` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
 | `VoidRetryScheduler.retryStaleVoid` (청약) | 5초 | `PT1M` | `PT4S` | 청약 |
 | `LedgerReconciliationScheduler.reconcile` (계좌) | 매일 04:00 | `PT30M` | `PT5M` | 계좌 |
+| `OutboxPublisher.publishPending` (common, 서비스 3개) | 끝나고 1초 | `PT1M` | 없음 | common ([아래](#outbox-발행기-락)) |
 
 - 주기를 설정값으로 바꿀 수 있는 스케줄러는 `lockAtLeastFor`도 주기에 맞춰야 한다. 어노테이션 값에 `"${키:기본값}"` 형식의 설정값을 쓸 수 있다
+
+#### Outbox 발행기 락
+
+인스턴스가 여러 개면 Outbox 발행기도 인스턴스마다 돌아 같은 미발행 행을 각자 Kafka로 보낸다 (Consumer가 처리 기록으로 걸러 잔고, 상태는 맞지만 메시지와 Consumer 처리가 인스턴스 수만큼 늘어난다). 그래서 발행기에 락을 걸어 한 번에 한 인스턴스만 발행한다 (#177)
+
+- 서비스 코드는 바꿀 것이 없다. common 발행기에 `@SchedulerLock`이 붙어 있어 ShedLock 의존성과 `shedlock` 표가 있는 서비스(계좌, 청약, 배정)는 자동으로 락이 걸린다
+- 한 번의 실행이 `lockAtMostFor`보다 길어지면 락이 풀려 다른 인스턴스가 같이 발행하므로, 실행 시간 상한(`max-run-duration`, 30초)에 닿으면 새 전송을 멈추고 락을 놓는다. 남은 행은 1초 뒤 다음 실행(락을 잡은 인스턴스)이 이어서 보낸다 (실패로 세지 않음)
+  - 대량 발행은 30초마다 1초 쉬어 최대 약 3% 늘어난다 (계산값)
+  - 상한에 닿을 때마다 INFO 로그 `Outbox 1회 실행 시간 상한(...) 도달`이 남는다
+- `lockAtLeastFor`는 두지 않는다. 끝나면 바로 놓아 발행 지연이 늘지 않게 한다 (인스턴스가 2개면 빈 조회만 늘어난다)
+- 락을 잡은 인스턴스가 죽으면 `lockAtMostFor`(1분) 동안 발행이 멈췄다가 다른 인스턴스가 이어받는다
+- 인스턴스를 늘려도 발행 처리량은 1개일 때와 같다
+- 설정 (`outbox.publisher.*`, 기본값으로 동작해 서비스 `application.yml`에 넣지 않아도 된다)
+
+| 키 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `max-run-duration` | `30s` | 한 번의 실행이 새 전송을 시작하는 상한 |
+| `lock-at-most-for` | `PT1M` | 락이 저절로 풀리는 시간. 시간 형식은 `PT1M`처럼 ISO-8601로 적는다 |
+
+- `max-run-duration` + 5초(전송 호출 막힘, Producer `max.block.ms`) + `send-timeout`이 `lock-at-most-for`보다 짧아야 한다. 아니면 서비스가 기동하지 않는다 (청약: 30 + 5 + 10 = 45초 < 1분)
+- 확인: 인스턴스 2개에서 토픽별 Kafka 메시지 수(오프셋 합)가 Outbox 행 수와 같은지 본다. 락을 잡은 인스턴스는 `SELECT name, locked_by, lock_until FROM {서비스}.shedlock WHERE name = 'OutboxPublisher.publishPending'`
 
 확인 방법 (인스턴스 2개 환경, [부하 테스트 가이드](./LOADTEST.md) 3-5절)
 

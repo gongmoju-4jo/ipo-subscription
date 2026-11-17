@@ -151,7 +151,10 @@ public class LoginAttemptFilter implements GlobalFilter, Ordered {
             action = repository.release(loginId);
             name = "되돌리기";
         }
-        return redisCall(action.thenReturn(Boolean.TRUE), name).then();
+        Mono<Void> call = redisCall(action.thenReturn(Boolean.TRUE), name).then();
+        // 확정 중에 클라이언트가 끊어도(취소) 시작한 확정은 끝까지 실행한다. 함께 취소되면 5번째 실패의 차단 시간(15분)이
+        // 걸리지 않아, 401 헤더만 받고 끊어 차단을 줄일 수 있다. 끊기지 않으면 지금처럼 확정이 끝날 때까지 기다린다
+        return Mono.create(sink -> call.subscribe(null, sink::error, sink::success));
     }
 
     // Redis 호출에 시간 초과를 두고, 실패하면 비우고(통과) 건너뛰기 시간을 건다.

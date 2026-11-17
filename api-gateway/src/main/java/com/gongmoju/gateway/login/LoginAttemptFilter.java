@@ -108,7 +108,7 @@ public class LoginAttemptFilter implements GlobalFilter, Ordered {
                 .defaultIfEmpty(Optional.empty())
                 .flatMap(reservation -> {
                     if (reservation.isEmpty()) {
-                        // Redis 실패: 세지 않고 보낸다
+                        // Redis 실패, 시간 초과: 횟수 확인 없이 보낸다. 시간 초과로 포기한 예약이 Redis에서 늦게 실행되면 그 횟수는 남고 만료로 사라진다
                         return chain.filter(replayable);
                     }
                     return reservation.get().allowed()

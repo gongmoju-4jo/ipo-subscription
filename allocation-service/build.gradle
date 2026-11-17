@@ -21,6 +21,10 @@ dependencies {
 	// Feign 호출을 추적에 넣는다 (배정 → 청약 확정 목록 조회가 배정 trace에 이어짐). 버전은 Spring Cloud BOM
 	implementation 'io.github.openfeign:feign-micrometer'
 
+	// 스케줄러 중복 실행 방지 (common CommonSchedulerLockAutoConfiguration이 켜짐). Outbox 발행기 락에 쓴다 (#177). 버전은 common/build.gradle과 같게
+	implementation 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'
+	implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.10.0'
+
 	// contextLoads 등 DB 없이 띄우는 테스트용
 	testRuntimeOnly 'com.h2database:h2'
 

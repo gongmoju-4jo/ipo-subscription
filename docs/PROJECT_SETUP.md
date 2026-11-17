@@ -145,6 +145,10 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - 화면은 `pollIntervalMillis`마다 순번을 조회한다. 간격 = max(1초, 대기 인원 ÷ `queue.poll-budget`)라서 대기자가 많아도 초당 조회 수가 예산을 넘지 않는다
 - 조회가 받은 간격의 `queue.dropout-factor`배(3배) 동안 끊기면 입장 스케줄러가 대기열에서 이탈 처리한다. 진입, 조회할 때마다 기한이 늘어난다
 - 입장 스케줄러가 1초마다 `queue.admit-rate`명(전체 공모주 합, 기본 433)에게 앞에서부터 허가를 준다. 허가는 `queue.admission-ttl`(5분) 동안 유효
+  - 게이트웨이가 여러 대여도 입장 속도는 같다. 시간을 입장 주기(`queue.admit-interval`, 1초) 길이의 칸으로 나누고, 칸마다 Redis 키 `queue:admit-tick:{칸}`을 먼저 쓴 게이트웨이 한 대만 입장 처리한다. 나머지는 그 주기를 건너뛴다
+  - 칸은 Redis 시각으로 나눠 게이트웨이마다 시계가 조금 달라도 같은 칸으로 본다. 모든 게이트웨이가 같은 `queue.admit-interval`을 써야 한다
+  - 대기자가 없으면 칸을 차지하지 않는다. 마지막 대기자가 이탈해 대기열이 빈 공모주는 칸 없이 입장 처리 대상에서 빼기만 한다 (메모리 상한에서도 빼는 명령은 허용되어 `redis_oom`이 되지 않음). 건너뛴 게이트웨이도 입장 처리 성공으로 기록한다 (`QueueAdmissionDown`이 울리지 않음)
+  - 칸을 차지한 게이트웨이가 처리 중에 멈추면 그 칸은 0명이고 다음 칸에서 다른 게이트웨이가 이어 받는다. 두 게이트웨이가 칸 경계 앞뒤로 연달아 처리하면 짧은 순간 2배가 들어갈 수 있지만, 칸마다 한 번이라 평균은 그대로다
 - 공모주가 여러 개면 입장 인원을 대기자가 있는 공모주에 똑같이 나누되, 대기자가 몫보다 적은 공모주는 있는 만큼만 받고 남는 자리는 대기자가 많은 공모주로 넘긴다
   - 예 (433명): 대기 5만 명 + 3명 → 430명, 3명 / 5만 명 + 5만 명 → 217명, 216명
   - 대기자가 적은 공모주는 기다리지 않고 바로 입장한다
@@ -261,11 +265,13 @@ docker-compose restart {서비스 이름}                                       
 
 - 주소: http://localhost:9411 (`ZIPKIN_PORT`로 변경). Grafana Explore에서 데이터 소스 Zipkin을 골라도 같은 데이터가 보인다
 - trace 하나로 이어지는 구간: 게이트웨이 → 서비스(HTTP), 배정 → 청약(Feign), Kafka 발행 → 수신, Outbox. 외부 요청은 게이트웨이에서 새 trace로 시작한다 (클라이언트가 보낸 추적 헤더는 쓰지 않음)
-  - 예: 청약 신청 → 증거금 인출(계좌) → 청약 확정 / `ipo.closed` 수신 → 배정 → 배정 결과 발행 → 청약 배정 처리
+  - 예: 청약 신청 → 증거금 인출 요청 발행 (계좌의 인출 처리부터는 배치 수신이라 이어지지 않음, 아래) / `ipo.closed` 수신 → 배정 → 배정 결과 발행 → 청약 배정 처리
   - span 사이 빈 시간이 Outbox 발행 대기(발행 주기 1초)와 Consumer 대기다
 - Outbox 구간이 이어지는 방식: 행을 저장할 때 그 요청의 추적 문맥을 `outbox.trace_parent`에 같이 저장하고, 발행기가 그 문맥으로 보낸다. 메시지에는 `traceparent` 헤더가 붙고 받는 서비스가 이어 간다
 - 새 trace에서 시작하는 경우: 스케줄러가 시작한 흐름(공모주 마감 → `ipo.closed`), 추적 문맥 없이 저장된 Outbox 행
-- 이어지지 않는 구간: 계좌 서비스의 정산(`allocation.result` 배치 수신). Spring Kafka 3.3의 배치 리스너는 레코드마다 관측을 만들지 않아, 정산 처리 로그에는 traceId가 없고 정산 결과(`margin.settled`)는 청약 서비스 수신에서 새 trace로 시작한다. 배치 하나에 여러 배정의 메시지가 섞일 수 있어 배정 trace에 붙이지 않았다
+- 이어지지 않는 구간: 계좌 서비스의 배치 수신 두 곳. Spring Kafka 3.3의 배치 리스너는 레코드마다 관측을 만들지 않는다
+  - 정산(`allocation.result`): 정산 처리 로그에는 traceId가 없고 정산 결과(`margin.settled`)는 청약 서비스 수신에서 새 trace로 시작한다. 배치 하나에 여러 배정의 메시지가 섞일 수 있어 배정 trace에 붙이지 않았다
+  - 증거금 인출(`margin.reserve-requested`): 인출 처리 로그에는 traceId가 없고 인출 결과(`margin.reserved`, `margin.reserve-failed`)는 청약 서비스 수신에서 새 trace로 시작한다. 한 배치에 여러 청약의 메시지가 섞여 청약 신청 trace에 붙이지 않았다. 이어 붙이는 것은 후속 이슈로 처리
 - 모으지 않는 것 (요청이 없어도 몇 초마다 생겨서 목록을 덮는 것)
   - 주기 작업과 그 안의 호출: Outbox 발행 주기 실행, 대기열 입장 스케줄러(Redis), 청약 중 공모주 목록 갱신, Eureka 갱신. trace는 HTTP 요청, Kafka 수신에서만 시작한다
   - `/actuator/**`, 추적 문맥 없이 들어온 `/internal/**`(게이트웨이의 공모주 목록 갱신), 대기열 순번 조회(`GET /api/v1/queues/{ipoId}/entries/me`, 대기 화면이 계속 부름): 지표는 남고 Zipkin으로만 보내지 않는다
@@ -331,7 +337,7 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 | --- | --- | --- |
 | `redis_timeout` | Redis 응답 없음 (연결 끊김 또는 응답 지연으로 시간 초과) | 명령 시간 초과(2초), 입장 처리 5초 초과. **Redis 컨테이너가 멈춘 경우도 여기로 온다** (클라이언트가 재연결을 기다리다 시간 초과로 끝나서 "느림"과 "멈춤"을 구분할 수 없다) |
 | `redis_connection` | Redis 연결 실패 (연결 거부 또는 주소를 찾을 수 없음) | 새 연결을 맺지 못함. 게이트웨이가 Redis 없이 기동했을 때 등 |
-| `redis_oom` | Redis 메모리 상한 도달 (쓰기 거부) | `OOM command not allowed` (`maxmemory`, `noeviction`). 대기자가 있을 때 입장 허가를 쓰다가 거부된 경우라, 대기자가 없으면 이 사유로는 뜨지 않는다 (그때는 진입 API가 503) |
+| `redis_oom` | Redis 메모리 상한 도달 (쓰기 거부) | `OOM command not allowed` (`maxmemory`, `noeviction`). 대기자가 있을 때 칸 차지 또는 입장 허가를 쓰다가 거부된 경우라, 대기자가 없으면 이 사유로는 뜨지 않는다 (그때는 진입 API가 503) |
 | `redis_error` | Redis 오류 (키 자료형 불일치, 스크립트 오류 등) | 위에 해당하지 않는 Redis 오류 |
 | `other` | 게이트웨이 내부 오류 (Redis 외 원인) | Redis와 무관한 오류 (코드 오류 등) |
 
@@ -388,8 +394,8 @@ Grafana 알림 규칙이 30초마다 지표를 검사하고, 조건이 일정 �
 - 토픽, 파티션 키, 페이로드 → **이벤트 명세 문서** 기준 (코드보다 문서 먼저 수정)
 - 실패 메시지: `{토픽}.DLT`
 - 메시지 헤더 `traceparent`: 분산 추적 문맥 (W3C). Spring Kafka가 발행할 때 붙이고 받을 때 읽어서 Consumer 코드에서 다루지 않는다. 없을 수 있다 ([분산 추적](#분산-추적-zipkin))
-- 리스너, 템플릿 지표는 관측(observation) 기반이라 태그가 `spring_kafka_listener_id`, `error`(`none` 또는 예외 이름)다 (예: `spring_kafka_listener_seconds_count{spring_kafka_listener_id="account-margin-reserve-0", error="none"}`)
-  - 계좌 서비스의 정산 배치 리스너(`account-allocation-result`)는 이 지표가 없다. Spring Kafka 3.3은 배치 리스너 관측을 지원하지 않아 예전 형식 타이머를 쓰는데, 같은 이름에 태그가 다르면 Prometheus가 1건 리스너 지표를 받지 않아 배치 팩토리에서 끈다 (`KafkaConsumerConfig`). 정산 처리량, 랙은 Kafka 클라이언트 지표(`kafka_consumer_fetch_manager_*`)로 본다
+- 리스너, 템플릿 지표는 관측(observation) 기반이라 태그가 `spring_kafka_listener_id`, `error`(`none` 또는 예외 이름)다 (예: `spring_kafka_listener_seconds_count{spring_kafka_listener_id="org.springframework.kafka.KafkaListenerEndpointContainer#0-0", error="none"}`. `@KafkaListener`에 `id`를 지정하지 않은 리스너는 이런 자동 이름이 붙는다)
+  - 계좌 서비스의 배치 리스너(정산 `account-allocation-result`, 증거금 인출 `account-margin-reserve`)는 이 지표가 없다. Spring Kafka 3.3은 배치 리스너 관측을 지원하지 않아 예전 형식 타이머를 쓰는데, 같은 이름에 태그가 다르면 Prometheus가 1건 리스너 지표를 받지 않아 배치 팩토리에서 끈다 (`KafkaConsumerConfig`). 정산 처리량, 랙은 Kafka 클라이언트 지표(`kafka_consumer_fetch_manager_*`)로 본다. 인출은 배치 크기, 처리량을 `margin_reserve_batch_size_count`, `_sum`(배치 하나가 처리한 메시지 수의 분포)으로 보고, 배치가 실패해 건별로 다시 처리한 횟수는 `margin_reserve_batch_fallback_total`이다
 - 접속 주소 기본값: `localhost:29092` (서비스 `application.yml`의 `KAFKA_BOOTSTRAP_SERVERS`)
 - 실행: `docker-compose up -d kafka kafka-init kafka-ui`
 - Kafka-UI: http://localhost:8989 (토픽, 컨슈머 그룹 확인)
@@ -695,7 +701,7 @@ compileOnly 'net.javacrumbs.shedlock:shedlock-spring:6.10.0'          // schedul
 - `shedlock` 표의 시각 컬럼은 팀 규칙과 달리 `TIMESTAMP`다. ShedLock이 DB 시각을 시간대 없는 UTC로 넣고 비교해서, `TIMESTAMPTZ`면 접속 시간대(IntelliJ로 띄운 KST 등)에 따라 락 시각이 9시간 어긋날 수 있다. 서비스에서 따로 만들지 말고 `schema.sql`의 정의를 그대로 쓴다
 - 락 만료는 DB 시각으로 판단한다 (인스턴스마다 시계가 조금 달라도 같은 기준)
 - `@SchedulerLock`을 붙이지 않은 스케줄러는 지금처럼 인스턴스마다 돈다. 이 설정이 들어와도 붙이기 전까지 동작은 바뀌지 않는다
-- 게이트웨이는 common, DB를 쓰지 않아 이 방식을 쓰지 않는다. Outbox 발행기는 방식 결정 전이라 아직 붙이지 않는다 (#149)
+- 게이트웨이는 common, DB를 쓰지 않아 이 방식을 쓰지 않는다. 대기열 입장 스케줄러는 Redis 칸 키로 칸마다 한 대만 입장 처리한다 ([접속 대기열](#접속-대기열)). Outbox 발행기는 방식 결정 전이라 아직 붙이지 않는다 (#149)
 
 붙이는 방법 (의존성, 설정은 이미 되어 있어 어노테이션만 추가)
 

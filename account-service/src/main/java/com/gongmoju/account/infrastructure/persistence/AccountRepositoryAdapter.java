@@ -7,6 +7,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -39,5 +41,10 @@ class AccountRepositoryAdapter implements AccountRepository {
     @Override
     public Optional<Account> findByIdForUpdate(UUID accountId) {
         return jpaRepository.findByIdForUpdate(accountId);
+    }
+
+    @Override
+    public List<Account> findAllByIdForUpdate(Collection<UUID> accountIds) {
+        return jpaRepository.findAllByIdForUpdate(accountIds);
     }
 }

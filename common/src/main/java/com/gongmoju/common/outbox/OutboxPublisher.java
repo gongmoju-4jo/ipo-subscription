@@ -94,36 +94,38 @@ class OutboxPublisher {
     @Scheduled(fixedDelayString = "${outbox.publisher.interval:PT1S}")
     @SchedulerLock(name = "OutboxPublisher.publishPending", lockAtMostFor = "${outbox.publisher.lock-at-most-for:PT1M}")
     void publishPending() {
-        long runDeadline = nanoTime.getAsLong() + properties.maxRunDuration().toNanos();
+        long start = nanoTime.getAsLong();
+        RunDeadlines deadlines = new RunDeadlines(start + properties.maxRunDuration().toNanos(),
+                start + properties.lastSafeSendStart().toNanos());
         // 이번 실행에서 실패한 키. 이후 반복에서는 조회하지 않는다 (실패한 행을 반복마다 다시 두드리지 않고, 같은 키의 순서를 지킨다)
         // 반복마다 이 키들이 늘거나 행이 발행 완료되어서, 실행은 반드시 끝난다
         Set<String> blockedKeys = new HashSet<>();
         // 종료 중 인터럽트가 걸렸으면 시도하지 않는다 (시도하지 않은 행의 실패 횟수가 오르지 않게)
         while (!Thread.currentThread().isInterrupted()) {
-            if (publishBatch(blockedKeys, runDeadline)) {
+            if (publishBatch(blockedKeys, deadlines)) {
                 return;
             }
             // 상한에 닿으면 락을 놓고 끝낸다. 락이 lockAtMostFor로 풀린 뒤 다른 인스턴스와 동시에 발행하지 않게 한다
             // 남은 행은 interval 뒤 다음 실행(락을 잡은 인스턴스)이 이어서 보낸다
-            if (isPast(runDeadline)) {
+            if (isPast(deadlines.run())) {
                 log.info("Outbox 1회 실행 시간 상한({}) 도달, 남은 행은 다음 실행에서 발행", properties.maxRunDuration());
                 return;
             }
         }
     }
 
-    private boolean isPast(long runDeadline) {
-        return nanoTime.getAsLong() - runDeadline >= 0;
+    private boolean isPast(long deadline) {
+        return nanoTime.getAsLong() - deadline >= 0;
     }
 
     /**
      * 한 번의 반복을 한다.
      *
      * @param blockedKeys 이번 실행에서 실패한 키. 다음 조회에서 뺀다
-     * @param runDeadline 실행 시간 상한 시각 ({@link #nanoTime} 기준)
+     * @param deadlines   실행 시간 상한, 전송을 새로 시작할 수 있는 마지막 시각
      * @return 이번 실행을 끝내야 하면 true (보낼 행이 없음, 인터럽트, 전송 호출 연속 실패, 실행 시간 상한, Kafka 무응답, 완료 표시 실패)
      */
-    private boolean publishBatch(Set<String> blockedKeys, long runDeadline) {
+    private boolean publishBatch(Set<String> blockedKeys, RunDeadlines deadlines) {
         Pageable page = PageRequest.ofSize(properties.batchSize());
         // 실패한 키는 조회에서 뺀다. 조회한 뒤에 빼면 실패한 행이 batchSize만큼 앞을 차지할 때 뒤의 정상 행이 조회되지 않는다
         List<Outbox> pending = blockedKeys.isEmpty()
@@ -135,7 +137,7 @@ class OutboxPublisher {
         }
 
         List<InFlight> inFlight = new ArrayList<>();
-        boolean stop = sendAll(targets, inFlight, blockedKeys, runDeadline);
+        boolean stop = sendAll(targets, inFlight, blockedKeys, deadlines);
 
         // 전체에 sendTimeout 하나를 적용한다 (행마다 누적해서 기다리지 않는다)
         long deadline = System.nanoTime() + properties.sendTimeout().toNanos();
@@ -205,18 +207,20 @@ class OutboxPublisher {
      *
      * 실행 시간 상한을 넘으면 남은 행은 보내지 않는다 (실패로 세지 않고 다음 실행에서 보낸다).
      * 전송 호출은 한 번에 max.block.ms까지 막힐 수 있어서, 반복 사이에서만 확인하면 한 반복이 상한을 크게 넘길 수 있다.
-     * 첫 행은 상한과 관계없이 보낸다 (조회가 오래 걸려도 실행마다 조금씩은 발행되게).
+     * 첫 행은 상한이 지나도 보낸다 (조회가 오래 걸려도 실행마다 조금씩은 발행되게).
+     * 다만 전송을 새로 시작할 수 있는 마지막 시각({@link OutboxPublisherProperties#lastSafeSendStart()})이 지났으면 첫 행도 보내지 않는다.
+     * 그 뒤에 시작한 전송은 락이 풀린 뒤에 끝날 수 있어서, 다른 인스턴스가 같은 행을 동시에 보낼 수 있다.
      *
      * @return 이번 실행의 남은 전송을 멈춰야 하면 true (인터럽트, 전송 호출 연속 실패, 실행 시간 상한)
      */
-    private boolean sendAll(List<Outbox> targets, List<InFlight> inFlight, Set<String> blockedKeys, long runDeadline) {
+    private boolean sendAll(List<Outbox> targets, List<InFlight> inFlight, Set<String> blockedKeys, RunDeadlines deadlines) {
         int consecutiveSendFailures = 0;
         boolean first = true;
         for (Outbox outbox : targets) {
             if (Thread.currentThread().isInterrupted()) {
                 return true;
             }
-            if (!first && isPast(runDeadline)) {
+            if (first ? isPast(deadlines.lastSafeSendStart()) : isPast(deadlines.run())) {
                 log.info("Outbox 1회 실행 시간 상한({}) 도달, 보내지 않은 행은 다음 실행에서 발행", properties.maxRunDuration());
                 return true;
             }
@@ -303,6 +307,15 @@ class OutboxPublisher {
      * 전송을 마친 행과 그 응답
      */
     private record InFlight(Outbox outbox, CompletableFuture<SendResult<String, String>> future) {
+    }
+
+    /**
+     * 한 번의 실행의 기한 ({@link #nanoTime} 기준)
+     *
+     * @param run               실행 시간 상한. 넘으면 새 반복, 반복의 두 번째 행부터의 전송을 하지 않는다
+     * @param lastSafeSendStart 전송을 새로 시작할 수 있는 마지막 시각. 넘으면 반복의 첫 행도 보내지 않는다
+     */
+    private record RunDeadlines(long run, long lastSafeSendStart) {
     }
 
     /**

@@ -65,6 +65,17 @@ class OutboxPublisherPropertiesTest {
     }
 
     @Test
+    @DisplayName("전송을 새로 시작할 수 있는 마지막 시점은 락 최대 시간 - 전송 호출 막힘 - send-timeout이고, 상한보다 늦다")
+    void lastSafeSendStart_isLockAtMostForMinusBlockAndSendTimeout() {
+        // given: 청약 서비스 값
+        OutboxPublisherProperties properties = bind(Map.of("outbox.publisher.send-timeout", "10s"));
+
+        // then: 60 - 5 - 10 = 45초 > 상한 30초
+        assertThat(properties.lastSafeSendStart()).isEqualTo(Duration.ofSeconds(45));
+        assertThat(properties.lastSafeSendStart()).isGreaterThan(properties.maxRunDuration());
+    }
+
+    @Test
     @DisplayName("상한이 0 이하면 기동하지 않는다")
     void rejectsNonPositiveMaxRunDuration() {
         assertThatThrownBy(() -> new OutboxPublisherProperties(100, 5, Duration.ofSeconds(5), Duration.ZERO, Duration.ofMinutes(1)))

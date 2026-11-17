@@ -49,6 +49,14 @@ public record OutboxPublisherProperties(
     }
 
     /**
+     * 실행을 시작한 뒤 전송을 새로 시작해도 되는 마지막 시점. 이 뒤에 시작한 전송은 막힘, 응답 대기까지 더하면 락이 풀린 뒤에 끝날 수 있다.
+     * 생성자 검증으로 항상 {@code maxRunDuration}보다 길다
+     */
+    Duration lastSafeSendStart() {
+        return lockAtMostFor.minus(SEND_BLOCK_MARGIN).minus(sendTimeout);
+    }
+
+    /**
      * 실행 시간 상한, 락 최대 시간은 기본값으로 둔다 (테스트, 직접 만드는 경우)
      */
     public OutboxPublisherProperties(int batchSize, int alertThreshold, Duration sendTimeout) {

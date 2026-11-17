@@ -742,12 +742,12 @@ class OutboxPublisherTest {
     }
 
     @Test
-    @DisplayName("실행을 시작할 때 이미 상한이 지난 것처럼 시간이 흘러도 반복의 첫 행은 보낸다 (실행마다 조금씩은 발행되게)")
-    void publishPending_sendsFirstRowEvenWhenDeadlineAlreadyPassed() {
-        // given: 시작 시각을 읽은 뒤로는 늘 1시간이 지난 시계 (조회가 아주 오래 걸린 경우)
+    @DisplayName("조회가 오래 걸려 상한이 지났어도 전송을 새로 시작할 수 있는 시각 전이면 반복의 첫 행은 보낸다 (실행마다 조금씩은 발행되게)")
+    void publishPending_sendsFirstRowWhenPastMaxRunButBeforeLastSafeSendStart() {
+        // given: 시작 시각을 읽은 뒤로는 40초가 지난 시계. 상한 30초는 지났고, 마지막 시작 시각(1분 - 막힘 5초 - send-timeout 1초 = 54초) 전
         AtomicLong reads = new AtomicLong();
         OutboxPublisher capped = newPublisherWithClock(Duration.ofSeconds(30),
-                () -> reads.getAndIncrement() == 0 ? 0L : Duration.ofHours(1).toNanos());
+                () -> reads.getAndIncrement() == 0 ? 0L : Duration.ofSeconds(40).toNanos());
         Outbox first = pendingOutbox("allocation.result", "key-1", "{}");
         Outbox second = pendingOutbox("allocation.result", "key-2", "{}");
         givenPending(List.of(first, second));
@@ -756,10 +756,31 @@ class OutboxPublisherTest {
         // when
         capped.publishPending();
 
-        // then
+        // then: 첫 행만 보내고 둘째 행은 상한 때문에 보내지 않음
         assertThat(first.getPublishedAt()).isNotNull();
         assertThat(second.getPublishedAt()).isNull();
         verify(kafkaTemplate, never()).send(anyString(), eq("key-2"), anyString());
+    }
+
+    @Test
+    @DisplayName("조회가 전송을 새로 시작할 수 있는 시각을 넘기면 첫 행도 보내지 않고 끝낸다 (락이 풀린 뒤 다른 인스턴스와 같은 행을 보내지 않게)")
+    void publishPending_sendsNothingWhenPastLastSafeSendStart() {
+        // given: 시작 시각을 읽은 뒤로는 54초(마지막 시작 시각)가 지난 시계
+        AtomicLong reads = new AtomicLong();
+        OutboxPublisher capped = newPublisherWithClock(Duration.ofSeconds(30),
+                () -> reads.getAndIncrement() == 0 ? 0L : Duration.ofSeconds(54).toNanos());
+        Outbox first = pendingOutbox("allocation.result", "key-1", "{}");
+        givenPending(List.of(first));
+        givenSendSucceeds();
+
+        // when
+        capped.publishPending();
+
+        // then: 보내지 않았고 실패로도 세지 않음 (다음 실행에서 보냄)
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
+        assertThat(first.getPublishedAt()).isNull();
+        assertThat(first.getRetryCount()).isZero();
+        verify(outboxRepository, never()).findById(any());
     }
 
     @Test

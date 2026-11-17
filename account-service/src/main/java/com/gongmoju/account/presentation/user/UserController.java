@@ -24,6 +24,8 @@ public class UserController {
     private final UserService userService;
 
     @Operation(summary = "회원가입", description = "인증 없이 호출한다. 가입자의 역할은 항상 USER이고 계좌는 만들지 않는다.")
+    // ResponseEntity로 201을 주면 Swagger가 상태를 알 수 없어 200으로 표시하므로 성공 응답을 직접 적는다
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "가입됨")
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.DUPLICATE_RESOURCE})
     @PostMapping
     public ResponseEntity<ApiResponse<SignUpResponse>> signUp(@Valid @RequestBody SignUpRequest request) {

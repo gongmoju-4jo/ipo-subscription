@@ -283,6 +283,15 @@ class SubscriptionCreateApiTest {
     }
 
     @Test
+    void Swagger_문서에_성공_응답이_200이_아니라_202로_나온다() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paths['/api/v1/subscriptions'].post.responses['202'].content['*/*'].schema").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/subscriptions'].post.responses['200']").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/v1/subscriptions'].post.responses['401']").exists());
+    }
+
+    @Test
     void 요청_본문_오류가_헤더_오류보다_먼저다() throws Exception {
         subscribe("{}", null, null)
                 .andExpect(status().isBadRequest());

@@ -45,6 +45,9 @@ public class AccountController {
     private final LedgerQueryService ledgerQueryService;
 
     @Operation(summary = "계좌 개설", description = "같은 requestId로 다시 요청하면 계좌를 새로 만들지 않고 처음 계좌를 200으로 반환한다.")
+    // ResponseEntity로 상태를 정하면 Swagger가 알 수 없어 200 하나로 표시하므로, 처음 개설(201)과 같은 requestId 재요청(200)을 직접 적는다
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "개설됨")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "같은 requestId 재요청 (처음 계좌를 그대로 반환)")
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.DUPLICATE_RESOURCE})
     @PostMapping
     public ResponseEntity<ApiResponse<AccountResponse>> open(
@@ -104,6 +107,9 @@ public class AccountController {
 
     @Operation(summary = "가상 입금",
             description = "본인 계좌에 입금한다. 같은 requestId로 다시 요청하면 입금을 다시 하지 않고 처음 결과를 200으로 반환한다. 청약증거금(marginBalance)은 바뀌지 않는다.")
+    // 처음 입금(201)과 같은 requestId 재요청(200)을 직접 적는다 (계좌 개설과 같은 이유)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "입금됨")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "같은 requestId 재요청 (처음 결과를 그대로 반환)")
     @ApiErrorCodes(common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED,
             CommonErrorCode.RESOURCE_NOT_FOUND, CommonErrorCode.DUPLICATE_RESOURCE})
     @PostMapping("/{accountId}/deposits")

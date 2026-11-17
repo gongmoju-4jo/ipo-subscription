@@ -111,6 +111,10 @@ class V3Test(unittest.TestCase):
         r = self.one(meta="k6_exit=99\ncomplete=1\n")
         self.assertEqual(r["invalid"], [])
 
+    def test_정합성_수집이_실패하면_무효다(self):
+        r = self.one(meta="k6_exit=0\nverify_sh_exit=1\ncomplete=1\n")
+        self.assertTrue(any("정합성 수집" in x for x in r["invalid"]))
+
     def test_청약_행이_요청_수와_다르면_무효다(self):
         r = self.one(status="CONFIRMED|900\n")
         self.assertTrue(any("청약 행" in x for x in r["invalid"]))
@@ -124,6 +128,33 @@ class V3Test(unittest.TestCase):
             write(d, "v3-r1-meta.tmp", "ipo=x\n")
             runs = sr.v3(d)
         self.assertEqual(runs, [{"n": 1, "incomplete": True}])
+
+
+class PerfSectionTest(unittest.TestCase):
+
+    def run_(self, n, integ=0, perf=True):
+        p = {"success": 1.0, "rate": 300.0, "p95": 300.0, "confirm_p95": 3.0,
+             "pending": {"subscription-service": 0.0}, "active": {}, "cpu": {"api-gateway": 50.0}} if perf else None
+        return {"n": n, "incomplete": False, "invalid": [], "topics": [], "dup": 0, "short": 0,
+                "integ": {"v17_dup_margin": integ}, "violations": integ, "dup_log": 0, "meta": {}, "status": "", "perf": p}
+
+    def render(self, phases):
+        lines = []
+        sr.perf_section(lines.append, phases)
+        return "\n".join(lines)
+
+    def test_정합성_실패_회차는_성능을_판정하지_않고_중앙값에서_제외한다(self):
+        out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1), self.run_(2, integ=1)]),))
+        self.assertIn("정합성 실패 (성능 판정 안 함)", out)
+        self.assertIn("| 2개 (1차) | 1 |", out)
+
+    def test_단계별_커밋이_다르면_비교_무효를_표시한다(self):
+        out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1)]), ("1개", "", {"commit": "b"}, [self.run_(1)])))
+        self.assertIn("비교 무효", out)
+
+    def test_CPU는_인스턴스별_최댓값으로_표시한다(self):
+        out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1)]),))
+        self.assertIn("인스턴스별 CPU 최대값 중 최댓값", out)
 
 
 class V1Test(unittest.TestCase):

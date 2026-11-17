@@ -4,16 +4,20 @@
 # 사용
 #   bash loadtest/scale_verify.sh v1 before|after          부하 없는 60초 동안 쿼리 실행 횟수 (스케줄러 실행 횟수)
 #   bash loadtest/scale_verify.sh v2                        적용 후, 락 표를 120초 동안 1초마다 조회 (동시 실행 판정)
-#   bash loadtest/scale_verify.sh v3 before|after <회차>     S0 1,000건 → 중복 발행, 정합성 (회차는 1, 2, 3)
+#   bash loadtest/scale_verify.sh v3 <단계> <회차>          S0 1,000건 → 중복 발행, 정합성, 성능 (회차 0은 워밍업, 1-9는 측정)
 #   python3 loadtest/scale_report.py                        요약.md 생성
 #
+# 단계: before(락 적용 전, 2개), after(적용 후, 2개), single(적용 후 같은 커밋, 1개), rescale(적용 후 같은 커밋, 다시 2개)
+#   성능 비교는 같은 커밋에서 after → single → rescale 순서로 측정한다 (2개 → 1개 → 2개, 순서 효과 확인)
+#   compose 구성을 바꾼 직후에는 회차 0(워밍업)을 먼저 실행한다. 보고서는 회차 0을 집계하지 않는다
+#
 # 환경변수: OUT_ROOT(결과 폴더, 기본 loadtest/results/scale-verify), V1_SECONDS(60), V2_SECONDS(120), DRAIN_TIMEOUT(600),
-#          COMPOSE(기본 "docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml")
+#          COMPOSE(기본: single은 "docker-compose -f docker-compose.yml -f compose.perf.yml", 그 외는 compose.scale.yml 추가)
 # 전제: compose.perf.yml 포함 실행 (pg_stat_statements), 회원 시드와 토큰(loadtest/data/users.csv) 준비 (LOADTEST 3-2)
 set -euo pipefail
 
 OUT_ROOT="${OUT_ROOT:-loadtest/results/scale-verify}"
-COMPOSE="${COMPOSE:-docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml}"
+COMPOSE_SET="${COMPOSE:-}"
 TOPICS="margin.reserve-requested margin.reserved margin.reserve-failed margin.void-requested margin.voided"
 
 die() { echo "오류: $*" >&2; exit 1; }
@@ -23,8 +27,23 @@ die() { echo "오류: $*" >&2; exit 1; }
 q() { docker exec -i ipo-postgres psql -U postgres -d ipo -v ON_ERROR_STOP=1 -AtF'|' -c "$1"; }
 
 phase_dir() {
-  case "$1" in before|after) ;; *) die "단계는 before 또는 after: $1" ;; esac
+  case "$1" in before|after|single|rescale) ;; *) die "단계는 before, after, single, rescale: $1" ;; esac
   local d="$OUT_ROOT/$1"; mkdir -p "$d"; echo "$d"
+}
+
+# 단계에 해당하는 compose 명령을 COMPOSE에 설정한다 (환경변수로 지정하면 그 값 사용)
+set_compose() {
+  if [ -n "$COMPOSE_SET" ]; then COMPOSE="$COMPOSE_SET"
+  elif [ "$1" = "single" ]; then COMPOSE="docker-compose -f docker-compose.yml -f compose.perf.yml"
+  else COMPOSE="docker-compose -f docker-compose.yml -f compose.perf.yml -f compose.scale.yml"; fi
+}
+
+# 실행 중인 계좌 서비스 인스턴스 수가 단계와 일치하는지 확인한다 (다른 구성으로 측정해 재측정하는 것을 방지)
+check_instances() {
+  local want=2 got
+  [ "$1" = "single" ] && want=1
+  got="$(docker ps --format '{{.Names}}' | grep -cE '(^ipo-account-service$|^ipo-subscription-account-service-[0-9]+$)' || true)"
+  [ "$got" = "$want" ] || die "계좌 서비스 인스턴스 ${got}개 실행 중, 단계 $1은 ${want}개 필요"
 }
 
 record_env() {
@@ -44,6 +63,7 @@ record_env() {
 
 v1() {
   local d; d="$(phase_dir "$1")"
+  set_compose "$1"; check_instances "$1"
   record_env "$d"
   local secs="${V1_SECONDS:-60}"
   # 확장은 DB마다 한 번 생성해야 한다 (compose.perf.yml은 라이브러리만 올림. slow-queries.sql과 같은 방식)
@@ -62,15 +82,23 @@ v1() {
 
 v2() {
   local d; d="$(phase_dir after)"
+  set_compose after; check_instances after
   local secs="${V2_SECONDS:-120}" i sch
-  echo "V2: ${secs}초 동안 1초마다 락 표 조회"
+  # 배정은 #177 전에는 shedlock 표가 없을 수 있어, 표가 있는 스키마만 조회한다. 그 외 조회 오류는 회차를 중단한다
+  local schemas="" raw="$d/v2-shedlock.raw"
+  for sch in subscription account allocation; do
+    if [ "$(q "SELECT to_regclass('$sch.shedlock') IS NOT NULL;")" = "t" ]; then schemas="$schemas $sch"; fi
+  done
+  [ -n "$schemas" ] || die "shedlock 표가 있는 스키마가 없음 (락 적용 후 커밋으로 실행했는지 확인)"
+  echo "V2: ${secs}초 동안 1초마다 락 표 조회 (스키마:$schemas)"
+  : > "$raw"
   for i in $(seq "$secs"); do
-    for sch in subscription account allocation; do
-      # 배정은 #177 전에는 표가 없을 수 있어 실패를 무시한다
-      q "SELECT '$sch', name, locked_by, locked_at, lock_until FROM $sch.shedlock" 2>/dev/null || true
+    for sch in $schemas; do
+      q "SELECT '$sch', name, locked_by, locked_at, lock_until FROM $sch.shedlock" >> "$raw" || die "락 표 조회 실패: $sch"
     done
     sleep 1
-  done | sort -u > "$d/v2-shedlock.txt"
+  done
+  sort -u "$raw" > "$d/v2-shedlock.txt" && rm -f "$raw"
   echo "$secs" > "$d/v2-seconds.txt"
   echo "V2 완료: $d/v2-shedlock.txt ($(wc -l < "$d/v2-shedlock.txt")행)"
 }
@@ -91,8 +119,9 @@ unpublished() {
 
 v3() {
   local d; d="$(phase_dir "$1")"
-  local n="${2:-}"; [[ "$n" =~ ^[1-9]$ ]] || die "회차는 1-9: $n"
+  local n="${2:-}"; [[ "$n" =~ ^[0-9]$ ]] || die "회차는 0(워밍업), 1-9: $n"
   local run="scale-$1-r$n" p="$d/v3-r$n"
+  set_compose "$1"; check_instances "$1"
   [ -f "$d/env.txt" ] || record_env "$d"
   # 재실행이면 이전 완료 기록을 먼저 삭제하고 진행 중 표시를 생성한다. 이후 단계가 실패해도 이전 회차 결과가 집계되지 않고 미완료로 표시된다
   local m="$p-meta.tmp"
@@ -139,6 +168,10 @@ v3() {
   q "SELECT topic, count(*) FROM (SELECT topic FROM account.outbox WHERE created_at >= '$t0'
      UNION ALL SELECT topic FROM subscription.outbox WHERE created_at >= '$t0') o GROUP BY topic ORDER BY topic;" > "$p-outbox.txt"
 
+  # 접수 → 확정 시간 p95 (초, 확정 청약 기준. verify.sql 9번과 같은 계산)
+  q "SELECT round(percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM confirmed_at - received_at))::numeric, 3)
+     FROM subscription.subscription WHERE ipo_id = '$ipo' AND status = 'CONFIRMED';" > "$p-confirm-p95.txt"
+
   # 6. 정합성: verify.sql 22종 원본 + 판정용 건수 (verify.sql과 같은 조건을 count로)
   (cd loadtest && bash verify.sh --ipo "$ipo" --run-id "$run") > /dev/null 2>&1 || echo "verify_sh_exit=$?" >> "$m"
   q "SELECT 'v02_margin_balance', count(*) FROM (SELECT a.account_id FROM account.account a LEFT JOIN account.margin m ON m.account_id = a.account_id AND m.status = 'PENDING' GROUP BY a.account_id, a.margin_balance HAVING a.margin_balance <> COALESCE(SUM(m.amount), 0)) x
@@ -153,8 +186,15 @@ v3() {
      UNION ALL SELECT 'unfinished', count(*) FROM subscription.subscription WHERE ipo_id = '$ipo' AND status IN ('PENDING', 'COMPENSATING', 'CANCEL_REQUESTED');" > "$p-integrity.txt"
   q "SELECT status, count(*) FROM subscription.subscription WHERE ipo_id = '$ipo' GROUP BY status ORDER BY status;" > "$p-status.txt"
 
-  # 7. 계좌 서비스 중복 수신 로그 (두 인스턴스 합계)
-  { $COMPOSE logs --no-color --since "$t0" account-service 2>/dev/null | grep -c "중복 수신, 건너뜀" || true; } > "$p-dup-log.txt"
+  # 7. 계좌 서비스 중복 수신 로그 (두 인스턴스 합계). 로그 조회 실패를 0건으로 기록하지 않게 조회와 집계를 분리한다
+  local logs="$p-account.log" dup
+  $COMPOSE logs --no-color --since "$t0" account-service > "$logs" 2>/dev/null || die "계좌 서비스 로그 조회 실패"
+  # grep -c는 0건이면 종료 코드 1이라 0건과 오류(2)를 구분한다
+  dup="$(grep -c "중복 수신, 건너뜀" "$logs")" || [ $? -eq 1 ] || die "중복 수신 로그 집계 실패"
+  echo "$dup" > "$p-dup-log.txt" && rm -f "$logs"
+
+  # 8. 회차 보고서 (k6 요약 + 같은 시간대 Prometheus 지표: Hikari 활성, 대기, CPU). 실패하면 성능 비교에서 제외한다
+  python3 loadtest/report.py --run-id "$run" > /dev/null 2>&1 || echo "report_exit=$?" >> "$m"
 
   echo "complete=1" >> "$m"
   mv "$m" "$p-meta.txt"
@@ -165,5 +205,5 @@ case "${1:-}" in
   v1) v1 "${2:-}" ;;
   v2) v2 ;;
   v3) v3 "${2:-}" "${3:-}" ;;
-  *) sed -n '2,13p' "$0"; exit 1 ;;
+  *) sed -n '2,16p' "$0"; exit 1 ;;
 esac

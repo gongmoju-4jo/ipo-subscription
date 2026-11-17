@@ -5,8 +5,10 @@
 판정 기준은 docs 검증 계획 0절과 같다. 숫자는 모두 원본 파일에서 계산하고, 계산식을 요약.md에 같이 적는다.
 """
 import argparse
+import json
 import os
 import re
+import statistics
 from datetime import datetime, timedelta
 
 # V1 쿼리 → 스케줄러. 상수가 원문으로 저장되거나($1로 변환되거나) 둘 다 매칭되도록 구조로 구분한다 (11/17 실측: 네이티브 쿼리의 'PENDING'은 원문으로 저장됨).
@@ -165,15 +167,59 @@ def v3(phase_dir):
             invalid.append("완료 표시 없음")
         if meta.get("k6_exit") not in ("0", "99"):
             invalid.append(f"k6 종료 코드 {meta.get('k6_exit')}")
+        # 키가 없으면 정상 종료 (verify.sh가 실패할 때만 기록함)
+        if meta.get("verify_sh_exit", "0") != "0":
+            invalid.append(f"정합성 수집 종료 코드 {meta.get('verify_sh_exit')}")
         if total != S0_REQUESTS:
             invalid.append(f"청약 행 {total}건 (기대 {S0_REQUESTS})")
+        if meta.get("report_exit", "0") != "0":
+            invalid.append(f"회차 보고서 종료 코드 {meta.get('report_exit')}")
         runs.append({"n": n, "incomplete": False, "invalid": invalid, "topics": topics,
+                     "perf": perf(meta.get("run", ""), phase_dir, n),
                      # 토픽끼리 상쇄되지 않게 양수(중복 발행)와 음수(미발행 또는 측정 불일치)를 따로 합산
                      "dup": sum(d for *_, d in topics if d > 0), "short": sum(-d for *_, d in topics if d < 0),
                      "integ": integ,
                      # 위반끼리 상쇄되지 않게 항목마다 절댓값 (v04는 차이라 음수 가능)
                      "violations": sum(abs(v) for v in integ.values()), "dup_log": dup_log, "meta": meta, "status": status})
     return runs
+
+
+# k6 회차 원본 폴더 (run-k6.sh, report.py가 저장하는 위치). 저장소 루트 기준
+K6_RESULTS = os.path.join("loadtest", "results")
+PERF_JOBS = ("api-gateway", "subscription-service", "account-service")
+
+
+def prom_by_job(prom, key):
+    # report.py의 prometheus.json: {지표: {"result": [{"metric": {"job": ...}, "value": [시각, "값"]}]}}
+    out = {}
+    for r in (prom.get(key) or {}).get("result", []):
+        try:
+            out[r["metric"].get("job")] = float(r["value"][1])
+        except (KeyError, ValueError, IndexError):
+            continue
+    return out
+
+
+def perf(run_name, phase_dir, n):
+    # 회차의 성능 값. 원본이 없으면 None (판정하지 않음)
+    d = os.path.join(K6_RESULTS, run_name)
+    try:
+        with open(os.path.join(d, "summary.json"), encoding="utf-8") as f:
+            m = json.load(f)["metrics"]
+        with open(os.path.join(d, "prometheus.json"), encoding="utf-8") as f:
+            prom = json.load(f)
+    except (OSError, ValueError, KeyError):
+        return None
+    confirm = (read(os.path.join(phase_dir, f"v3-r{n}-confirm-p95.txt"), "") or "").strip()
+    return {
+        "success": 1 - float(m["http_req_failed"]["value"]),
+        "rate": float(m["http_reqs"]["rate"]),
+        "p95": float(m["http_req_duration"]["p(95)"]),
+        "confirm_p95": float(confirm) if confirm else None,
+        "pending": prom_by_job(prom, "hikari_pending_max"),
+        "active": prom_by_job(prom, "hikari_active_max"),
+        "cpu": prom_by_job(prom, "cpu_max_pct"),
+    }
 
 
 def verdict(ok):
@@ -187,6 +233,66 @@ def v2_verdict(acquired, overlaps, unknown):
     return verdict(overlaps == 0)
 
 
+def fmt(v, digits=1, suffix=""):
+    return "-" if v is None else f"{v:,.{digits}f}{suffix}"
+
+
+def perf_section(w, phases):
+    w("\n## 4. 성능 비교 (같은 커밋, 인스턴스 2개 → 1개 → 2개, S0 각 3회)\n")
+    commits = {env.get("commit") for _, _, env, runs in phases if runs}
+    if not any(runs for *_, runs in phases):
+        w("- 측정 안 함\n")
+        return
+    if len(commits) != 1:
+        w(f"- ⚠️ **비교 무효**: 단계별 커밋이 다름 {sorted(c[:7] for c in commits if c)}. 같은 커밋에서 인스턴스 수만 달라야 비교 가능\n")
+    w("| 단계 | 회차 | 성공률 | S0 완료 속도 (건/초) | p95 (ms) | 접수 → 확정 p95 (초) | Hikari 대기 최대 (청약 / 계좌) | 인스턴스별 CPU 최대값 중 최댓값 (게이트웨이 / 청약 / 계좌, %) | 정합성 | 판정 |")
+    w("|---|---|---|---|---|---|---|---|---|---|")
+    medians = []
+    for label, _, _, runs in phases:
+        valid = []
+        for r in runs:
+            if r["incomplete"]:
+                w(f"| {label} | r{r['n']} | - | - | - | - | - | - | - | ⚠️ 미완료 |")
+                continue
+            p = r["perf"]
+            integ_ok = all(v == 0 for v in r["integ"].values()) and r["short"] == 0
+            if r["invalid"] or p is None:
+                note = "⚠️ 무효: " + ", ".join(r["invalid"] or ["성능 원본 없음"])
+            elif not integ_ok:
+                # 정합성 실패 회차는 성능 결과를 판정하지 않는다
+                note = "❌ 정합성 실패 (성능 판정 안 함)"
+            else:
+                note = "✅ 유효"
+                valid.append(p)
+            if p is None:
+                w(f"| {label} | r{r['n']} | - | - | - | - | - | - | {'통과' if integ_ok else '실패'} | {note} |")
+                continue
+            w(f"| {label} | r{r['n']} | {fmt(100 * p['success'], 2, '%')} | {fmt(p['rate'])} | {fmt(p['p95'])} | {fmt(p['confirm_p95'], 2)} | "
+              f"{fmt(p['pending'].get('subscription-service'), 0)} / {fmt(p['pending'].get('account-service'), 0)} | "
+              f"{' / '.join(fmt(p['cpu'].get(j), 0) for j in PERF_JOBS)} | {'통과' if integ_ok else '실패'} | {note} |")
+        if valid:
+            med = lambda f: statistics.median(f(p) for p in valid)
+            medians.append((label, len(valid), med(lambda p: p["rate"]), med(lambda p: p["p95"]),
+                            med(lambda p: p["confirm_p95"] if p["confirm_p95"] is not None else float("nan"))))
+    if medians:
+        w("\n| 단계 | 유효 회차 | S0 완료 속도 중앙값 (건/초) | p95 중앙값 (ms) | 접수 → 확정 p95 중앙값 (초) |")
+        w("|---|---|---|---|---|")
+        for label, n, rate, p95, conf in medians:
+            w(f"| {label} | {n} | {fmt(rate)} | {fmt(p95)} | {fmt(conf, 2)} |")
+    w("\n- **조건**: 같은 커밋, 같은 S0(가상 사용자 100개 x 10회, 회원 1,000명이 1건씩, 회차마다 새 공모주), 구성 전환 후 회차 0 워밍업 제외")
+    w("- **S0 완료 속도**: S0는 가상 사용자 100개가 1초에 걸쳐 시작하는 고정 1,000건이라 서버 처리 용량이 아님. 지속 부하 처리량, 고가용성 근거로 사용하지 않음")
+    w("- **CPU**: 서비스별로 인스턴스 중 최댓값 (`max by (job)`, report.py). 2개 합계가 아니라 총 자원 효율 비교에는 사용할 수 없음")
+    w("- **판정**: 정합성 실패 회차는 성능 값을 판정하지 않음. 무효, 미완료 회차는 중앙값에서 제외")
+    w("- **순서 효과**: 2개 → 1개 → 2개 순서. 2개 1차와 2차의 차이가 1개와의 차이보다 크면 순서 효과(DB 행 증가, JVM 상태)가 비교보다 큼")
+    w("- **자원 예산 (교란 요인)**: 1개와 2개는 인스턴스 수만 다른 것이 아님\n")
+    w("| 항목 | 1개 | 2개 | 출처 |")
+    w("|---|---|---|---|")
+    w("| 서비스 CPU 상한 합 (게이트웨이, 계좌, 청약, 배정) | 1 + 1 + 2 + 0.5 = 4.5 | 2 + 2 + 4 + 1 = 9.0 | `compose.perf.yml`, `compose.scale.yml` |")
+    w("| DB 커넥션 풀 합 (청약 30, 계좌 10, 배정 10) | 50 | 100 (사용 가능 97 초과) | 서비스 `application.yml`, LOADTEST 3-5 |")
+    w("| PC 전체 CPU (Colima) | 동일 | 동일 | `env.txt` |")
+    w("\n- 2개는 상한 합 9.0이 Colima CPU 6개를 초과해, 상한이 아니라 PC CPU를 나눠 사용함\n")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="loadtest/results/scale-verify")
@@ -196,6 +302,9 @@ def main():
     b1, a1 = v1(bdir), v1(adir)
     l2 = v2(adir)
     b3, a3 = v3(bdir), v3(adir)
+    sdir, rdir = os.path.join(a.root, "single"), os.path.join(a.root, "rescale")
+    s3, r3 = v3(sdir), v3(rdir)
+    senv, renv = kv(os.path.join(sdir, "env.txt")), kv(os.path.join(rdir, "env.txt"))
     L = []
     w = L.append
 
@@ -207,8 +316,15 @@ def main():
     va = [r for r in a3 if not r["incomplete"] and not r["invalid"]]
     dup_b, dup_a = sum(r["dup"] for r in vb), sum(r["dup"] for r in va)
     vio_b, vio_a = sum(r["violations"] for r in vb), sum(r["violations"] for r in va)
-    w(f"> 결론: 마감 스케줄러 1분 실행 {calls(b1, '마감')} → {calls(a1, '마감')}회, Outbox 중복 발행 {dup_b} → {dup_a}건 "
-      f"(유효 회차 {len(vb)}, {len(va)}개 합계), 정합성 위반 {vio_b} / {vio_a}건\n")
+    def shown(v):
+        return "측정 안 함" if v is None else f"{v}회"
+
+    def shown_dup(runs, total):
+        return f"{total}건" if runs else "측정 안 함"
+
+    w(f"> 결론: 마감 스케줄러 1분 실행 {shown(calls(b1, '마감'))} → {shown(calls(a1, '마감'))}, "
+      f"Outbox 중복 발행 {shown_dup(vb, dup_b)} → {shown_dup(va, dup_a)} (유효 회차 {len(vb)}, {len(va)}개 합계), "
+      f"정합성 위반 {shown_dup(vb, vio_b)} / {shown_dup(va, vio_a)}\n")
     w("## 측정 환경\n")
     for label, env in (("적용 전", benv), ("적용 후", aenv)):
         w(f"- **{label}**: 커밋 `{env.get('commit', '?')[:7]}`, {env.get('date', '?')}")
@@ -230,7 +346,7 @@ def main():
         if name in EXPECT:
             e = EXPECT[name]
             ok = ac is not None and e[1] <= ac <= e[2]
-            note = verdict(ok)
+            note = verdict(ok) if ac is not None else "측정 안 함"
             if asec and asec != str(V1_SECONDS):
                 note = f"판정 제외 (측정 {asec}초)"
             if asec == str(V1_SECONDS) and not ok and ac is not None and ac >= 20 and name in ("시간 초과", "반환 재요청"):
@@ -298,10 +414,12 @@ def main():
                 w(f"- **{label} r{r['n']} k6 종료 코드 {r['meta']['k6_exit']}**: 99면 k6 임계값(thresholds) 위반, 위반 항목은 "
                   f"`loadtest/results/{r['meta'].get('run', '?')}/summary.json`의 `thresholds` (이 검증의 판정 대상 아님)")
 
-    w("\n## 4. V4 입장, V5 강제 종료 (직접 기록)\n")
+    perf_section(w, (("2개 (1차)", adir, aenv, a3), ("1개", sdir, senv, s3), ("2개 (2차)", rdir, renv, r3)))
+
+    w("\n## 5. V4 입장, V5 강제 종료 (직접 기록)\n")
     w("- **V4**: 적용 전 1분 _명, 적용 후 1분 _명 (측정자 _, 방법 PR #181)")
     w("- **V5**: 종료 컨테이너 _, 종료 시각 _, 다른 인스턴스 락 획득 시각 _, 처리 완료 후 위반 _건\n")
-    w("## 5. 이상값, 미확인\n")
+    w("## 6. 이상값, 미확인\n")
     w("- (기대와 다른 값을 한 줄씩. 없으면 \"없음\")\n")
     w("<details>\n<summary>원본 파일 (before, after)</summary>\n")
     for d in (bdir, adir):

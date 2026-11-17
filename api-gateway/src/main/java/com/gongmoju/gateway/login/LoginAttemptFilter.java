@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *       401은 실패로 남기고, 2xx는 횟수를 지우고, 그 밖(400, 5xx, 서비스 호출 오류, 서비스 응답 전에 클라이언트가 끊음)은 되돌린다</li>
  *   <li>차단 중이면 서비스로 보내지 않고 429 TOO_MANY_REQUESTS + Retry-After(남은 초). 남은 횟수는 알려주지 않는다</li>
  *   <li>로그인 ID는 서비스와 같은 방식으로 본문에서 읽는다 ({@link JsonBodyReader}). 같은 키가 두 번 이상이면 400.
- *       loginId가 문자열이 아니어도(숫자, 불리언, 배열, 객체) 400. 게이트웨이가 센 ID와 서비스가 로그인한 ID가 어긋나 제한을 피하지 못하게 한다.
+ *       loginId, password가 문자열이 아니어도(숫자, 불리언, 배열, 객체) 400. 72바이트를 넘는 비밀번호는 세지 않고 바로 401 (서비스와 같은 응답). 게이트웨이가 센 ID와 서비스가 로그인한 ID가 어긋나 제한을 피하지 못하게 한다.
  *       loginId가 없거나 null이거나 본문을 읽을 수 없으면 세지 않고 보낸다 (서비스가 400을 준다)</li>
  *   <li>Redis 실패, {@code redisTimeout} 초과 → 횟수 확인 없이 보내고 WARN 로그. 그 뒤 {@code redisSkip} 동안은 Redis를 부르지 않는다.
  *       돈과 직결된 청약 신청의 입장 허가 확인(Redis 장애 시 503)과 달리, 로그인 제한은 부가 보호라 Redis 장애가 로그인 장애로 번지지 않게 한다</li>
@@ -56,6 +56,9 @@ public class LoginAttemptFilter implements GlobalFilter, Ordered {
     private static final List<PathPattern> LOGIN_PATHS = List.of(
             PathPatternParser.defaultInstance.parse("/api/v1/auth/login"),
             PathPatternParser.defaultInstance.parse("/api/v1/auth/login/"));
+
+    // 계좌 서비스 AuthService.BCRYPT_MAX_BYTES와 같은 값
+    private static final int BCRYPT_MAX_BYTES = 72;
 
     private final LoginAttemptRedisRepository repository;
     private final LoginAttemptProperties properties;
@@ -96,10 +99,16 @@ public class LoginAttemptFilter implements GlobalFilter, Ordered {
         if (parsed.duplicateKey()) {
             return write(exchange, HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "요청 본문에 같은 키가 두 번 이상 있습니다.");
         }
-        if (hasNonTextLoginId(parsed)) {
+        if (hasNonText(parsed, "loginId")) {
             return write(exchange, HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "로그인 ID는 문자열이어야 합니다.");
         }
+        if (hasNonText(parsed, "password")) {
+            return write(exchange, HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "비밀번호는 문자열이어야 합니다.");
+        }
         String loginId = parsed.text("loginId");
+        if (loginId != null && !loginId.isBlank() && isTooLongPassword(parsed.text("password"))) {
+            return write(exchange, HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "로그인 ID 또는 비밀번호가 올바르지 않습니다.");
+        }
         if (loginId == null || redisSkipped()) {
             return chain.filter(replayable);
         }
@@ -171,14 +180,22 @@ public class LoginAttemptFilter implements GlobalFilter, Ordered {
                 });
     }
 
-    // 서비스(Jackson 기본 설정)는 숫자, 불리언도 문자열로 바꿔 로그인한다 ({"loginId":1234} → "1234").
-    // 게이트웨이가 세지 않고 보내면 숫자로 된 로그인 ID는 제한 없이 시도할 수 있어서, 문자열이 아닌 값은 여기서 막는다
-    private static boolean hasNonTextLoginId(JsonBody parsed) {
+    // 서비스(Jackson 기본 설정)는 숫자, 불리언도 문자열로 바꿔 받는다 ({"loginId":1234} → "1234").
+    // loginId: 게이트웨이가 세지 않고 보내면 숫자로 된 로그인 ID는 제한 없이 시도할 수 있다.
+    // password: 긴 숫자를 보내면 아래 72바이트 확인을 피해 BCrypt 없는 401로 키를 쌓을 수 있다. 그래서 문자열이 아닌 값은 여기서 막는다
+    private static boolean hasNonText(JsonBody parsed, String field) {
         if (parsed.root() == null) {
             return false;
         }
-        JsonNode value = parsed.root().get("loginId");
+        JsonNode value = parsed.root().get(field);
         return value != null && !value.isNull() && !value.isTextual();
+    }
+
+    // 계좌 서비스는 72바이트를 넘는 비밀번호를 BCrypt 비교 없이 바로 틀렸다고 본다 (AuthService.BCRYPT_MAX_BYTES, BCrypt가 72바이트까지만 씀).
+    // 그대로 보내면 비용이 거의 없는 401마다 실패 키가 15분씩 남아, 같은 Redis를 쓰는 대기열까지 메모리 상한에 닿을 수 있다.
+    // 절대 맞을 수 없는 비밀번호라 세지 않고 서비스와 같은 401을 바로 준다 (서비스 규칙이 바뀌면 같이 바꾼다)
+    static boolean isTooLongPassword(String password) {
+        return password != null && password.getBytes(StandardCharsets.UTF_8).length > BCRYPT_MAX_BYTES;
     }
 
     private boolean redisSkipped() {

@@ -148,6 +148,47 @@ class LoginAttemptFilterTest extends RedisTestSupport {
         assertThat(TEMPLATE.keys("login-fail:*").collectList().block()).isEmpty();
     }
 
+    // 서비스는 72바이트를 넘는 비밀번호를 BCrypt 없이 바로 401로 준다. 세면 비용 없는 요청마다 키가 15분씩 남는다
+    @Test
+    void 비밀번호가_72바이트를_넘으면_세지_않고_서비스와_같은_401을_바로_준다() {
+        int hitsBefore = BACKEND_HITS.get();
+
+        // 영문 73바이트, 한글 25자(75바이트)
+        for (String password : List.of("a".repeat(73), "가".repeat(25))) {
+            login("rnd" + password.length(), password).expectStatus().isUnauthorized()
+                    .expectBody().jsonPath("$.success").isEqualTo(false)
+                    .jsonPath("$.error.code").isEqualTo("INVALID_CREDENTIALS")
+                    .jsonPath("$.error.message").isEqualTo("로그인 ID 또는 비밀번호가 올바르지 않습니다.");
+        }
+
+        assertThat(BACKEND_HITS.get()).isEqualTo(hitsBefore);
+        assertThat(TEMPLATE.keys("login-fail:*").collectList().block()).isEmpty();
+    }
+
+    @Test
+    void 비밀번호가_72바이트면_평소처럼_세고_서비스로_보낸다() {
+        int hitsBefore = BACKEND_HITS.get();
+
+        login(LOGIN_ID, "a".repeat(72)).expectStatus().isBadRequest();
+
+        assertThat(BACKEND_HITS.get()).isEqualTo(hitsBefore + 1);
+    }
+
+    // 긴 숫자를 보내면 서비스는 문자열로 바꿔 받아 72바이트 확인을 피할 수 있다
+    @Test
+    void 비밀번호가_문자열이_아니면_400이고_서비스로_보내지_않는다() {
+        int hitsBefore = BACKEND_HITS.get();
+
+        for (String password : List.of("1".repeat(80), "true", "[\"x\"]")) {
+            post("/api/v1/auth/login", "{\"loginId\":\"" + LOGIN_ID + "\",\"password\":" + password + "}", null)
+                    .expectStatus().isBadRequest()
+                    .expectBody().jsonPath("$.error.message").isEqualTo("비밀번호는 문자열이어야 합니다.");
+        }
+
+        assertThat(BACKEND_HITS.get()).isEqualTo(hitsBefore);
+        assertThat(TEMPLATE.keys("login-fail:*").collectList().block()).isEmpty();
+    }
+
     @Test
     void 로그인_ID가_없거나_null이면_세지_않고_서비스로_보낸다() {
         int hitsBefore = BACKEND_HITS.get();

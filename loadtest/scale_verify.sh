@@ -9,7 +9,7 @@
 #
 # 단계: before(락 적용 전, 2개), after(적용 후, 2개), single(적용 후 같은 커밋, 1개), rescale(적용 후 같은 커밋, 다시 2개)
 #   성능 비교는 같은 커밋에서 after → single → rescale 순서로 측정한다 (2개 → 1개 → 2개, 순서 효과 확인)
-#   compose 구성을 바꾼 직후에는 회차 0(워밍업)을 먼저 실행한다. 보고서는 회차 0을 집계하지 않는다
+#   compose 구성을 변경한 직후에는 회차 0(워밍업)을 먼저 실행한다. 보고서는 회차 0을 집계하지 않는다
 #
 # 환경변수: OUT_ROOT(결과 폴더, 기본 loadtest/results/scale-verify), V1_SECONDS(60), V2_SECONDS(120), DRAIN_TIMEOUT(600),
 #          COMPOSE(기본: single은 "docker-compose -f docker-compose.yml -f compose.perf.yml", 그 외는 compose.scale.yml 추가)
@@ -63,7 +63,7 @@ record_env() {
 
 v1() {
   local d; d="$(phase_dir "$1")"
-  set_compose "$1"; check_instances "$1"
+  set_compose "$1"; check_instances "$1"; check_no_close
   record_env "$d"
   local secs="${V1_SECONDS:-60}"
   # 확장은 DB마다 한 번 생성해야 한다 (compose.perf.yml은 라이브러리만 올림. slow-queries.sql과 같은 방식)
@@ -82,7 +82,7 @@ v1() {
 
 v2() {
   local d; d="$(phase_dir after)"
-  set_compose after; check_instances after
+  set_compose after; check_instances after; check_no_close
   local secs="${V2_SECONDS:-120}" i sch
   # 배정은 #177 전에는 shedlock 표가 없을 수 있어, 표가 있는 스키마만 조회한다. 그 외 조회 오류는 회차를 중단한다
   local schemas="" raw="$d/v2-shedlock.raw"
@@ -113,6 +113,30 @@ offsets() {
   done
 }
 
+# 전체 Consumer 그룹 랙 합계 (LAG 열, 오프셋이 없는 파티션은 '-'라 제외). 조회 실패는 회차 중단
+consumer_lag() {
+  local out
+  out="$(docker exec ipo-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:29092 --describe --all-groups 2>/dev/null)" || die "Consumer 그룹 조회 실패"
+  echo "$out" | awk '$1=="GROUP" {for (i=1; i<=NF; i++) if ($i=="LAG") c=i; next} c && $c ~ /^[0-9]+$/ {s+=$c} END {print s+0}'
+}
+
+# 서비스 DB의 마지막 처리 시각 (UTC): 청약 갱신, Outbox 발행, 이벤트 처리 기록 중 최댓값. 이전 회차의 비동기 처리가 종료된 시각으로 사용
+last_activity() {
+  q "SELECT to_char(greatest(
+       (SELECT max(updated_at) FROM subscription.subscription),
+       (SELECT max(published_at) FROM subscription.outbox), (SELECT max(published_at) FROM account.outbox),
+       (SELECT max(processed_at) FROM subscription.processed_event), (SELECT max(processed_at) FROM account.processed_event))
+     AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"');"
+}
+
+# 측정 중 공모주가 마감되면 배정, 정산, 환불 처리가 V1 쿼리 집계와 성능 구간에 포함되므로, 10분 안에 마감되는 공모주나 마감 처리 중 공모주가 있으면 중단한다
+check_no_close() {
+  local soon closing
+  soon="$(q "SELECT count(*) FROM subscription.ipo WHERE status = 'OPEN' AND subscription_end_at < now() + interval '10 minutes';")"
+  closing="$(q "SELECT count(*) FROM subscription.ipo WHERE status = 'CLOSED';")"
+  [ "$soon" = "0" ] && [ "$closing" = "0" ] || die "10분 안에 마감되는 공모주 ${soon}개, 마감 처리 중 공모주 ${closing}개. 마감, 배정 완료 후 측정"
+}
+
 unpublished() {
   q "SELECT (SELECT count(*) FROM account.outbox WHERE published_at IS NULL) + (SELECT count(*) FROM subscription.outbox WHERE published_at IS NULL);"
 }
@@ -121,7 +145,7 @@ v3() {
   local d; d="$(phase_dir "$1")"
   local n="${2:-}"; [[ "$n" =~ ^[0-9]$ ]] || die "회차는 0(워밍업), 1-9: $n"
   local run="scale-$1-r$n" p="$d/v3-r$n"
-  set_compose "$1"; check_instances "$1"
+  set_compose "$1"; check_instances "$1"; check_no_close
   [ -f "$d/env.txt" ] || record_env "$d"
   # 재실행이면 이전 완료 기록을 먼저 삭제하고 진행 중 표시를 생성한다. 이후 단계가 실패해도 이전 회차 결과가 집계되지 않고 미완료로 표시된다
   local m="$p-meta.tmp"
@@ -134,6 +158,14 @@ v3() {
     w=$((w + 1)); [ "$w" -le 60 ] || die "미발행 Outbox가 60초 동안 0건이 되지 않음 (incident-response.md SQL 6 확인)"
     sleep 1
   done
+
+  # 이전 회차의 비동기 처리(중복 메시지 소비 포함)가 남아 있으면 이번 성능 구간에 포함되므로 Consumer 랙 0까지 대기
+  local lag; w=0
+  until lag="$(consumer_lag)" && [ "$lag" = "0" ]; do
+    w=$((w + 1)); [ "$w" -le 60 ] || die "Consumer 랙이 60초 동안 0이 되지 않음 (현재 ${lag})"
+    sleep 1
+  done
+  echo "start_lag=$lag" >> "$m"; echo "prev_activity_end=$(last_activity)" >> "$m"
 
   # 2. 새 공모주, 시작 시각 (DB 시각, UTC)
   local ipo t0

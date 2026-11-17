@@ -132,8 +132,8 @@ class V3Test(unittest.TestCase):
 
 class PerfSectionTest(unittest.TestCase):
 
-    def run_(self, n, integ=0, perf=True):
-        p = {"success": 1.0, "rate": 300.0, "p95": 300.0, "confirm_p95": 3.0,
+    def run_(self, n, integ=0, perf=True, residual_ok=True, p95=300.0):
+        p = {"residual_ok": residual_ok, "success": 1.0, "rate": 300.0, "p95": p95, "confirm_p95": 3.0,
              "pending": {"subscription-service": 0.0}, "active": {}, "cpu": {"api-gateway": 50.0}} if perf else None
         return {"n": n, "incomplete": False, "invalid": [], "topics": [], "dup": 0, "short": 0,
                 "integ": {"v17_dup_margin": integ}, "violations": integ, "dup_log": 0, "meta": {}, "status": "", "perf": p}
@@ -151,6 +151,30 @@ class PerfSectionTest(unittest.TestCase):
     def test_단계별_커밋이_다르면_비교_무효를_표시한다(self):
         out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1)]), ("1개", "", {"commit": "b"}, [self.run_(1)])))
         self.assertIn("비교 무효", out)
+
+    def test_잔여_처리_포함_가능_회차는_성능에서_제외한다(self):
+        out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1), self.run_(2, residual_ok=False), self.run_(3, residual_ok=None)]),))
+        self.assertIn("잔여 처리 포함 가능 (성능 제외)", out)
+        self.assertIn("잔여 처리 확인 안 함 (성능 제외)", out)
+        self.assertIn("| 2개 (1차) | 1 |", out)
+
+    def phases(self, a1, s1, a2):
+        return (("2개 (1차)", "", {"commit": "a"}, [self.run_(1, p95=a1)]), ("1개", "", {"commit": "a"}, [self.run_(1, p95=s1)]),
+                ("2개 (2차)", "", {"commit": "a"}, [self.run_(1, p95=a2)]))
+
+    def test_성능_판정은_1개_대비_기준_배수_이하면_저하_없음이다(self):
+        summary = sr.perf_section(lambda _: None, self.phases(330.0, 300.0, 320.0))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary, 1.2))
+        self.assertEqual(rows["성능 (같은 커밋, 2개 vs 1개)"], "✅ 저하 없음")
+
+    def test_성능_판정은_기준_배수를_초과하면_저하_있음이다(self):
+        summary = sr.perf_section(lambda _: None, self.phases(400.0, 300.0, 320.0))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary, 1.2))
+        self.assertEqual(rows["성능 (같은 커밋, 2개 vs 1개)"], "❌ 저하 있음")
+
+    def test_측정하지_않은_항목은_측정_안_함이다(self):
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, {}, 1.2))
+        self.assertEqual(set(rows.values()), {"측정 안 함"})
 
     def test_CPU는_인스턴스별_최댓값으로_표시한다(self):
         out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1)]),))

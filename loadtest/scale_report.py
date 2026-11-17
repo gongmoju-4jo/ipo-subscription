@@ -211,7 +211,16 @@ def perf(run_name, phase_dir, n):
     except (OSError, ValueError, KeyError):
         return None
     confirm = (read(os.path.join(phase_dir, f"v3-r{n}-confirm-p95.txt"), "") or "").strip()
+    # 잔여 처리 확인: 회차 시작 시 Consumer 랙 0이고, 이전 회차의 마지막 처리 시각이 성능 집계 구간 시작보다 이전이어야 함
+    meta = kv(os.path.join(phase_dir, f"v3-r{n}-meta.txt"))
+    residual_ok = None
+    m_win = re.search(r"서버 지표 구간 \| (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", read(os.path.join(d, "report.md"), "") or "")
+    if "start_lag" in meta and "prev_activity_end" in meta and m_win:
+        win_start_utc = datetime.strptime(m_win.group(1), "%Y-%m-%d %H:%M:%S") - timedelta(hours=9)
+        prev_end = ts(meta["prev_activity_end"].rstrip("Z").replace("T", " "))
+        residual_ok = meta["start_lag"] == "0" and prev_end < win_start_utc
     return {
+        "residual_ok": residual_ok,
         "success": 1 - float(m["http_req_failed"]["value"]),
         "rate": float(m["http_reqs"]["rate"]),
         "p95": float(m["http_req_duration"]["p(95)"]),
@@ -238,11 +247,13 @@ def fmt(v, digits=1, suffix=""):
 
 
 def perf_section(w, phases):
-    w("\n## 4. 성능 비교 (같은 커밋, 인스턴스 2개 → 1개 → 2개, S0 각 3회)\n")
+    w("\n# B. 동일 커밋 인스턴스 수 비교 (성능)\n")
+    w("> 같은 커밋에서 인스턴스 수만 변경한 비교. A의 적용 전후 비교와 함께 해석하지 않음\n")
+    w("## 4. 성능 비교 (같은 커밋, 인스턴스 2개 → 1개 → 2개, S0 각 3회)\n")
     commits = {env.get("commit") for _, _, env, runs in phases if runs}
     if not any(runs for *_, runs in phases):
         w("- 측정 안 함\n")
-        return
+        return {}
     if len(commits) != 1:
         w(f"- ⚠️ **비교 무효**: 단계별 커밋이 다름 {sorted(c[:7] for c in commits if c)}. 같은 커밋에서 인스턴스 수만 달라야 비교 가능\n")
     w("| 단계 | 회차 | 성공률 | S0 완료 속도 (건/초) | p95 (ms) | 접수 → 확정 p95 (초) | Hikari 대기 최대 (청약 / 계좌) | 인스턴스별 CPU 최대값 중 최댓값 (게이트웨이 / 청약 / 계좌, %) | 정합성 | 판정 |")
@@ -261,6 +272,10 @@ def perf_section(w, phases):
             elif not integ_ok:
                 # 정합성 실패 회차는 성능 결과를 판정하지 않는다
                 note = "❌ 정합성 실패 (성능 판정 안 함)"
+            elif p["residual_ok"] is None:
+                note = "⚠️ 잔여 처리 확인 안 함 (성능 제외)"
+            elif not p["residual_ok"]:
+                note = "⚠️ 이전 회차 잔여 처리 포함 가능 (성능 제외)"
             else:
                 note = "✅ 유효"
                 valid.append(p)
@@ -273,16 +288,18 @@ def perf_section(w, phases):
         if valid:
             med = lambda f: statistics.median(f(p) for p in valid)
             medians.append((label, len(valid), med(lambda p: p["rate"]), med(lambda p: p["p95"]),
-                            med(lambda p: p["confirm_p95"] if p["confirm_p95"] is not None else float("nan"))))
+                            med(lambda p: p["confirm_p95"] if p["confirm_p95"] is not None else float("nan")),
+                            min(p["success"] for p in valid)))
     if medians:
         w("\n| 단계 | 유효 회차 | S0 완료 속도 중앙값 (건/초) | p95 중앙값 (ms) | 접수 → 확정 p95 중앙값 (초) |")
         w("|---|---|---|---|---|")
-        for label, n, rate, p95, conf in medians:
+        for label, n, rate, p95, conf, _ in medians:
             w(f"| {label} | {n} | {fmt(rate)} | {fmt(p95)} | {fmt(conf, 2)} |")
     w("\n- **조건**: 같은 커밋, 같은 S0(가상 사용자 100개 x 10회, 회원 1,000명이 1건씩, 회차마다 새 공모주), 구성 전환 후 회차 0 워밍업 제외")
     w("- **S0 완료 속도**: S0는 가상 사용자 100개가 1초에 걸쳐 시작하는 고정 1,000건이라 서버 처리 용량이 아님. 지속 부하 처리량, 고가용성 근거로 사용하지 않음")
     w("- **CPU**: 서비스별로 인스턴스 중 최댓값 (`max by (job)`, report.py). 2개 합계가 아니라 총 자원 효율 비교에는 사용할 수 없음")
-    w("- **판정**: 정합성 실패 회차는 성능 값을 판정하지 않음. 무효, 미완료 회차는 중앙값에서 제외")
+    w("- **판정**: 정합성 실패 회차는 성능 값을 판정하지 않음. 무효, 미완료, 잔여 처리 포함 가능 회차는 중앙값에서 제외")
+    w("- **잔여 처리 확인**: 회차 시작 시 Consumer 랙 0, 이전 회차 마지막 처리 시각(청약 갱신, Outbox 발행, 처리 기록) < 성능 집계 구간 시작 (`meta.txt`의 `start_lag`, `prev_activity_end`, `report.md` 구간)")
     w("- **순서 효과**: 2개 → 1개 → 2개 순서. 2개 1차와 2차의 차이가 1개와의 차이보다 크면 순서 효과(DB 행 증가, JVM 상태)가 비교보다 큼")
     w("- **자원 예산 (교란 요인)**: 1개와 2개는 인스턴스 수만 다른 것이 아님\n")
     w("| 항목 | 1개 | 2개 | 출처 |")
@@ -291,11 +308,57 @@ def perf_section(w, phases):
     w("| DB 커넥션 풀 합 (청약 30, 계좌 10, 배정 10) | 50 | 100 (사용 가능 97 초과) | 서비스 `application.yml`, LOADTEST 3-5 |")
     w("| PC 전체 CPU (Colima) | 동일 | 동일 | `env.txt` |")
     w("\n- 2개는 상한 합 9.0이 Colima CPU 6개를 초과해, 상한이 아니라 PC CPU를 나눠 사용함\n")
+    return {label: {"n": n, "p95": p95, "success": succ} for label, n, rate, p95, conf, succ in medians}
+
+
+def final_verdicts(a1, l2, b3, a3, s3, r3, v4, perf_sum, tol):
+    rows = []
+    # 1. 정합성: 측정한 모든 단계의 유효 회차
+    runs = [r for rs in (b3, a3, s3, r3) for r in rs if not r["incomplete"] and not r["invalid"]]
+    measured = ", ".join(name for name, rs in (("적용 전", b3), ("적용 후", a3), ("1개", s3), ("2개 다시", r3)) if rs)
+    if runs:
+        bad = [r for r in runs if not (all(v == 0 for v in r["integ"].values()) and r["short"] == 0)]
+        rows.append(("정합성", verdict(not bad), f"유효 회차 {len(runs)}회 중 위반 {len(bad)}회 (측정한 단계: {measured})"))
+    else:
+        rows.append(("정합성", "측정 안 함", ""))
+    # 2. 중복 실행 (적용 후): V1 실행 횟수, V2 중복 획득, V3 중복 발행
+    if a1 is None or not a3:
+        rows.append(("중복 실행 (적용 후)", "측정 안 함", "V1 적용 후, V3 적용 후 필요"))
+    else:
+        v1_ok = all(EXPECT[k][1] <= a1[k][0] <= EXPECT[k][2] for k in EXPECT)
+        v2_rows = list((l2 or {}).values())
+        v2_ok = bool(v2_rows) and all(ov == 0 for _, _, ov, _ in v2_rows) and any(n != unk for n, _, _, unk in v2_rows)
+        va = [r for r in a3 if not r["incomplete"] and not r["invalid"]]
+        v3_ok = bool(va) and all(r["dup"] == 0 for r in va)
+        rows.append(("중복 실행 (적용 후)", verdict(v1_ok and v2_ok and v3_ok),
+                     f"V1 {'통과' if v1_ok else '불합격'}, V2 {'통과' if v2_ok else '불합격 또는 판정 불가'}, V3 중복 발행 {sum(r['dup'] for r in va)}건"))
+    # 3. 전역 입장 제한: V4 직접 기록 (after/v4.txt)
+    if "after_admitted" in v4:
+        limit = int(v4.get("limit", "25980"))
+        rows.append(("전역 입장 제한", verdict(int(v4["after_admitted"]) <= limit),
+                     f"게이트웨이 2대 1분 입장 {v4['after_admitted']}명, 기준 {limit:,}명 이하 (적용 전 {v4.get('before_admitted', '측정 안 함')}명)"))
+    else:
+        rows.append(("전역 입장 제한", "측정 안 함", "`after/v4.txt`에 직접 기록 (V4)"))
+    # 4. 성능: 같은 커밋 1개 대비 2개 p95 중앙값
+    need = ("2개 (1차)", "1개", "2개 (2차)")
+    if all(k in perf_sum for k in need):
+        base = perf_sum["1개"]["p95"]
+        ok = all(perf_sum[k]["p95"] <= base * tol and perf_sum[k]["success"] == 1.0 for k in need)
+        a, b = perf_sum["2개 (1차)"]["p95"], perf_sum["2개 (2차)"]["p95"]
+        order = abs(a - b) > abs((a + b) / 2 - base)
+        detail = f"p95 중앙값 2개 {a:.1f} / 1개 {base:.1f} / 2개 {b:.1f}ms, 기준 1개의 {tol:.2f}배 이하, 성공률 100%"
+        if order:
+            detail += ". 2개 1차, 2차 차이가 1개와의 차이보다 커서 순서 효과가 인스턴스 수 효과보다 큼 (해석 주의)"
+        rows.append(("성능 (같은 커밋, 2개 vs 1개)", "✅ 저하 없음" if ok else "❌ 저하 있음", detail))
+    else:
+        rows.append(("성능 (같은 커밋, 2개 vs 1개)", "측정 안 함", "단계별 유효 회차 필요 (2개 → 1개 → 2개)"))
+    return rows
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="loadtest/results/scale-verify")
+    ap.add_argument("--perf-tolerance", type=float, default=1.2, help="성능 판정: 2개의 p95 중앙값이 1개의 몇 배 이하면 저하 없음 (측정 전 확정)")
     a = ap.parse_args()
     bdir, adir = os.path.join(a.root, "before"), os.path.join(a.root, "after")
     benv, aenv = kv(os.path.join(bdir, "env.txt")), kv(os.path.join(adir, "env.txt"))
@@ -325,13 +388,28 @@ def main():
     w(f"> 결론: 마감 스케줄러 1분 실행 {shown(calls(b1, '마감'))} → {shown(calls(a1, '마감'))}, "
       f"Outbox 중복 발행 {shown_dup(vb, dup_b)} → {shown_dup(va, dup_a)} (유효 회차 {len(vb)}, {len(va)}개 합계), "
       f"정합성 위반 {shown_dup(vb, vio_b)} / {shown_dup(va, vio_a)}\n")
-    w("## 측정 환경\n")
+    perf_lines = []
+    perf_sum = perf_section(perf_lines.append, (("2개 (1차)", adir, aenv, a3), ("1개", sdir, senv, s3), ("2개 (2차)", rdir, renv, r3)))
+    w("## 0. 최종 판정 (항목별 별도)\n")
+    w("| 항목 | 판정 | 근거 |")
+    w("|---|---|---|")
+    for name, v, why in final_verdicts(a1, l2, b3, a3, s3, r3, kv(os.path.join(adir, "v4.txt")), perf_sum, a.perf_tolerance):
+        w(f"| {name} | {v} | {why} |")
+    w("\n- **구분**: 정합성, 중복 실행은 A(적용 전후 변경 전체), 성능은 B(같은 커밋 인스턴스 수)에서 판정. 서로의 근거로 사용하지 않음")
+    w(f"- **성능 기준**: 2개(1차, 2차) p95 중앙값이 1개의 {a.perf_tolerance:.2f}배 이하, 유효 회차 성공률 100% (`--perf-tolerance`)\n")
+    w("## 측정 조건\n")
     for label, env in (("적용 전", benv), ("적용 후", aenv)):
-        w(f"- **{label}**: 커밋 `{env.get('commit', '?')[:7]}`, {env.get('date', '?')}")
+        w(f"- **{label}**: 커밋 `{env['commit'][:7]}`, {env.get('date', '?')}" if env.get("commit") else f"- **{label}**: 측정 안 함")
     w(f"- **PC**: {benv.get('cpu', '?')}, 코어 {benv.get('host_cpus', '?')}개, 메모리 {int(benv.get('host_mem_bytes', 0) or 0) / 2**30:.0f}GB")
     w(f"- **Docker**: {benv.get('docker', '?')}")
     w("- **구성**: `docker-compose.yml` + `compose.perf.yml` + `compose.scale.yml` (계좌, 청약, 배정 2개씩, 게이트웨이 2대), DB, Kafka, k6 같은 PC")
-    w(f"- **측정용 설정**: `LEDGER_RECONCILIATION_CRON={benv.get('ledger_cron', '?')}` (원래 매일 04:00)\n")
+    w(f"- **측정용 설정**: `LEDGER_RECONCILIATION_CRON={benv.get('ledger_cron', '?')}` (원래 매일 04:00)")
+    for label, env in (("1개", senv), ("2개 다시", renv)):
+        if env:
+            w(f"- **{label}**: 커밋 `{env.get('commit', '?')[:7]}`, {env.get('date', '?')}")
+    w("- **부하**: S0 (가상 사용자 100개 x 10회, 회원 1,000명이 1건씩, 회차마다 새 공모주), 측정 중 마감 예정 공모주 없음 (스크립트 확인)\n")
+    w("# A. 적용 전후 변경 전체 효과 (적용 전 커밋 → 적용 후 커밋)\n")
+    w("> 두 커밋 사이에는 락 외 변경(#148 백오프, #162 인출 배치 등)도 포함. 실행 횟수, 중복 건수, 정합성만 비교하고 처리량, 응답 시간은 비교하지 않음\n")
 
     bsec = (read(os.path.join(bdir, "v1-seconds.txt"), "") or "").strip()
     asec = (read(os.path.join(adir, "v1-seconds.txt"), "") or "").strip()
@@ -414,19 +492,26 @@ def main():
                 w(f"- **{label} r{r['n']} k6 종료 코드 {r['meta']['k6_exit']}**: 99면 k6 임계값(thresholds) 위반, 위반 항목은 "
                   f"`loadtest/results/{r['meta'].get('run', '?')}/summary.json`의 `thresholds` (이 검증의 판정 대상 아님)")
 
-    perf_section(w, (("2개 (1차)", adir, aenv, a3), ("1개", sdir, senv, s3), ("2개 (2차)", rdir, renv, r3)))
+    L.extend(perf_lines)
 
     w("\n## 5. V4 입장, V5 강제 종료 (직접 기록)\n")
-    w("- **V4**: 적용 전 1분 _명, 적용 후 1분 _명 (측정자 _, 방법 PR #181)")
+    w("- **V4**: `after/v4.txt`에 `before_admitted=`, `after_admitted=` (1분 입장 인원), `limit=25980` 기록 → 0절 판정에 반영 (측정자, 방법 PR #181)")
     w("- **V5**: 종료 컨테이너 _, 종료 시각 _, 다른 인스턴스 락 획득 시각 _, 처리 완료 후 위반 _건\n")
     w("## 6. 이상값, 미확인\n")
     w("- (기대와 다른 값을 한 줄씩. 없으면 \"없음\")\n")
-    w("<details>\n<summary>원본 파일 (before, after)</summary>\n")
-    for d in (bdir, adir):
+    w("## 7. 한계\n")
+    w("- **로컬 1대**: 인스턴스 2개가 같은 PC의 CPU, DB, Kafka를 공유. 실제 다중 서버 환경과 다름")
+    w("- **A의 비교 범위**: 적용 전후 커밋 차이에 락 외 변경 포함. 중복 실행, 정합성 변화만 락 효과로 해석")
+    w("- **B의 비교 범위**: S0 1,000건의 응답 시간 비교. 지속 부하 처리량, 고가용성은 측정하지 않음. 1개와 2개는 자원 예산(CPU 상한 4.5 vs 9.0, DB 풀 50 vs 100)도 다름")
+    w("- **CPU**: 인스턴스별 최댓값이라 2개의 총 CPU 사용량이 아님")
+    w("- **외부 요청**: 게이트웨이 8080 1대만 수신. 2번째 게이트웨이는 스케줄러, 입장 처리 중복 상황만 재현")
+    w("- **원장 대사 주기**: 실제 매일 04:00을 측정용 10초로 변경\n")
+    w("<details>\n<summary>원본 파일 (before, after, single, rescale)</summary>\n")
+    for d in (bdir, adir, sdir, rdir):
         if os.path.isdir(d):
             for f in sorted(os.listdir(d)):
                 w(f"- `{os.path.join(d, f)}`")
-    w("- k6 원본, verify.sql 결과: `loadtest/results/scale-{before,after}-r*/`")
+    w("- k6 원본, verify.sql 결과, report.md: `loadtest/results/scale-{before,after,single,rescale}-r*/`")
     w("\n</details>")
 
     out = os.path.join(a.root, "요약.md")

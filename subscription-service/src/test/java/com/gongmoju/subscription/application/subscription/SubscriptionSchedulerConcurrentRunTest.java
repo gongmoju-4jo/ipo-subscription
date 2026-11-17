@@ -195,6 +195,29 @@ class SubscriptionSchedulerConcurrentRunTest {
         System.out.println("[경합 결과 분포] 시간 초과 보상 두 번 실행, 진 쪽: " + outcomes);
     }
 
+    @Test
+    @DisplayName("한 인스턴스가 최대 횟수에 이른 PENDING을 읽은 뒤 다른 인스턴스의 시간 초과 보상이 먼저 커밋되면, 늦은 쪽은 낙관적 락으로 실패해 롤백되고 다음 주기에는 PENDING이 아니라서 건너뛴다")
+    void timeoutCompensation_loserFailsAndSkipsNextTick_whenOtherInstanceCommitsFirst() throws Exception {
+        // given
+        UUID subscriptionId = insertPending(MAX_ATTEMPTS);
+
+        // when
+        Object loser = loserReadsThenWinnerCommits(
+                () -> timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS),
+                () -> timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS));
+        ReserveTimeoutResult nextTick = timeoutService.handle(subscriptionId, threshold, MAX_ATTEMPTS);
+
+        // then: 보상은 먼저 커밋한 쪽에서 한 번만 시작되고, 반환 요청도 1건만 기록됨
+        assertThat(loser).isInstanceOf(OptimisticLockingFailureException.class);
+        assertThat(nextTick).isEqualTo(ReserveTimeoutResult.NOT_PENDING_IGNORED);
+        Map<String, Object> row = subscription(subscriptionId);
+        assertThat(row.get("status")).isEqualTo("COMPENSATING");
+        assertThat(row.get("cancel_reason")).isEqualTo("TIMEOUT");
+        assertThat(row.get("attempts")).isEqualTo(1);
+        assertThat(outboxCount(subscriptionId, "margin.void-requested")).isEqualTo(1);
+        assertThat(outboxCount(subscriptionId, "margin.reserve-requested")).isZero();
+    }
+
     // ---------- 반환 재요청 ----------
 
     @Test

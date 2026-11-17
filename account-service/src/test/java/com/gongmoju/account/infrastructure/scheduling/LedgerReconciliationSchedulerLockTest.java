@@ -26,7 +26,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 @SpringBootTest(properties = {
         "eureka.client.enabled=false",
-        "ledger.reconciliation.enabled=true"
+        "ledger.reconciliation.enabled=true",
+        // 측정용 설정처럼 환경변수로 락 최소 유지 시간을 변경 (application.yml의 ${LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR:PT5M})
+        "LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR=PT5S"
 })
 @DisplayName("원장 대사 스케줄러 락")
 class LedgerReconciliationSchedulerLockTest {
@@ -54,6 +56,18 @@ class LedgerReconciliationSchedulerLockTest {
         assertThat(lock.name()).isEqualTo("LedgerReconciliationScheduler.reconcile");
         assertThat(lock.lockAtMostFor()).isEqualTo("${ledger.reconciliation.lock-at-most-for:PT30M}");
         assertThat(lock.lockAtLeastFor()).isEqualTo("${ledger.reconciliation.lock-at-least-for:PT5M}");
+    }
+
+    @Test
+    @DisplayName("락 최소 유지 시간은 환경변수 LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR로 변경되고, 최대 시간은 지정하지 않으면 기본값 PT30M이다")
+    void lockTimes_canBeOverriddenByEnvironmentVariable() {
+        // when: 어노테이션과 같은 키로 읽은 실제 설정값
+        Duration atLeast = Duration.parse(environment.resolveRequiredPlaceholders("${ledger.reconciliation.lock-at-least-for:PT5M}"));
+        Duration atMost = Duration.parse(environment.resolveRequiredPlaceholders("${ledger.reconciliation.lock-at-most-for:PT30M}"));
+
+        // then
+        assertThat(atLeast).isEqualTo(Duration.ofSeconds(5));
+        assertThat(atMost).isEqualTo(Duration.ofMinutes(30));
     }
 
     @Test

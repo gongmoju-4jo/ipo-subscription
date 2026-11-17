@@ -187,6 +187,9 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # 원장 대사 실행 시각 (#132). .env에 없으면 매일 04:00 KST
       LEDGER_RECONCILIATION_CRON: ${LEDGER_RECONCILIATION_CRON:-0 0 4 * * *}
+      # 원장 대사 락 시간 (#167). .env에 없으면 최소 유지 5분, 최대 30분. cron 간격을 5분 미만으로 변경할 때 최소 유지도 cron 간격 미만으로 같이 변경
+      LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR: ${LEDGER_RECONCILIATION_LOCK_AT_LEAST_FOR:-PT5M}
+      LEDGER_RECONCILIATION_LOCK_AT_MOST_FOR: ${LEDGER_RECONCILIATION_LOCK_AT_MOST_FOR:-PT30M}
       # 분산 추적. Zipkin이 떠 있지 않아도 서비스는 그대로 뜨고 span만 버린다. 샘플링 기본 1.0 (부하 측정은 compose.perf.yml이 0으로 둔다)
       ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
       TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-1.0}

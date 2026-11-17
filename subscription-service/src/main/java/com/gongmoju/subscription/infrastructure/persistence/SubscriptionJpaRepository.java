@@ -29,7 +29,7 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
 
     boolean existsByIpoIdAndUserIdAndStatusNotIn(UUID ipoId, UUID userId, Collection<SubscriptionStatus> statuses);
 
-    // 메서드 이름 쿼리는 ipo 테이블을 조인하므로 s.ipo.id로 subscription.ipo_id 컬럼에 직접 건다 (아래 findByIpoIdAndStatus와 같은 이유)
+    // 메서드 이름 쿼리(countByIpoIdAndStatusIn)는 ipo 테이블을 조인해 조건을 걸어서, s.ipo.id로 subscription.ipo_id 컬럼에 직접 건다
     @Query("select count(s) from Subscription s where s.ipo.id = :ipoId and s.status in :statuses")
     long countByIpoIdAndStatusIn(@Param("ipoId") UUID ipoId, @Param("statuses") Collection<SubscriptionStatus> statuses);
 
@@ -125,13 +125,6 @@ interface SubscriptionJpaRepository extends JpaRepository<Subscription, UUID> {
     @Query("select max(o.publishedAt) from Outbox o where o.aggregateId = :subscriptionId "
             + "and o.topic = 'margin.reserve-requested' and o.publishedAt is not null")
     Instant findLastReserveRequestPublishedAt(@Param("subscriptionId") UUID subscriptionId);
-
-    // 응답에 공모주 정보가 없어서 공모주를 읽지 않는다.
-    // 메서드 이름 쿼리(findByIpoIdAndStatus)는 ipo 테이블을 조인해 조건을 걸어서, s.ipo.id로 subscription.ipo_id 컬럼에 직접 건다
-    @Query(value = "select s from Subscription s where s.ipo.id = :ipoId and s.status = :status",
-            countQuery = "select count(s) from Subscription s where s.ipo.id = :ipoId and s.status = :status")
-    Page<Subscription> findByIpoIdAndStatus(@Param("ipoId") UUID ipoId, @Param("status") SubscriptionStatus status,
-                                            Pageable pageable);
 
     // 확정 청약 키셋 조회 (#138). 상태를 바인딩 값이 아니라 SQL에 'CONFIRMED'로 적어야 부분 인덱스 ix_subscription_confirmed_ipo를 쓴다
     // (바인딩 값이면 재사용하는 실행 계획이 어떤 상태인지 몰라 부분 인덱스를 고를 수 없음). 첫 요청과 다음 요청을 나눠 ID 위치로 바로 찾게 한다

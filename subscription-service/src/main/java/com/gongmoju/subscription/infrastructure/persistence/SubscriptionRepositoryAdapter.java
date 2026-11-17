@@ -101,11 +101,6 @@ class SubscriptionRepositoryAdapter implements SubscriptionRepository {
     }
 
     @Override
-    public Page<Subscription> findByIpoIdAndStatus(UUID ipoId, SubscriptionStatus status, Pageable pageable) {
-        return jpaRepository.findByIpoIdAndStatus(ipoId, status, pageable);
-    }
-
-    @Override
     public List<Subscription> findConfirmedByIpoId(UUID ipoId, int limit) {
         return jpaRepository.findConfirmedByIpoId(ipoId, limit);
     }

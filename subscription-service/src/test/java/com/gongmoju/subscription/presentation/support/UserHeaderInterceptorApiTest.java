@@ -5,11 +5,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -48,6 +50,14 @@ class UserHeaderInterceptorApiTest {
                 .andExpect(status().isBadRequest());
         mockMvc.perform(get("/api/v1/subscriptions/not-a-uuid").header(RequestHeaders.USER_ID, USER_ID))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("헤더 없이 지원하지 않는 Content-Type으로 청약을 신청해도 415가 아니라 401이다 (매핑에 consumes가 없어 본문 변환 전에 인터셉터가 돎)")
+    void unsupportedContentType_unauthorizedFirst() throws Exception {
+        mockMvc.perform(post("/api/v1/subscriptions").contentType(MediaType.TEXT_PLAIN).content("hello"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
     }
 
     @Test

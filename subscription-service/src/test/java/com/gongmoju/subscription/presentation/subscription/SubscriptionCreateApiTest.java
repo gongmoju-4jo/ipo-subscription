@@ -291,10 +291,18 @@ class SubscriptionCreateApiTest {
                 .andExpect(jsonPath("$.paths['/api/v1/subscriptions'].post.responses['401']").exists());
     }
 
+    // 헤더 확인은 본문 검사(@Valid)보다 먼저다 (#191, UserHeaderInterceptor). 전에는 본문 400이 먼저였다 (#25)
     @Test
-    void 요청_본문_오류가_헤더_오류보다_먼저다() throws Exception {
-        subscribe("{}", null, null)
-                .andExpect(status().isBadRequest());
+    void 헤더_오류가_요청_본문_오류보다_먼저다() throws Exception {
+        // 두 헤더 모두 없음, 회원 ID만 있고 도착 시각 없음, 회원 ID 형식 오류
+        String[][] headers = {{null, null}, {USER_ID.toString(), null}, {"abc", DURING_UTC}};
+        for (String[] header : headers) {
+            subscribe("{}", header[0], header[1])
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"))
+                    .andExpect(jsonPath("$.error.details").doesNotExist());
+        }
+        assertThat(subscriptionCount()).isZero();
     }
 
     @Test

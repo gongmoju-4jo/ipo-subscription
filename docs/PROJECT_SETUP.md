@@ -113,6 +113,8 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - Gateway는 `common`을 쓰지 않아 401·403 오류 응답을 직접 공통 형식으로 만든다 (`details`는 없으면 생략)
 - 컨테이너 헬스체크와 Prometheus 수집용으로 **관리 포트(18090)의 `/actuator/health`, `/actuator/prometheus`만** 토큰 없이 열려 있다 (`SecurityConfig`의 관리 체인). 8080의 `/actuator/**`와 관리 포트의 다른 엔드포인트는 계속 토큰이 필요하다 (`ManagementEndpointSecurityTest`가 확인)
 - 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
+  - 서비스도 Gateway가 넣는 헤더를 인터셉터로 먼저 확인한다 (`presentation/support`의 `UserHeaderInterceptor`, `AdminRoleInterceptor`). 회원 API(`/api/v1/subscriptions/**`, `/api/v1/accounts/**`, `/api/v1/allocations/**`)는 `X-User-Id`(청약 신청은 `X-Request-Received-At`도), 관리자 API(`/api/v1/admin/**`)는 `X-User-Role`. 없거나 틀리면 본문, 경로 검사보다 먼저 401(관리자는 403)이다
+  - 회원가입, 로그인, 공모주 조회, `/internal/**`은 확인하지 않는다
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
 - 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
 

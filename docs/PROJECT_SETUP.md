@@ -113,6 +113,9 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
 - Gateway는 `common`을 쓰지 않아 401·403 오류 응답을 직접 공통 형식으로 만든다 (`details`는 없으면 생략)
 - 컨테이너 헬스체크와 Prometheus 수집용으로 **관리 포트(18090)의 `/actuator/health`, `/actuator/prometheus`만** 토큰 없이 열려 있다 (`SecurityConfig`의 관리 체인). 8080의 `/actuator/**`와 관리 포트의 다른 엔드포인트는 계속 토큰이 필요하다 (`ManagementEndpointSecurityTest`가 확인)
 - 서비스 포트(IntelliJ 실행)로 직접 호출하면 Gateway를 거치지 않아 토큰 없이 `X-User-Id` 헤더만으로 호출된다 (개발용. Docker는 서비스 포트 비공개)
+  - 서비스도 Gateway가 넣는 헤더를 인터셉터로 먼저 확인한다 (`presentation/support`의 `UserHeaderInterceptor`, `AdminRoleInterceptor`). 회원 API(`/api/v1/subscriptions/**`, `/api/v1/accounts/**`, `/api/v1/allocations/**`)는 `X-User-Id`(청약 신청은 `X-Request-Received-At`도), 관리자 API(`/api/v1/admin/**`)는 `X-User-Role`. 없거나 틀리면 본문, 경로 검사보다 먼저 401(관리자는 403)이다
+  - 다만 인터셉터는 컨트롤러를 찾은 뒤에 돌아서, 그 전에 끝나는 오류(지원하지 않는 메서드 405)는 헤더 확인보다 먼저 나간다. Gateway를 거치면 생기지 않는 경우다 (Content-Type 415는 매핑에 `consumes`를 둔 경우만 먼저인데, 지금은 `consumes`를 쓰는 API가 없다)
+  - 회원가입, 로그인, 공모주 조회, `/internal/**`은 확인하지 않는다
 - 📌 라우트 위치: `spring.cloud.gateway.server.webflux.routes` (Spring Cloud 2025.0 방식)
 - 라우트, Swagger, 인증 규칙은 `GatewayRoutesTest`와 `gateway/security/` 테스트가 확인 → 변경 시 테스트도 수정
 
@@ -126,7 +129,7 @@ API 명세 목차 기준 **초안**. 명세 확정 시 `api-gateway/.../applicat
   - 그 로그인 ID가 일반 회원(USER)이면 승격하지 않고 WARN 로그만 남긴다
 - 그 뒤 관리자: 관리자로 로그인해 상단바의 [관리자 계정 추가] (`/admin/users/new`) 또는 `POST /api/v1/admin/users`
   - 회원가입과 같은 항목(`loginId`, `password`, `name`)을 받고 역할은 항상 ADMIN. 누가 만들었는지는 `users.created_by`에 남는다
-  - ADMIN 확인은 게이트웨이(`/api/v1/admin/**`)와 계좌 서비스(`AdminRoleInterceptor`) 둘 다 한다. 본문 검사보다 먼저 403
+  - ADMIN 확인은 게이트웨이(`/api/v1/admin/**`)와 각 서비스(계좌, 청약, 배정의 `AdminRoleInterceptor`) 둘 다 한다. 본문 검사보다 먼저 403
 - 관리자 승격, 해제, 비밀번호 변경은 없다
 - `.env`의 두 값을 바꾼 뒤에는 IntelliJ는 계좌 서비스 재시작, Docker는 `docker-compose up -d account-service` (`restart`로는 환경변수가 바뀌지 않는다)
 - `ADMIN_PASSWORD`에 `$`를 쓰지 않는다. Spring이 값 안의 `${...}`를 다른 설정으로 바꾸려 해서, 기동이 실패하고 오류 로그에 값이 그대로 찍힌다

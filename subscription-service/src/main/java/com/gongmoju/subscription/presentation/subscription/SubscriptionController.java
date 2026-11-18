@@ -43,6 +43,8 @@ public class SubscriptionController {
                     + "증거금 인출 요청 기록을 마치면 202를 준다. 202는 접수 완료이며 청약 확정이 아니다. "
                     + "같은 requestId로 같은 내용을 다시 요청하면 같은 subscriptionId를 돌려주고, 내용이 다르거나 "
                     + "다른 회원이 쓴 requestId면 409다.")
+    // ResponseEntity로 202를 주면 Swagger가 상태를 알 수 없어 200으로 표시하므로 성공 응답을 직접 적는다
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "202", description = "접수됨")
     @ApiErrorCodes(
             common = {CommonErrorCode.VALIDATION_ERROR, CommonErrorCode.UNAUTHORIZED, CommonErrorCode.RESOURCE_NOT_FOUND,
                     CommonErrorCode.DUPLICATE_RESOURCE, CommonErrorCode.INTERNAL_SERVER_ERROR},

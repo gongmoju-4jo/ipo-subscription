@@ -113,7 +113,7 @@ class ReviewFixTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             run = os.path.join(root, "loadtest", "results", "run-y")
             os.makedirs(run)
-            write(run, "summary.json", '{"metrics": {"http_req_failed": {"value": 0}, "http_reqs": {"rate": 1}, "http_req_duration": {"p(95)": 1}}}')
+            write(run, "summary.json", '{"metrics": {"http_req_failed": {"value": 0}, "http_reqs": {"rate": 1}, "http_req_duration": {"p(95)": 1, "avg": 1}}}')
             write(run, "prometheus.json", "{}")
             write(run, "report.md", "| 서버 지표 구간 | 2026-11-17 15:47:31 ~ 2026-11-17 15:47:54 |\n")
             phase = os.path.join(root, "phase")
@@ -129,7 +129,7 @@ class ReviewFixTest(unittest.TestCase):
     def run_(self, n, dup=0, commit="a", invalid=None):
         return {"n": n, "incomplete": False, "invalid": invalid or [], "topics": [], "dup": dup, "short": 0,
                 "integ": {"v17_dup_margin": 0}, "violations": 0, "dup_log": 0, "meta": {"commit": commit}, "status": "",
-                "perf": {"residual_ok": True, "success": 1.0, "rate": 300.0, "p95": 300.0, "confirm_p95": 3.0,
+                "perf": {"residual_ok": True, "success": 1.0, "rate": 300.0, "p95": 300.0, "avg": 100.0, "confirm_p95": 3.0,
                          "pending": {}, "active": {}, "cpu": {}}}
 
     def test_적용_후_커밋_단계의_중복_발행_회차는_성능_판정에서_제외한다(self):
@@ -141,16 +141,16 @@ class ReviewFixTest(unittest.TestCase):
         summary = sr.perf_section(lambda _: None, (("2개 (1차)", "", {}, [self.run_(1, commit="a")]),
                                                    ("1개", "", {}, [self.run_(1, commit="b")]),
                                                    ("2개 (2차)", "", {}, [self.run_(1, commit="a")])))
-        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary, 1.2))
-        self.assertEqual(rows["성능 (같은 커밋, 2개 vs 1개)"], "⚠️ 비교 무효")
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary))
+        self.assertEqual(rows["성능 B: G1 목표 (2개, 공식 합격)"], "⚠️ 비교 무효")
 
     def test_유효_회차가_없는_단계가_있으면_정합성은_판정_불가다(self):
-        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [self.run_(1)], [self.run_(1, invalid=["k6 종료 코드 1"])], [], [], {}, {}, 1.2))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [self.run_(1)], [self.run_(1, invalid=["k6 종료 코드 1"])], [], [], {}, {}))
         self.assertIn("판정 불가", rows["정합성"])
 
     def test_V2를_측정하지_않으면_중복_실행은_판정_불가다(self):
         a1 = {k: (12 if k != "원장 대사" else 6, []) for k in sr.EXPECT}
-        rows = dict((k, v) for k, v, _ in sr.final_verdicts(a1, None, [], [self.run_(1)], [], [], {}, {}, 1.2))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(a1, None, [], [self.run_(1)], [], [], {}, {}))
         self.assertIn("판정 불가 (V2 측정 안 함)", rows["중복 실행 (적용 후)"])
 
 
@@ -161,7 +161,7 @@ class LedgerExpectTest(unittest.TestCase):
 
     def test_원장_대사가_1회면_락_최소_유지_효과와_구분이_안_돼_불합격이다(self):
         a1 = {k: (12 if k != "원장 대사" else 1, []) for k in sr.EXPECT}
-        rows = dict((k, v) for k, v, _ in sr.final_verdicts(a1, None, [], [ReviewFixTest().run_(1)], [], [], {}, {}, 1.2))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(a1, None, [], [ReviewFixTest().run_(1)], [], [], {}, {}))
         self.assertEqual(rows["중복 실행 (적용 후)"], "❌ 불합격")
 
 
@@ -220,8 +220,8 @@ class V3Test(unittest.TestCase):
 
 class PerfSectionTest(unittest.TestCase):
 
-    def run_(self, n, integ=0, perf=True, residual_ok=True, p95=300.0):
-        p = {"residual_ok": residual_ok, "success": 1.0, "rate": 300.0, "p95": p95, "confirm_p95": 3.0,
+    def run_(self, n, integ=0, perf=True, residual_ok=True, p95=300.0, avg=100.0):
+        p = {"residual_ok": residual_ok, "success": 1.0, "rate": 300.0, "p95": p95, "avg": avg, "confirm_p95": 3.0,
              "pending": {"subscription-service": 0.0}, "active": {}, "cpu": {"api-gateway": 50.0}} if perf else None
         return {"n": n, "incomplete": False, "invalid": [], "topics": [], "dup": 0, "short": 0,
                 "integ": {"v17_dup_margin": integ}, "violations": integ, "dup_log": 0, "meta": {"commit": "a"}, "status": "", "perf": p}
@@ -248,8 +248,8 @@ class PerfSectionTest(unittest.TestCase):
         self.assertIn("회차 커밋이 없는 회차가 있음", out)
         summary = sr.perf_section(lambda _: None, (("2개 (1차)", "", {"commit": "a"}, [old]), ("1개", "", {"commit": "a"}, [self.run_(1)]),
                                                    ("2개 (2차)", "", {"commit": "a"}, [self.run_(1)])))
-        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary, 1.2))
-        self.assertEqual(rows["성능 (같은 커밋, 2개 vs 1개)"], "⚠️ 비교 무효")
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary))
+        self.assertEqual(rows["성능 B: G1 목표 (2개, 공식 합격)"], "⚠️ 비교 무효")
 
     def test_잔여_처리_포함_가능_회차는_성능에서_제외한다(self):
         out = self.render((("2개 (1차)", "", {"commit": "a"}, [self.run_(1), self.run_(2, residual_ok=False), self.run_(3, residual_ok=None)]),))
@@ -261,18 +261,40 @@ class PerfSectionTest(unittest.TestCase):
         return (("2개 (1차)", "", {"commit": "a"}, [self.run_(1, p95=a1)]), ("1개", "", {"commit": "a"}, [self.run_(1, p95=s1)]),
                 ("2개 (2차)", "", {"commit": "a"}, [self.run_(1, p95=a2)]))
 
-    def test_성능_판정은_1개_대비_기준_배수_이하면_저하_없음이다(self):
+    def test_B는_2개_회차가_모두_G1_목표를_충족하면_통과다(self):
         summary = sr.perf_section(lambda _: None, self.phases(330.0, 300.0, 320.0))
-        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary, 1.2))
-        self.assertEqual(rows["성능 (같은 커밋, 2개 vs 1개)"], "✅ 저하 없음")
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary))
+        self.assertEqual(rows["성능 B: G1 목표 (2개, 공식 합격)"], "✅ 통과")
 
-    def test_성능_판정은_기준_배수를_초과하면_저하_있음이다(self):
-        summary = sr.perf_section(lambda _: None, self.phases(400.0, 300.0, 320.0))
-        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary, 1.2))
-        self.assertEqual(rows["성능 (같은 커밋, 2개 vs 1개)"], "❌ 저하 있음")
+    def test_B는_2개_회차_하나라도_p95_500ms를_초과하면_불합격이다(self):
+        summary = sr.perf_section(lambda _: None, self.phases(510.0, 300.0, 320.0))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary))
+        self.assertEqual(rows["성능 B: G1 목표 (2개, 공식 합격)"], "❌ 불합격")
+
+    def test_B는_평균_250ms를_초과하면_불합격이다(self):
+        phases = (("2개 (1차)", "", {}, [self.run_(1, avg=260.0)]), ("1개", "", {}, [self.run_(1)]), ("2개 (2차)", "", {}, [self.run_(1)]))
+        summary = sr.perf_section(lambda _: None, phases)
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, summary))
+        self.assertEqual(rows["성능 B: G1 목표 (2개, 공식 합격)"], "❌ 불합격")
+
+    def test_C는_두_2개_단계가_모두_1개보다_높으면_반복된_방향의_차이_관측이다(self):
+        summary = sr.perf_section(lambda _: None, self.phases(330.0, 300.0, 320.0))
+        self.assertIn("반복된 방향의 차이 관측 (두 2개 단계 모두 1개보다 높음)", sr.observe(summary)[0])
+
+    def test_C는_방향이_다르면_일관된_방향의_차이_미관측이다(self):
+        summary = sr.perf_section(lambda _: None, self.phases(330.0, 300.0, 280.0))
+        self.assertEqual(sr.observe(summary)[0], "일관된 방향의 차이 미관측")
+
+    def test_C_절은_판정이_아니라고_명시하고_최솟값_최댓값_차이를_기록한다(self):
+        summary = sr.perf_section(lambda _: None, self.phases(330.0, 300.0, 320.0))
+        lines = []
+        sr.observation_section(lines.append, summary)
+        out = "\n".join(lines)
+        self.assertIn("판정하지 않고", out)
+        self.assertIn("| 2개 (1차) | 1 | 330.0 | 330.0 | 330.0 | +30.0ms (+10.0%) |", out)
 
     def test_측정하지_않은_항목은_측정_안_함이다(self):
-        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, {}, 1.2))
+        rows = dict((k, v) for k, v, _ in sr.final_verdicts(None, None, [], [], [], [], {}, {}))
         self.assertEqual(set(rows.values()), {"측정 안 함"})
 
     def test_CPU는_인스턴스별_최댓값으로_표시한다(self):

@@ -11,10 +11,18 @@
 #   성능 비교는 같은 커밋에서 after → single → rescale 순서로 측정한다 (2개 → 1개 → 2개, 순서 효과 확인)
 #   compose 구성을 변경한 직후에는 회차 0(워밍업)을 먼저 실행한다. 보고서는 회차 0을 집계하지 않는다
 #
+# 적용 전(before) 실행 순서: 적용 전 커밋에는 이 스크립트가 없고, 기록되는 commit은 실행 시점의 git HEAD라서 아래 순서를 지킨다
+#   1. cp loadtest/scale_verify.sh loadtest/scale_report.py /tmp/       (스크립트가 있는 브랜치에서 복사)
+#   2. git switch --detach <적용 전 커밋> → ./gradlew build -x test → compose up -d --build
+#   3. cp /tmp/scale_verify.sh /tmp/scale_report.py loadtest/ 후 실행  (HEAD가 적용 전 커밋이라 env.txt, meta의 commit이 실제 컨테이너 코드와 일치)
+#   4. 측정 후 복사본 삭제 → 적용 후 브랜치로 전환, 재빌드 후 after 실행
+#
 # 환경변수: OUT_ROOT(결과 폴더, 기본 loadtest/results/scale-verify), V1_SECONDS(60), V2_SECONDS(120), DRAIN_TIMEOUT(600),
 #          COMPOSE(기본: single은 "docker-compose -f docker-compose.yml -f compose.perf.yml", 그 외는 compose.scale.yml 추가)
 # 전제: compose.perf.yml 포함 실행 (pg_stat_statements), 회원 시드와 토큰(loadtest/data/users.csv) 준비 (LOADTEST 3-2)
 set -euo pipefail
+# Windows Git Bash가 docker exec 인자의 /opt/... 경로를 Windows 경로로 변환하지 않게 한다 (macOS, Linux는 영향 없음)
+export MSYS_NO_PATHCONV=1
 
 OUT_ROOT="${OUT_ROOT:-loadtest/results/scale-verify}"
 COMPOSE_SET="${COMPOSE:-}"

@@ -7,7 +7,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 // 관리자 API에는 역할 확인, 회원 API에는 사용자 헤더 확인 인터셉터를 건다 (#191, 청약, 계좌 서비스와 같은 구성).
 // /internal/**은 서비스 간 호출이라 사용자 헤더가 없어 걸지 않는다
 @Configuration
-public class AdminWebConfig implements WebMvcConfigurer {
+public class HeaderCheckWebConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {

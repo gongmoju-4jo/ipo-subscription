@@ -6,7 +6,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,12 +46,12 @@ class SuccessStatusSwaggerTest {
     @Test
     @DisplayName("계좌 개설과 입금은 처음 요청 201과 같은 requestId 재요청 200이 함께 나온다")
     void openAndDeposit_showCreatedAndOk() throws Exception {
+        // 문서는 한 번만 받아 두 API를 확인한다
+        ResultActions docs = mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk());
         for (String responses : new String[]{OPEN, DEPOSIT}) {
-            mockMvc.perform(get("/v3/api-docs"))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath(responses + "['201'].content['*/*'].schema").exists())
+            docs.andExpect(jsonPath(responses + "['201'].content['*/*'].schema").exists())
                     .andExpect(jsonPath(responses + "['200'].content['*/*'].schema").exists())
-                    .andExpect(jsonPath(responses + "['200'].description").value(org.hamcrest.Matchers.containsString("같은 requestId")))
+                    .andExpect(jsonPath(responses + "['200'].description").value(containsString("같은 requestId")))
                     .andExpect(jsonPath(responses + "['401']").exists());
         }
     }

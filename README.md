@@ -11,11 +11,9 @@
 
 <p align="center"><img src="docs/images/hero.png" width="880"></p>
 
-직접 측정해 보니 이랬어요.
-
-- 청약 오픈 직후 초당 433건이 접수돼도 오류는 0%, 신청부터 확정까지 1.2초 안에 처리돼요 (p95)
-- 마감 직전에 접수된 청약도 1건도 누락되지 않아요
-- 212만 건 배정은 마감부터 완료까지 5분 24초 걸려요
+- 청약 오픈 직후 초당 433건이 접수돼도 오류 0%, 신청부터 확정까지 1.2초 안에 처리됩니다 (p95)
+- 마감 직전 초당 274건이 접수돼도, 마감 시각 전에 도착한 청약은 모두 배정 대상에 포함됩니다 (누락 0건)
+- 212만 건 배정은 마감부터 완료까지 5분 24초 걸립니다
 
 **청약 한 건이 처리되는 순서**
 
@@ -26,8 +24,8 @@ flowchart LR
     C -. 확정 실패 .-> R[증거금 반환]
 ```
 
-청약, 계좌, 배정 3개 서비스가 Kafka 이벤트로 연결되고, 청약 서비스가 SAGA 오케스트레이터로 증거금 인출, 확정, 반환을 지시해요.
-피크 부하는 실제 접수 건수로 계산했어요. 접수의 20%가 10분에 집중된다고 가정하면 오픈 직후 433건/초(첫날 1,299,764건), 마감 직전 274건/초(마감일 822,603건)예요.
+청약, 계좌, 배정 3개 서비스가 Kafka 이벤트로 연결되고, 청약 서비스가 SAGA 오케스트레이터로 증거금 인출, 확정, 반환을 지시합니다.
+피크 부하는 실제 접수 건수로 계산했습니다. 접수의 20%가 10분에 집중된다고 가정하면 오픈 직후 433건/초(첫날 1,299,764건), 마감 직전 274건/초(마감일 822,603건)입니다.
 
 <br>
 
@@ -122,7 +120,7 @@ PC 1대에서 서비스, DB, Kafka, k6를 Docker로 실행하고 컨테이너 �
 ## Troubleshooting
 
 <details>
-<summary><b>batch 리스너로 바꿨더니 정산이 19.4% 증가했다</b></summary>
+<summary><b>batch로 바꿨는데, 정산 시간이 오히려 19.4% 증가했다</b></summary>
 <br>
 <img src="docs/images/chart-settle.png" width="640">
 
@@ -133,8 +131,8 @@ JFR로 CPU 샘플을 확인하니 77.4%가 Hibernate flush였습니다. 쿼리�
 결과: 10만 건 정산 구간 92.9초 → 58.4초, 212만 건 추정 40분 51초 → 28분 58초
 </details>
 
-<details>
-<summary><b>CPU를 2배로 올려도 확정 지연 54.5초가 그대로였다</b></summary>
+<details open>
+<summary><b>CPU를 2배로 늘렸는데, 확정 지연은 왜 그대로일까?</b></summary>
 <br>
 <img src="docs/images/chart-confirm.png" width="640">
 
@@ -146,7 +144,7 @@ JFR로 CPU 샘플을 확인하니 77.4%가 Hibernate flush였습니다. 쿼리�
 </details>
 
 <details>
-<summary><b>30만 건 배정이 끝나지 않았다</b></summary>
+<summary><b>30만 건에서 멈추던 배정, 212만 건까지</b></summary>
 <br>
 <img src="docs/images/chart-allocation.png" width="640">
 
@@ -158,7 +156,7 @@ JFR로 CPU 샘플을 확인하니 77.4%가 Hibernate flush였습니다. 쿼리�
 </details>
 
 <details>
-<summary><b>실시간 경쟁률 하나가 청약 접수까지 지연시켰다</b></summary>
+<summary><b>경쟁률 조회를 추가했더니, 청약 p95가 29초로 증가했다</b></summary>
 <br>
 
 경쟁률을 조회마다 DB에서 합산하도록 구현한 후, 청약과 목록 조회를 동시에 거는 시나리오를 추가해 측정했습니다. 합산 쿼리가 평균 421ms, PostgreSQL CPU가 상한에 도달했고 청약 서비스 커넥션 30개가 모두 사용 중이었습니다.
@@ -169,7 +167,7 @@ JFR로 CPU 샘플을 확인하니 77.4%가 Hibernate flush였습니다. 쿼리�
 </details>
 
 <details>
-<summary><b>장애가 8분 지속되면 증거금 반환이 영구 정체됐다</b></summary>
+<summary><b>장애는 복구됐는데, 증거금은 반환되지 않았다</b></summary>
 <br>
 
 계좌 서비스의 반환 처리만 약 8분 실패시키자, 반환 재요청 3회가 장애 시간 안에 모두 실패해 청약은 COMPENSATING, 증거금은 PENDING으로 남았습니다.
@@ -180,7 +178,7 @@ JFR로 CPU 샘플을 확인하니 77.4%가 Hibernate flush였습니다. 쿼리�
 </details>
 
 <details>
-<summary><b>Redis 메모리 상한에서 대기자가 허가 없이 소멸했다</b></summary>
+<summary><b>대기 중이던 순번이 허가 없이 삭제됐다</b></summary>
 <br>
 
 입장 처리 Lua 스크립트가 대기열에서 꺼내기(ZPOPMIN) → 허가 저장(SET) 순서였습니다. 메모리 상한에서 SET만 거부되고 이전 명령은 롤백되지 않아, 대기자가 허가 없이 대기열에서 소멸했습니다.
@@ -229,4 +227,4 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 | [한지수](https://github.com/eldeoddt) | [김진우](https://github.com/Kimjinwoo99) | [이승훈](https://github.com/tcrnela) | [이창열](https://github.com/askl690) | [최승근](https://github.com/choiseungkeun) |
 | --- | --- | --- | --- | --- |
 | <img width="120px" src="https://avatars.githubusercontent.com/eldeoddt" /> | <img width="120px" src="https://avatars.githubusercontent.com/Kimjinwoo99" /> | <img width="120px" src="https://avatars.githubusercontent.com/tcrnela" /> | <img width="120px" src="https://avatars.githubusercontent.com/askl690" /> | <img width="120px" src="https://avatars.githubusercontent.com/choiseungkeun" /> |
-| `Team Lead`<br>**계좌**<br>- 증거금 인출, 원장<br>- 정산, 환불<br>- 원장 대사, 정합성 검증 | **인프라**<br>- 회원, 인증<br>- 접속 대기열, 게이트웨이<br>- 모니터링, AWS 배포 | **배정**<br>- 균등, 비례, 추첨 배정<br>- 추첨 재현, 대량 배정<br>- 스케줄러 락, Outbox 락 | **청약**<br>- 공모주, 청약 API<br>- 접수 Outbox, 마감<br>- 경쟁률 캐시, 이중청약 판정 | **SAGA**<br>- 보상, 응답 시간 초과<br>- 반환 재요청, DLT<br>- 인출 배치, 장애 주입 테스트 |
+| `Team Lead`<br>**계좌**<br>증거금, 원장<br>정산, 환불<br>원장 대사 | **인프라**<br>회원, 인증<br>접속 대기열<br>모니터링, 배포 | **배정**<br>배정 계산<br>추첨 재현<br>대량 배정 | **청약**<br>청약 API<br>접수 Outbox<br>경쟁률 캐시 | **SAGA**<br>보상 처리<br>반환 재요청<br>장애 주입 |

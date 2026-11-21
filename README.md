@@ -23,13 +23,13 @@
 - 청약이 집중되면 1초마다 433명씩 입장을 허가하고, 내 앞 대기 인원과 예상 대기 시간을 안내합니다.
 - 입장 허가가 없는 청약 신청은 게이트웨이가 403으로 차단합니다.
 
-<p align="center"><img src="docs/images/screen-queue.png" width="49%"> <img src="docs/images/screen-subscribe.png" width="49%"><br><sub>왼쪽 대기 화면 (내 앞 대기 인원, 예상 대기 시간), 오른쪽 청약 화면 (청약 가능 시간 5분, 예상 청약증거금)</sub></p>
+<p align="center"><img src="docs/images/screen-queue.png" width="49%"> <img src="docs/images/screen-subscribe-2400x1667.png" width="49%"><br><sub>왼쪽 대기 화면 (내 앞 대기 인원, 예상 대기 시간), 오른쪽 청약 화면 (청약 가능 시간 5분, 예상 청약증거금)</sub></p>
 
 ### 2. 청약과 SAGA 보상
 - 청약은 202로 바로 응답하고, 증거금 인출 → 확정까지 이벤트로 처리합니다. 예수금이 부족하면 거절, 확정에 실패하면 증거금을 반환합니다.
 - 계좌 서비스 장애 주입 테스트에서 증거금 유실, 중복 인출 0건
 
-<p align="center"><img src="docs/images/screen-home.png" width="49%"> <img src="docs/images/screen-account.png" width="49%"><br><sub>왼쪽 홈 (예수금, 청약증거금, 진행 중인 청약), 오른쪽 계좌 (입금 → 증거금 인출 → 배정 대금 정산 → 환불)</sub></p>
+<p align="center"><img src="docs/images/screen-home-2400x1788.png" width="49%"> <img src="docs/images/screen-account.png" width="49%"><br><sub>왼쪽 홈 (예수금, 청약증거금, 진행 중인 청약), 오른쪽 계좌 (입금 → 증거금 인출 → 배정 대금 정산 → 환불)</sub></p>
 
 ### 3. 배정, 정산, 환불
 - 마감 후 균등, 비례, 추첨, 단주 순서로 배정하고, 배정 대금만 정산한 후 남은 증거금은 예수금으로 환불합니다.
@@ -48,11 +48,13 @@
 - 서비스 종료, 5xx, DLT 적재 등 7가지 장애를 Slack으로 알리고, Zipkin과 Loki로 요청 흐름과 로그를 추적합니다.
 - CI를 통과한 커밋만 EC2에 HTTPS로 자동 배포합니다.
 
-<p align="center"><img src="docs/images/grafana-dashboard.png" width="49%"> <img src="docs/images/zipkin-trace.png" width="49%"><br><sub>왼쪽 Grafana 측정 대시보드, 오른쪽 Zipkin 분산 추적 (마감 → 배정 → 청약 결과 수신). 클릭하면 원본 크기</sub></p>
+<p align="center"><img src="docs/images/zipkin-trace.png" width="640"><br><sub>Zipkin 분산 추적: 마감 → 배정 → 청약 결과 수신</sub></p>
 
 <details>
-<summary>운영 화면 더 보기 (알림 규칙, 시스템 현황)</summary>
+<summary>운영 화면 더 보기 (Grafana 대시보드, 알림 규칙, 시스템 현황)</summary>
 <br>
+
+<p align="center"><img src="docs/images/grafana-dashboard.png" width="640"><br><sub>Grafana 측정 대시보드: 처리량, 응답 시간, 커넥션, CPU, 힙, GC</sub></p>
 
 <p align="center"><img src="docs/images/grafana-alerts.png" width="640"><br><sub>Grafana 알림 규칙 7종</sub></p>
 

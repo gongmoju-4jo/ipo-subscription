@@ -1,9 +1,9 @@
 # ![공모주사조](docs/images/banner.png)
 
-> 2022년 LG에너지솔루션 공모주 청약, KB증권 한 곳에만 212만 건이 접수됐습니다.  
-> 첫날 일부 증권사 MTS가 일시 먹통이 됐고, 이틀 뒤 110조 원이 환불됐습니다.  
-> 공모주사조는 그날의 규모를 기준으로 설계하고, 측정으로 확인한 공모주 청약 시스템입니다.  
-> 청약이 집중돼도 접수는 지연 없이, 서비스 일부가 실패해도 증거금은 1원까지 정확하게.
+> 공모주 청약, 해보셨나요?  
+> 청약이 시작되면 수많은 신청이 한꺼번에 집중돼요.  
+> 공모주사조는 이런 상황에서도 청약을 안정적으로 접수하고, 증거금과 원장의 정합성을 지키도록 설계했어요.  
+> 2022년 LG에너지솔루션 청약 규모(KB증권 212만 건)를 기준으로 직접 검증했어요. 📈
 
 <br>
 
@@ -11,9 +11,11 @@
 
 <p align="center"><img src="docs/images/hero.png" width="880"></p>
 
-| 433건/초 | 1.20초 | 0건 | 5분 24초 |
-| :---: | :---: | :---: | :---: |
-| 오픈 직후 피크, 오류 0% | 신청 → 확정 p95 | 마감 전 접수 누락 | 212만 건 배정 |
+직접 측정해 보니 이랬어요.
+
+- 청약 오픈 직후 초당 433건이 접수돼도 오류는 0%, 신청부터 확정까지 1.2초 안에 처리돼요 (p95)
+- 마감 직전에 접수된 청약도 1건도 누락되지 않아요
+- 212만 건 배정은 마감부터 완료까지 5분 24초 걸려요
 
 **청약 한 건이 처리되는 순서**
 
@@ -24,8 +26,8 @@ flowchart LR
     C -. 확정 실패 .-> R[증거금 반환]
 ```
 
-청약, 계좌, 배정 3개 서비스가 Kafka 이벤트로 연결되고, 청약 서비스가 SAGA 오케스트레이터로 증거금 인출, 확정, 반환을 지시합니다.
-피크 부하는 실제 접수 건수로 계산했습니다. 접수의 20%가 10분에 집중된다고 가정하면 오픈 직후 433건/초(첫날 1,299,764건), 마감 직전 274건/초(마감일 822,603건)입니다.
+청약, 계좌, 배정 3개 서비스가 Kafka 이벤트로 연결되고, 청약 서비스가 SAGA 오케스트레이터로 증거금 인출, 확정, 반환을 지시해요.
+피크 부하는 실제 접수 건수로 계산했어요. 접수의 20%가 10분에 집중된다고 가정하면 오픈 직후 433건/초(첫날 1,299,764건), 마감 직전 274건/초(마감일 822,603건)예요.
 
 <br>
 
@@ -36,23 +38,23 @@ flowchart LR
 - 순번과 예상 대기 시간을 안내하고, 입장 후 5분 안에 청약합니다.
 - 433건/초 3회 측정 모두 오류 0%, 신청 → 확정 p95 1.20초
 
-| 대기 화면 | 청약 화면 |
-| :---: | :---: |
-| <img src="docs/images/screen-queue.png" width="420"> | <img src="docs/images/screen-subscribe.png" width="420"> |
+<p align="center"><img src="docs/images/screen-queue.png" width="640"><br><sub>대기 화면: 내 앞 대기 인원, 예상 대기 시간</sub></p>
+
+<p align="center"><img src="docs/images/screen-subscribe.png" width="640"><br><sub>청약 화면: 청약 가능 시간 5분, 예상 청약증거금</sub></p>
 
 ### 2. 청약과 SAGA 보상
 - 202 응답 전에 청약과 증거금 인출 요청을 한 트랜잭션에 저장합니다 (Transactional Outbox).
 - 인출 성공 → 확정, 예수금 부족 → 거절, 확정 실패나 응답 시간 초과 → 증거금 반환
 - 마감 직전 274건/초에서 마감 전 접수 누락 0건, 계좌 서비스 장애 중에도 증거금 유실, 중복 인출 0건
 
-| 홈 | 계좌, 거래 내역 |
-| :---: | :---: |
-| <img src="docs/images/screen-home.png" width="420"> | <img src="docs/images/screen-account.png" width="420"> |
+<p align="center"><img src="docs/images/screen-home.png" width="640"><br><sub>홈: 예수금, 청약증거금, 진행 중인 청약</sub></p>
+
+<p align="center"><img src="docs/images/screen-account.png" width="640"><br><sub>계좌: 입금 → 증거금 인출 → 배정 대금 정산 → 환불 거래 내역</sub></p>
 
 ### 3. 배정, 정산, 환불
 - 균등, 비례, 추첨, 단주 배정을 계산하고 배정 대금만 정산, 나머지는 예수금으로 환불합니다.
 - 추첨 시드를 기록해 관리자가 재계산으로 결과를 증명합니다 (10만 건 불일치 0건).
-- 212만 건 배정 5분 24초, 정산, 환불 28분 58초 (1만, 10만 건 실측 후 추정)
+- 212만 건 배정 5분 24초 (실측), 정산, 환불 28분 58초 (1만, 10만 건 실측 후 추정)
 
 <p align="center"><img src="docs/images/screen-result.png" width="640"><br><sub>배정 결과: 균등 11주 + 비례 8주, 배정 대금 정산 후 남은 증거금 환불</sub></p>
 
@@ -67,13 +69,13 @@ flowchart LR
 - Slack 알림 7종 (서비스 종료, 5xx, 커넥션 대기, 힙, 대기열, DLT, ERROR 로그)
 - Zipkin 분산 추적, Loki 로그 수집, CI 통과 커밋만 EC2에 HTTPS 자동 배포
 
-| Grafana 측정 대시보드 | Slack 알림 규칙 7종 |
-| :---: | :---: |
-| <img src="docs/images/grafana-dashboard.png" width="420"> | <img src="docs/images/grafana-alerts.png" width="420"> |
-| **Zipkin 분산 추적 (마감 → 배정 → 청약)** | **시스템 현황 (시연용, 배포 미포함)** |
-| <img src="docs/images/zipkin-trace.png" width="420"> | <img src="docs/images/screen-system.png" width="420"> |
+<p align="center"><img src="docs/images/grafana-dashboard.png" width="640"><br><sub>Grafana 측정 대시보드: 처리량, 응답 시간, 커넥션, CPU, 힙, GC</sub></p>
 
-<sub>대시보드: 로컬 측정 환경에서 433-2,000건/초 단계 부하 중 처리량, 응답 시간, 커넥션, CPU, 힙, GC</sub>
+<p align="center"><img src="docs/images/grafana-alerts.png" width="640"><br><sub>Grafana 알림 규칙 7종</sub></p>
+
+<p align="center"><img src="docs/images/zipkin-trace.png" width="640"><br><sub>Zipkin 분산 추적: 마감 → 배정 → 청약 결과 수신</sub></p>
+
+<p align="center"><img src="docs/images/screen-system.png" width="640"><br><sub>시스템 현황 (시연용, 배포 미포함)</sub></p>
 
 <br>
 
@@ -227,4 +229,4 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 | [한지수](https://github.com/eldeoddt) | [김진우](https://github.com/Kimjinwoo99) | [이승훈](https://github.com/tcrnela) | [이창열](https://github.com/askl690) | [최승근](https://github.com/choiseungkeun) |
 | --- | --- | --- | --- | --- |
 | <img width="120px" src="https://avatars.githubusercontent.com/eldeoddt" /> | <img width="120px" src="https://avatars.githubusercontent.com/Kimjinwoo99" /> | <img width="120px" src="https://avatars.githubusercontent.com/tcrnela" /> | <img width="120px" src="https://avatars.githubusercontent.com/askl690" /> | <img width="120px" src="https://avatars.githubusercontent.com/choiseungkeun" /> |
-| `Team Lead`<br>**계좌**<br>- 증거금, 원장<br>- 정산, 환불<br>- 원장 대사, 정합성 검증 | **인프라**<br>- 회원, 인증<br>- 접속 대기열<br>- 모니터링, 배포 | **배정**<br>- 균등, 비례, 추첨<br>- 대량 배정<br>- ShedLock | **청약 접수**<br>- 공모주, 청약 API<br>- 마감, 접수 Outbox<br>- 경쟁률 캐시 | **SAGA**<br>- 오케스트레이터<br>- 보상 트랜잭션<br>- DLT, 반환 백오프 |
+| `Team Lead`<br>**계좌**<br>- 증거금 인출, 원장<br>- 정산, 환불<br>- 원장 대사, 정합성 검증 | **인프라**<br>- 회원, 인증<br>- 접속 대기열, 게이트웨이<br>- 모니터링, AWS 배포 | **배정**<br>- 균등, 비례, 추첨 배정<br>- 추첨 재현, 대량 배정<br>- 스케줄러 락, Outbox 락 | **청약**<br>- 공모주, 청약 API<br>- 접수 Outbox, 마감<br>- 경쟁률 캐시, 이중청약 판정 | **SAGA**<br>- 보상, 응답 시간 초과<br>- 반환 재요청, DLT<br>- 인출 배치, 장애 주입 테스트 |

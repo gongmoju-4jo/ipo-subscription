@@ -48,9 +48,7 @@
 - 서비스 종료, 5xx, DLT 적재 등 7가지 장애를 Slack으로 알리고, Zipkin과 Loki로 요청 흐름과 로그를 추적합니다.
 - CI를 통과한 커밋만 EC2에 HTTPS로 자동 배포합니다.
 
-<p align="center"><img src="docs/images/grafana-dashboard.png" width="640"><br><sub>Grafana 측정 대시보드: 처리량, 응답 시간, 커넥션, CPU, 힙, GC</sub></p>
-
-<p align="center"><img src="docs/images/zipkin-trace.png" width="640"><br><sub>Zipkin 분산 추적: 마감 → 배정 → 청약 결과 수신</sub></p>
+<p align="center"><img src="docs/images/grafana-dashboard.png" height="320"> <img src="docs/images/zipkin-trace.png" height="320"><br><sub>왼쪽 Grafana 측정 대시보드 (처리량, 응답 시간, 커넥션, CPU, 힙, GC), 오른쪽 Zipkin 분산 추적 (마감 → 배정 → 청약 결과 수신)</sub></p>
 
 <details>
 <summary>운영 화면 더 보기 (알림 규칙, 시스템 현황)</summary>

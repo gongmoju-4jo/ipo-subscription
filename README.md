@@ -66,12 +66,12 @@
 
 ![인프라 구성도](docs/images/infra-aws-blue-official-minimal.png)
 
-1. Route 53으로 도메인을 조회한 후 Elastic IP로 요청, Caddy가 80을 443(HTTPS)으로 전환, 인증서는 Let's Encrypt에서 자동 발급, 갱신
-2. Gateway가 JWT 검증, 접속 대기열(Redis)로 입장 허가, Eureka에서 서비스를 조회해 라우팅
-3. 청약은 DB 저장 후 202 응답, 이벤트는 Outbox로 Kafka에 발행, 마감 후 배정 서비스가 Feign으로 확정 청약 목록 조회
-4. PostgreSQL 1개에 서비스별 스키마와 전용 계정 분리, Kafka는 KRaft 단일 브로커, 토픽 9개 + DLT 9개, 파티션 6개
-5. Prometheus, Zipkin, Loki로 지표, trace, 로그 수집, Grafana 장애 알림 7종을 Slack으로 발송, 대시보드는 SSM 포트 포워딩으로만 접속
-6. CI를 통과한 커밋만 이미지를 빌드해 ECR에 올리고, SSM Run Command로 서버에서 배포 스크립트 실행
+1. 사용자는 Route 53으로 도메인을 조회한 후 Elastic IP로 요청합니다. Caddy가 80번 요청을 443(HTTPS)으로 전환하고, 인증서는 Let's Encrypt에서 자동 발급, 갱신합니다.
+2. Gateway가 JWT를 검증하고 접속 대기열(Redis)로 입장을 허가한 후, Eureka에서 서비스를 조회해 라우팅합니다.
+3. 청약은 DB 저장 후 202로 응답하고, 이벤트는 Outbox로 Kafka에 발행합니다. 마감 후 배정 서비스가 Feign으로 확정 청약 목록을 조회합니다 (Timeout, Circuit Breaker).
+4. PostgreSQL 1개에 서비스별 스키마와 전용 계정을 분리했습니다. Kafka는 KRaft 단일 브로커, 토픽 9개 + DLT 9개, 파티션 6개입니다.
+5. Prometheus, Zipkin, Loki로 지표, trace, 로그를 수집하고, Grafana 장애 알림 7종을 Slack으로 발송합니다. 대시보드는 외부에 열지 않고 SSM 포트 포워딩으로만 접속합니다.
+6. CI를 통과한 커밋만 이미지를 빌드해 ECR에 올리고, SSM Run Command로 서버에서 배포 스크립트를 실행합니다.
 
 - **api-gateway**: JWT 인증, 라우팅, 접속 대기열
 - **subscription-service**: 공모주, 청약 접수, SAGA 오케스트레이션, 마감

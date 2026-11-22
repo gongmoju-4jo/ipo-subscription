@@ -42,7 +42,7 @@
 - 같은 요청, 같은 이벤트는 requestId와 이벤트 처리 기록(processed_event)으로 1회만 반영합니다.
 - 측정이 끝날 때마다 검증식 SQL 26개를 실행했고, 36회 모두 위반 0건
 
-<p align="center"><img src="docs/images/screen-detail.png" width="760"><br><sub>청약 1건의 Kafka 이벤트 4개와 원장 3줄 (시연용 운영 조회 화면, 배포 미포함)</sub></p>
+<p align="center"><img src="docs/images/screen-detail.png" width="520"><br><sub>청약 1건의 Kafka 이벤트 4개와 원장 3줄 (시연용 운영 조회 화면, 배포 미포함)</sub></p>
 
 ### 5. 운영과 관측
 - 서비스 종료, 5xx, DLT 적재 등 7가지 장애를 Slack으로 알리고, Zipkin과 Loki로 요청 흐름과 로그를 추적합니다.

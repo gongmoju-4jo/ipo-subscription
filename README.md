@@ -66,12 +66,53 @@
 
 ## Architecture
 
-![인프라 구성도](docs/images/infra.png)
+![인프라 구성도](docs/images/infra-aws-blue-official-minimal.png)
+
+1. 사용자는 Route 53으로 도메인을 조회한 후 Elastic IP로 요청합니다. Caddy가 80번 요청을 443(HTTPS)으로 전환하고, 인증서는 Let's Encrypt에서 자동 발급, 갱신합니다.
+2. Gateway가 JWT를 검증하고 접속 대기열(Redis)로 입장을 허가한 후, Eureka에서 서비스를 조회해 라우팅합니다.
+3. 청약은 DB 저장 후 202로 응답하고, 이벤트는 Outbox로 Kafka에 발행합니다. 마감 후 배정 서비스가 Feign으로 확정 청약 목록을 조회합니다 (Timeout, Circuit Breaker).
+4. PostgreSQL 1개에 서비스별 스키마와 전용 계정을 분리했습니다. Kafka는 KRaft 단일 브로커, 토픽 9개 + DLT 9개, 파티션 6개입니다.
+5. 지표, trace, 로그를 수집하고, Grafana 장애 알림 7종을 Slack으로 발송합니다. 대시보드는 외부에 열지 않고 SSM 포트 포워딩으로만 접속합니다.
+6. CI를 통과한 커밋만 이미지를 빌드해 ECR에 올리고, SSM Run Command로 서버에서 배포 스크립트를 실행합니다.
+
+<details>
+<summary>자원 할당, 한계</summary>
+<br>
+
+**서비스별 자원 할당** (`compose.perf.yml`)
+- 청약, PostgreSQL 각 2.0코어 / 1GiB
+- 계좌, 게이트웨이, Kafka 각 1.0코어 / 1GiB
+- 배정 0.5코어 / 2GiB (힙 1.5GiB), web 0.5코어 / 256MiB
+- 나머지 0.25-0.5코어, 상한 합계 CPU 11.25코어 (EC2 8 vCPU)
+
+**한계**
+- EC2 1대라 단일 장애점 (ALB, Auto Scaling 없음)
+- Kafka 단일 브로커, 복제본 없음
+- PostgreSQL도 같은 EC2의 컨테이너 (RDS 없음)
+- 인증서는 caddy-data 볼륨에 저장 (삭제 시 재발급, 같은 도메인 주 5회 한도)
+
+</details>
+
+<details>
+<summary>상세 인프라 구성도 (포트, 역할, 배포 검증 포함)</summary>
+
+![상세 인프라 구성도](docs/images/infra.png)
+
+</details>
 
 <details>
 <summary>시스템 구조도</summary>
 
-![시스템 구조도](docs/images/system.png)
+![시스템 구조도](docs/images/system-blue.png)
+
+- 실패 처리(발행 누락, 중복 수신, DLT, SAGA 보상, 동기 호출 장애): [청약 SAGA 실패 시나리오](docs/scenario/saga-failure.md), [장애 대응 절차](docs/scenario/incident-response.md)
+
+<details>
+<summary>상세 시스템 구조도 (서비스별 설명, 장애 대응 설계, 운영 포함)</summary>
+
+![상세 시스템 구조도](docs/images/system.png)
+
+</details>
 
 </details>
 

@@ -309,12 +309,16 @@ flowchart LR
 
 ## Getting Started
 
-필요: JDK 21, Docker (메모리 6GB 이상 권장), Node.js
+필요: JDK 21, Docker (메모리 6GB 이상 권장), Node.js  
+Windows는 Docker Desktop과 Git Bash에서 아래 명령을 그대로 실행합니다.
 
 ```bash
 cp .env.example .env          # DB 비밀번호 4개, JWT_SECRET, GRAFANA_ADMIN_PASSWORD 입력
-./gradlew build -x test && docker-compose up -d --build
-cd frontend && npm install && npm run dev   # http://localhost:5173
+./gradlew build -x test
+docker-compose up -d --build
+cd frontend
+npm install
+npm run dev                   # http://localhost:5173
 ```
 
 - 통합 Swagger: `localhost:8080/swagger-ui/index.html`

@@ -15,8 +15,6 @@
 - **대량 배정**: 212만 건을 5분 24초 만에 배정 완료 (1회 실측)
 - **금전 정합성**: 대량 정산 36회 측정에서 정합성 위반 0건
 
-<br>
-
 ## Main Features
 
 ### 1. 접속 대기열
@@ -59,8 +57,6 @@
 <p align="center"><img src="docs/images/grafana-alerts.png" width="640"></p>
 
 </details>
-
-<br>
 
 ## Architecture
 
@@ -137,8 +133,6 @@ flowchart LR
 
 </details>
 
-<br>
-
 ## Performance
 
 같은 조건에서 개선 전후를 비교한 결과입니다.
@@ -163,8 +157,6 @@ flowchart LR
 **참고**
 - 최신 코드(인출 batch 리스너 + 접수 SQL 6 → 4)의 433건/초 신청 → 확정 p95는 0.96초입니다.
 - 입장 속도 433명/초는 확정 처리 한계(약 510건/초)를 넘지 않게 결정한 값입니다. 600건/초 초과는 측정하지 않았습니다.
-
-<br>
 
 ## Troubleshooting
 
@@ -350,8 +342,6 @@ api-gateway / [김진우](https://github.com/Kimjinwoo99) / [PR #130](https://gi
 
 </details>
 
-<br>
-
 ## Tech Stack
 
 ![Java](https://img.shields.io/badge/Java-21-007396?style=flat&logo=OpenJDK&logoColor=white) ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.16-6DB33F?style=flat&logo=Spring%20Boot&logoColor=white) ![Spring Cloud Gateway](https://img.shields.io/badge/Spring%20Cloud%20Gateway-2025.0-6DB33F?style=flat&logo=Spring&logoColor=white) ![Eureka](https://img.shields.io/badge/Eureka-Discovery-6DB33F?style=flat&logo=Spring&logoColor=white)  
@@ -362,15 +352,11 @@ api-gateway / [김진우](https://github.com/Kimjinwoo99) / [PR #130](https://gi
 ![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C?style=flat&logo=Prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-Dashboard-F46800?style=flat&logo=Grafana&logoColor=white) ![Zipkin](https://img.shields.io/badge/Zipkin-Tracing-FE7139?style=flat) ![Loki](https://img.shields.io/badge/Loki-Logs-F46800?style=flat&logo=Grafana&logoColor=white)  
 ![React](https://img.shields.io/badge/React-Vite-61DAFB?style=flat&logo=React&logoColor=black) ![Claude Code](https://img.shields.io/badge/Claude%20Code-AI%20Pair-D97757?style=flat&logo=Anthropic&logoColor=white)
 
-<br>
-
 ## ERD
 
 <div align="left">
   <img src="docs/images/erd.png" width="700" />
 </div>
-
-<br>
 
 ## Getting Started
 
@@ -390,8 +376,6 @@ npm run dev                   # http://localhost:5173
 - Grafana `localhost:3000`, Kafka UI `localhost:8989`, Zipkin `localhost:9411`
 
 자세한 내용은 [프로젝트 세팅 가이드](docs/PROJECT_SETUP.md), [부하 테스트 가이드](docs/LOADTEST.md), [유비쿼터스 언어](docs/UBIQUITOUS_LANGUAGE.md), [GitHub 협업 가이드](docs/GITHUB_GUIDE.md)
-
-<br>
 
 ## Contributors
 

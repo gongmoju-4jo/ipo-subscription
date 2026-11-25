@@ -172,9 +172,7 @@ flowchart LR
 <summary><b>정산을 개선하려고 batch로 바꿨는데, 처리 시간이 오히려 19.4% 증가했다</b><br><sub>10만 건 정산 92.9초 → 58.4초 (37.1% 단축)</sub></summary>
 <br>
 
-**관련 서비스**: account-service  
-**담당**: [한지수](https://github.com/eldeoddt)  
-**PR**: [#160](https://github.com/gongmoju-4jo/ipo-subscription/pull/160)
+**서비스** account-service / **담당** [한지수](https://github.com/eldeoddt) / **PR** [#160](https://github.com/gongmoju-4jo/ipo-subscription/pull/160)
 
 <img src="docs/images/chart-settle.png" width="640">
 
@@ -194,9 +192,7 @@ flowchart LR
 <summary><b>CPU를 2배로 증설했는데, 청약 확정 시간은 그대로였다</b><br><sub>433건/초 신청 → 확정 p95 54.5초 → 1.4초</sub></summary>
 <br>
 
-**관련 서비스**: subscription-service, account-service, PostgreSQL, Kafka  
-**담당**: [김진우](https://github.com/Kimjinwoo99)  
-**PR**: [#86](https://github.com/gongmoju-4jo/ipo-subscription/pull/86)
+**서비스** subscription-service, account-service, PostgreSQL, Kafka / **담당** [김진우](https://github.com/Kimjinwoo99) / **PR** [#86](https://github.com/gongmoju-4jo/ipo-subscription/pull/86)
 
 <img src="docs/images/chart-confirm.png" width="640">
 
@@ -216,9 +212,7 @@ flowchart LR
 <summary><b>433건/초는 기준을 충족했는데, 600건/초에서는 확정이 29초까지 증가했다</b><br><sub>신청 → 확정 p95 29.43초 → 0.98초</sub></summary>
 <br>
 
-**관련 서비스**: subscription-service, account-service  
-**담당**: [이창열](https://github.com/askl690), [최승근](https://github.com/choiseungkeun)  
-**PR**: [#179](https://github.com/gongmoju-4jo/ipo-subscription/pull/179), [#161](https://github.com/gongmoju-4jo/ipo-subscription/pull/161)
+**서비스** subscription-service, account-service / **담당** [이창열](https://github.com/askl690), [최승근](https://github.com/choiseungkeun) / **PR** [#179](https://github.com/gongmoju-4jo/ipo-subscription/pull/179), [#161](https://github.com/gongmoju-4jo/ipo-subscription/pull/161)
 
 <img src="docs/images/chart-receive.png" width="640">
 
@@ -240,9 +234,7 @@ flowchart LR
 <summary><b>30만 건에서 멈추던 배정, 212만 건까지</b><br><sub>30만 건 미완료 → 212만 건 5분 24초 (1회 실측)</sub></summary>
 <br>
 
-**관련 서비스**: allocation-service, subscription-service  
-**담당**: [이승훈](https://github.com/tcrnela), [이창열](https://github.com/askl690)  
-**PR**: [#146](https://github.com/gongmoju-4jo/ipo-subscription/pull/146), [#139](https://github.com/gongmoju-4jo/ipo-subscription/pull/139)
+**서비스** allocation-service, subscription-service / **담당** [이승훈](https://github.com/tcrnela), [이창열](https://github.com/askl690) / **PR** [#146](https://github.com/gongmoju-4jo/ipo-subscription/pull/146), [#139](https://github.com/gongmoju-4jo/ipo-subscription/pull/139)
 
 <img src="docs/images/chart-allocation.png" width="640">
 
@@ -263,9 +255,7 @@ flowchart LR
 <summary><b>장애는 복구됐는데, 증거금은 반환되지 않았다</b><br><sub>반환 대기 60-79건 → 0건</sub></summary>
 <br>
 
-**관련 서비스**: subscription-service, account-service  
-**담당**: [최승근](https://github.com/choiseungkeun)  
-**PR**: [#148](https://github.com/gongmoju-4jo/ipo-subscription/pull/148), [#143](https://github.com/gongmoju-4jo/ipo-subscription/pull/143)
+**서비스** subscription-service, account-service / **담당** [최승근](https://github.com/choiseungkeun) / **PR** [#148](https://github.com/gongmoju-4jo/ipo-subscription/pull/148), [#143](https://github.com/gongmoju-4jo/ipo-subscription/pull/143)
 
 <img src="docs/images/chart-void-retry.png" width="640">
 
@@ -284,9 +274,7 @@ flowchart LR
 <summary><b>잔고와 원장이 불일치하면, 어떻게 알아낼까?</b><br><sub>주입한 불일치 7건 모두 감지</sub></summary>
 <br>
 
-**관련 서비스**: account-service  
-**담당**: [한지수](https://github.com/eldeoddt)  
-**PR**: [#154](https://github.com/gongmoju-4jo/ipo-subscription/pull/154), [#134](https://github.com/gongmoju-4jo/ipo-subscription/pull/134)
+**서비스** account-service / **담당** [한지수](https://github.com/eldeoddt) / **PR** [#154](https://github.com/gongmoju-4jo/ipo-subscription/pull/154), [#134](https://github.com/gongmoju-4jo/ipo-subscription/pull/134)
 
 <img src="docs/images/chart-reconcile.png" width="640">
 
@@ -305,9 +293,7 @@ flowchart LR
 <summary><b>인스턴스를 2개로 확장하자, 같은 작업이 2번씩 실행됐다</b><br><sub>중복 Outbox 발행 2,726건 → 0건</sub></summary>
 <br>
 
-**관련 서비스**: account-service, subscription-service, allocation-service, api-gateway  
-**담당**: [김진우](https://github.com/Kimjinwoo99), [이승훈](https://github.com/tcrnela), [이창열](https://github.com/askl690), [최승근](https://github.com/choiseungkeun), [한지수](https://github.com/eldeoddt)  
-**PR**: [#163](https://github.com/gongmoju-4jo/ipo-subscription/pull/163), [#186](https://github.com/gongmoju-4jo/ipo-subscription/pull/186), [#181](https://github.com/gongmoju-4jo/ipo-subscription/pull/181), [#183](https://github.com/gongmoju-4jo/ipo-subscription/pull/183)
+**서비스** account-service, subscription-service, allocation-service, api-gateway / **담당** [김진우](https://github.com/Kimjinwoo99), [이승훈](https://github.com/tcrnela), [이창열](https://github.com/askl690), [최승근](https://github.com/choiseungkeun), [한지수](https://github.com/eldeoddt) / **PR** [#163](https://github.com/gongmoju-4jo/ipo-subscription/pull/163), [#186](https://github.com/gongmoju-4jo/ipo-subscription/pull/186), [#181](https://github.com/gongmoju-4jo/ipo-subscription/pull/181), [#183](https://github.com/gongmoju-4jo/ipo-subscription/pull/183)
 
 <img src="docs/images/chart-scale.png" width="640">
 
@@ -330,9 +316,7 @@ flowchart LR
 <summary><b>경쟁률을 조회했을 뿐인데, 청약 응답이 29초까지 증가했다</b><br><sub>청약 응답 p95 29.0초 → 70ms</sub></summary>
 <br>
 
-**관련 서비스**: subscription-service  
-**담당**: [이창열](https://github.com/askl690)  
-**PR**: [#170](https://github.com/gongmoju-4jo/ipo-subscription/pull/170), [#180](https://github.com/gongmoju-4jo/ipo-subscription/pull/180)
+**서비스** subscription-service / **담당** [이창열](https://github.com/askl690) / **PR** [#170](https://github.com/gongmoju-4jo/ipo-subscription/pull/170), [#180](https://github.com/gongmoju-4jo/ipo-subscription/pull/180)
 
 <img src="docs/images/chart-competition.png" width="640">
 
@@ -351,9 +335,7 @@ flowchart LR
 <summary><b>대기열에서 사라진 사용자, 원인은 Redis 명령 순서</b><br><sub>입장 허가 저장 실패 시 대기자 유실 방지</sub></summary>
 <br>
 
-**관련 서비스**: api-gateway  
-**담당**: [김진우](https://github.com/Kimjinwoo99)  
-**PR**: [#130](https://github.com/gongmoju-4jo/ipo-subscription/pull/130)
+**서비스** api-gateway / **담당** [김진우](https://github.com/Kimjinwoo99) / **PR** [#130](https://github.com/gongmoju-4jo/ipo-subscription/pull/130)
 
 <img src="docs/images/chart-queue-order.png" width="640">
 

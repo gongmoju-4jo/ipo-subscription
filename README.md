@@ -6,8 +6,6 @@
 > 2022년 LG에너지솔루션 청약 규모(KB증권 212만 건)를 기준으로 직접 검증했어요. 📈
 > <br><br>🏆 최종 프로젝트 대상
 
-<br>
-
 ## Overview
 
 <p align="center"><img src="docs/images/hero.png" width="880"></p>

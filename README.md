@@ -142,10 +142,11 @@ flowchart LR
 | 433건/초 신청 → 확정 p95 | 54.5초 | **1.4초** | 97.4% 단축 | PostgreSQL CPU 1 → 2, 파티션, Consumer 3 → 6 (누적) |
 | 600건/초 신청 → 확정 p95 | 29.43초 | **0.98초** | 96.7% 단축 | 인출 batch 리스너 + 접수 SQL 6 → 4 |
 | 433건/초 접수 응답 p95 | 40.1ms | **10.8ms** | 73.1% 단축 | 인출 batch 리스너 + 접수 SQL 6 → 4 |
+| 마감 시각 → 마감 처리 | 43.3초 | **22.4초** | 48.3% 단축 | 접수 Outbox (마감 누락 0건을 DB 잠금으로 보장) |
 | 10만 건 정산, 환불 구간 | 92.9초 | **58.4초** | 37.1% 단축 | batch 리스너 + 건별 flush, clear |
 | 경쟁률 조회 중 청약 p95 | 29.0초 | **70ms** | 99.8% 단축 | Redis 경쟁률 캐시 |
 | 배정 처리 규모 | 30만 건 미완료 | **212만 건 5분 24초** (1회 실측) | - | 키셋 조회, 1만 건씩 저장 |
-| 장애 후 반환 대기 청약 | 60-79건 | **0건** | - | 반환 재요청 백오프 |
+| 장애 후 반환 대기 청약 | 60-79건 (3회 범위) | **0건** | - | 반환 재요청 백오프 |
 
 **측정 조건**
 - 환경: 팀원 PC에서 서비스, DB, Kafka, k6를 모두 Docker로 실행  
@@ -155,13 +156,15 @@ flowchart LR
   오픈 직후 433건/초 (첫날 1,299,764건), 마감 직전 274건/초 (마감일 822,603건)
 
 **참고**
-- 최신 코드(인출 batch 리스너 + 접수 SQL 6 → 4)의 433건/초 신청 → 확정 p95는 0.96초입니다.
-- 입장 속도 433명/초는 확정 처리 한계(약 510건/초)를 넘지 않게 결정한 값입니다. 600건/초 초과는 측정하지 않았습니다.
+- 최신 코드의 433건/초 신청 → 확정 p95는 0.96초입니다.
+- 입장 속도 433명/초는 파티션 변경 후 확정 한계(약 510건/초) 기준이고, 인출 batch 적용 후에는 600건/초까지 통과를 확인했습니다.
+- 인출 batch, 접수 SQL 비교는 측정 순서가 고정이고, 측정 중 PC 메모리 사용률이 68%에서 90%까지 변했습니다.
+- 마감 처리는 마감 시각부터 마감 이벤트(`ipo.closed`) 생성까지의 시간입니다.
 
 ## Troubleshooting
 
 <details open>
-<summary><b>정산을 개선하려고 batch로 바꿨는데, 오히려 처리 시간 19.4% 증가</b><br><sub>10만 건 정산 92.9초 → 58.4초 (37.1% 단축)</sub></summary>
+<summary><b>정산을 개선하려고 batch로 바꿨는데, 오히려 처리 시간 19.4% 증가</b><br><sub>10만 건 정산 92.9초 → 58.4초 (37.1% 단축) / 한지수</sub></summary>
 <br>
 
 account-service / [한지수](https://github.com/eldeoddt) / [PR #160](https://github.com/gongmoju-4jo/ipo-subscription/pull/160)
@@ -181,7 +184,7 @@ account-service / [한지수](https://github.com/eldeoddt) / [PR #160](https://g
 </details>
 
 <details>
-<summary><b>CPU를 2배로 증설해도 청약 확정 54초 그대로</b><br><sub>433건/초 신청 → 확정 p95 54.5초 → 1.4초</sub></summary>
+<summary><b>CPU를 2배로 증설해도 청약 확정 54초 그대로</b><br><sub>433건/초 신청 → 확정 p95 54.5초 → 1.4초 / 김진우</sub></summary>
 <br>
 
 subscription-service, account-service, PostgreSQL, Kafka / [김진우](https://github.com/Kimjinwoo99) / [PR #86](https://github.com/gongmoju-4jo/ipo-subscription/pull/86)
@@ -201,7 +204,7 @@ subscription-service, account-service, PostgreSQL, Kafka / [김진우](https://g
 </details>
 
 <details>
-<summary><b>433건/초는 충족, 600건/초에서는 확정 29초까지 지연</b><br><sub>신청 → 확정 p95 29.43초 → 0.98초</sub></summary>
+<summary><b>433건/초는 충족, 600건/초에서는 확정 29초까지 지연</b><br><sub>신청 → 확정 p95 29.43초 → 0.98초 / 이창열, 최승근</sub></summary>
 <br>
 
 subscription-service, account-service / [이창열](https://github.com/askl690), [최승근](https://github.com/choiseungkeun) / [PR #179](https://github.com/gongmoju-4jo/ipo-subscription/pull/179), [#161](https://github.com/gongmoju-4jo/ipo-subscription/pull/161)
@@ -218,11 +221,14 @@ subscription-service, account-service / [이창열](https://github.com/askl690),
 - **결과**: 600건/초 확정 p95 **29.43초 → 0.98초**, 433건/초 접수 응답 p95 **40.1ms → 10.8ms**
   - 확정 지연은 인출 batch 단독으로 0.99초, SQL 감소 단독으로는 26.87초
   - 600건/초 PostgreSQL CPU 186.0% → 119.8% (1코어 = 100%)
+- **이전 개선**: 접수 Outbox ([PR #129](https://github.com/gongmoju-4jo/ipo-subscription/pull/129))
+  - 청약과 인출 요청 Outbox를 한 트랜잭션에 저장, 마감 누락 0건을 DB 잠금으로 보장
+  - 마감 시각 → 마감 처리 43.3초 → 22.4초
 
 </details>
 
 <details>
-<summary><b>30만 건에서 멈추던 배정, 212만 건까지</b><br><sub>30만 건 미완료 → 212만 건 5분 24초 (1회 실측)</sub></summary>
+<summary><b>30만 건에서 멈추던 배정, 212만 건까지</b><br><sub>30만 건 미완료 → 212만 건 5분 24초 (1회 실측) / 이승훈, 이창열</sub></summary>
 <br>
 
 allocation-service, subscription-service / [이승훈](https://github.com/tcrnela), [이창열](https://github.com/askl690) / [PR #146](https://github.com/gongmoju-4jo/ipo-subscription/pull/146), [#139](https://github.com/gongmoju-4jo/ipo-subscription/pull/139)
@@ -239,11 +245,13 @@ allocation-service, subscription-service / [이승훈](https://github.com/tcrnel
 - **해결**: 계산은 한 번에, 저장만 1만 건씩 DB에 반영한 후 메모리에서 비움
   - 커밋은 1번 유지, 조회는 키셋 방식으로 변경
 - **결과**: **212만 건 5분 24초**, 중간 실패 시 전체 롤백, 추첨 재현 결과 동일
+- **저장 개선**: JDBC batch INSERT ([PR #112](https://github.com/gongmoju-4jo/ipo-subscription/pull/112))
+  - 3만 건 배정 결과 커밋 11.3초 → 3.0초
 
 </details>
 
 <details>
-<summary><b>장애는 복구됐는데, 반환되지 않은 증거금</b><br><sub>반환 대기 60-79건 → 0건</sub></summary>
+<summary><b>장애는 복구됐는데, 반환되지 않은 증거금</b><br><sub>반환 대기 60-79건 → 0건 / 최승근</sub></summary>
 <br>
 
 subscription-service, account-service / [최승근](https://github.com/choiseungkeun) / [PR #148](https://github.com/gongmoju-4jo/ipo-subscription/pull/148), [#143](https://github.com/gongmoju-4jo/ipo-subscription/pull/143)
@@ -262,7 +270,7 @@ subscription-service, account-service / [최승근](https://github.com/choiseung
 </details>
 
 <details>
-<summary><b>잔고와 원장이 불일치하면, 어떻게 알아낼까?</b><br><sub>주입한 불일치 7건 모두 감지</sub></summary>
+<summary><b>잔고와 원장이 불일치하면, 어떻게 알아낼까?</b><br><sub>주입한 불일치 7건 모두 감지 / 한지수</sub></summary>
 <br>
 
 account-service / [한지수](https://github.com/eldeoddt) / [PR #154](https://github.com/gongmoju-4jo/ipo-subscription/pull/154), [#134](https://github.com/gongmoju-4jo/ipo-subscription/pull/134)
@@ -282,7 +290,7 @@ account-service / [한지수](https://github.com/eldeoddt) / [PR #154](https://g
 </details>
 
 <details>
-<summary><b>인스턴스를 2개로 확장하자, 같은 작업이 2번씩 실행</b><br><sub>중복 Outbox 발행 2,726건 → 0건</sub></summary>
+<summary><b>인스턴스를 2개로 확장하자, 같은 작업이 2번씩 실행</b><br><sub>중복 Outbox 발행 2,726건 → 0건 / 팀 전원</sub></summary>
 <br>
 
 account-service, subscription-service, allocation-service, api-gateway  
@@ -307,7 +315,7 @@ account-service, subscription-service, allocation-service, api-gateway
 </details>
 
 <details>
-<summary><b>조회 API 하나 때문에, 청약 접수가 29초까지 지연</b><br><sub>청약 응답 p95 29.0초 → 70ms</sub></summary>
+<summary><b>조회 API 하나 때문에, 청약 접수가 29초까지 지연</b><br><sub>청약 응답 p95 29.0초 → 70ms / 이창열</sub></summary>
 <br>
 
 subscription-service / [이창열](https://github.com/askl690) / [PR #170](https://github.com/gongmoju-4jo/ipo-subscription/pull/170), [#180](https://github.com/gongmoju-4jo/ipo-subscription/pull/180)
@@ -327,7 +335,7 @@ subscription-service / [이창열](https://github.com/askl690) / [PR #170](https
 </details>
 
 <details>
-<summary><b>대기열에서 사라진 사용자, 원인은 Redis 명령 순서</b><br><sub>입장 허가 저장 실패 시 대기자 유실 방지</sub></summary>
+<summary><b>대기열에서 사라진 사용자, 원인은 Redis 명령 순서</b><br><sub>입장 허가 저장 실패 시 대기자 유실 방지 / 김진우</sub></summary>
 <br>
 
 api-gateway / [김진우](https://github.com/Kimjinwoo99) / [PR #130](https://github.com/gongmoju-4jo/ipo-subscription/pull/130)
